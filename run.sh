@@ -8,4 +8,5 @@ if [ ! -d web/dist ]; then
   echo "[warn] web/dist 不存在，先构建前端： bash web/build.sh"
 fi
 
-exec "$PY" -m uvicorn app:app --host 127.0.0.1 --port 6799 "$@"
+# 绑定 0.0.0.0 以便通过局域网 / Tailscale（如 100.x）访问；仅本机可用则改回 127.0.0.1
+exec "$PY" -m uvicorn app:app --host 0.0.0.0 --port 6799 "$@"

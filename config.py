@@ -8,7 +8,7 @@ from typing import Optional
 @dataclass
 class Settings:
     # Server
-    host: str = "127.0.0.1"
+    host: str = "0.0.0.0"
     port: int = 6799
 
     # Paths
