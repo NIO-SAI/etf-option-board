@@ -8,6 +8,9 @@ import { cn } from "@/lib/utils";
 import { ArrowDownRight, ArrowUpRight, Flame, Minus } from "lucide-react";
 
 /* ---------------- 标的列表 ---------------- */
+const shortName = (n: string) =>
+  (n || "").replace(/(华泰柏瑞|易方达|华夏|嘉实|南方|广发|国泰|银华)$/, "");
+
 export function EtfList({
   etfs, quotes, trendsMap, selected, onSelect,
 }: {
@@ -38,13 +41,13 @@ export function EtfList({
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
-                    <span className="truncate text-xs font-medium">{e.name}</span>
-                    {on && <span className="size-1.5 rounded-full bg-primary" />}
+                    <span className={cn("truncate text-xs font-medium", on && "text-primary")}>{shortName(e.name)}</span>
+                    {on && <span className="size-1.5 shrink-0 rounded-full bg-primary" />}
                   </div>
                   <div className="text-[10px] text-muted-foreground tnum">{e.code} · {e.track}</div>
                 </div>
-                <Sparkline data={trendsMap[e.code] ?? []} up={(q?.pct ?? 0) >= 0} />
-                <div className="w-20 text-right">
+                <Sparkline data={trendsMap[e.code] ?? []} up={(q?.pct ?? 0) >= 0} width={54} height={24} />
+                <div className="w-16 text-right">
                   <div className="text-xs font-semibold tnum">{q ? nf(q.price, 3) : "—"}</div>
                   <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>
                 </div>

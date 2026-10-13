@@ -8,7 +8,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />
     <Toaster
-      theme="dark"
+      theme="light"
       position="bottom-right"
       toastOptions={{ className: "text-xs" }}
       richColors

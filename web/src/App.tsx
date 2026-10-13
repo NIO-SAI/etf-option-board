@@ -43,6 +43,13 @@ export default function App() {
 
   useEffect(() => { setMonth(null); setContractSecid(null); }, [etfCode]);
 
+  // 未选合约时，自动选中该标的的优选（近月）合约，避免详情区空白
+  useEffect(() => {
+    if (contractSecid || !chain?.ranked) return;
+    const top = chain.ranked.call?.[0] ?? chain.ranked.put?.[0];
+    if (top?.secid) setContractSecid(top.secid);
+  }, [chain, contractSecid]);
+
   const quotes: Record<string, any> = useMemo(() => {
     const m: Record<string, any> = {};
     (etfQuotes?.items ?? []).forEach((q: any) => (m[q.code] = q));
@@ -64,9 +71,9 @@ export default function App() {
         clock={clock}
         onRefresh={() => { refreshCtx(); api.monitorCycle().catch(() => {}); }}
       />
-      <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-[230px_minmax(0,1fr)_360px]">
+      <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-[268px_minmax(0,1fr)_360px]">
         {/* 左：标的 */}
-        <div className="lg:sticky lg:top-12 lg:h-[calc(100vh-3.5rem)]">
+        <div className="lg:sticky lg:top-[52px] lg:h-[calc(100vh-3.25rem)]">
           <EtfList etfs={etfs} quotes={quotes} trendsMap={trendsMap} selected={etfCode} onSelect={setEtfCode} />
         </div>
 

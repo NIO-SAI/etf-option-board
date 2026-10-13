@@ -1,10 +1,10 @@
 import ReactECharts from "echarts-for-react";
 import { useMemo } from "react";
 
-const AXIS = "#8b8b96";
-const SPLIT = "rgba(255,255,255,0.06)";
+const AXIS = "#71717a";
+const SPLIT = "rgba(0,0,0,0.07)";
 const UP = "#ef4444";
-const DOWN = "#22c55e";
+const DOWN = "#16a34a";
 
 const base = {
   backgroundColor: "transparent",
@@ -13,10 +13,12 @@ const base = {
   grid: { left: 48, right: 48, top: 22, bottom: 46 },
   tooltip: {
     trigger: "axis",
-    backgroundColor: "rgba(18,18,22,0.96)",
-    borderColor: "rgba(255,255,255,0.12)",
-    textStyle: { color: "#e5e5e5", fontSize: 11 },
-    axisPointer: { type: "cross", label: { backgroundColor: "#3f3f46" } },
+    backgroundColor: "rgba(255,255,255,0.98)",
+    borderColor: "rgba(0,0,0,0.12)",
+    borderWidth: 1,
+    textStyle: { color: "#18181b", fontSize: 11 },
+    extraCssText: "box-shadow:0 4px 16px rgba(0,0,0,0.12);border-radius:8px;",
+    axisPointer: { type: "cross", label: { backgroundColor: "#e4e4e7", color: "#18181b" } },
   },
   xAxisBase: {
     type: "category",
@@ -56,7 +58,7 @@ export function IntradayChart({
       yAxis: [
         { ...base.yAxisBase, position: "left", axisLabel: { color: AXIS, formatter: (v: number) => v.toFixed(3) } },
         { ...base.yAxisBase, position: "right", splitLine: { show: false },
-          axisLabel: { color: "#a78bfa", formatter: (v: number) => (v / 1e8).toFixed(1) + "亿" } },
+          axisLabel: { color: "#7c3aed", formatter: (v: number) => (v / 1e8).toFixed(1) + "亿" } },
       ],
       series: [
         { name: "价格", type: "line", data: prices, showSymbol: false, lineStyle: { width: 1.4, color: "#60a5fa" },
@@ -166,7 +168,7 @@ export function PredictChart({
       xAxis: { ...base.xAxisBase, data: allCat },
       yAxis: { ...base.yAxisBase, axisLabel: { color: AXIS, formatter: (v: number) => v.toFixed(3) } },
       series: [
-        { name: "历史", type: "line", data: histClose, showSymbol: false, lineStyle: { color: "#e4e4e7", width: 1.2 } },
+        { name: "历史", type: "line", data: histClose, showSymbol: false, lineStyle: { color: "#a1a1aa", width: 1.2 } },
         { name: "预测", type: "line", data: pad(predClose, cat.length), showSymbol: false,
           lineStyle: { color: "#a78bfa", width: 1.6, type: "dashed" } },
         { name: "预测上沿", type: "line", data: pad(predHigh, cat.length), showSymbol: false, lineStyle: { color: "rgba(167,139,250,0.35)", width: 1 } },

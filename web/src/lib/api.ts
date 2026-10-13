@@ -12,6 +12,8 @@ export const api = {
   indices: () => get("/indices"),
   external: () => get("/external"),
   national: () => get("/national"),
+  etfs: () => get("/etfs"),
+  etfs_spark: () => get("/etfs/spark"),
   etf: (code: string, klt = 1) => get(`/etf/${code}?klt=${klt}`),
   etfKline: (code: string, klt = 1, lmt = 240) => get(`/etf/${code}/kline?klt=${klt}&lmt=${lmt}`),
   chain: (code: string, month?: number) =>
