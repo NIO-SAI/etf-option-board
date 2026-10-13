@@ -19,8 +19,12 @@ export function ContractDetail({
 }) {
   const [klt, setKlt] = useState(1);
   const secid = contract?.secid;
-  const { data: trends } = usePolling(() => api.optTrends(secid), 5000, [secid]);
-  const { data: kline } = usePolling(() => api.optKline(secid, klt, 240), 8000, [secid, klt]);
+  const { data: trends } = usePolling(
+    () => (secid ? api.optTrends(secid) : Promise.resolve({ trends: [] })),
+    5000, [secid]);
+  const { data: kline } = usePolling(
+    () => (secid ? api.optKline(secid, klt, 240) : Promise.resolve({ bars: [] })),
+    8000, [secid, klt]);
 
   if (!contract) {
     return (

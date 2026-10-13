@@ -35,6 +35,22 @@ bash run.sh
 Kronos 预测依赖本地 `facecat-kronos` 仓库的 `.venv` 与模型权重；缺失时看板其余功能正常，
 预测区域提示离线。
 
+### 开机自启（macOS launchd）
+
+已安装为 LaunchAgent `com.etf-option-board`（登录/重启后自动运行，崩溃自动拉起）：
+
+```bash
+# 状态
+launchctl print gui/$(id -u)/com.etf-option-board | grep -E "state|pid|runs"
+# 日志
+tail -f /tmp/etf-option-board.log
+# 停止 / 卸载
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.etf-option-board.plist
+# 重新安装（仓库内模板 deploy/com.etf-option-board.plist）
+cp deploy/com.etf-option-board.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.etf-option-board.plist
+```
+
 ### 开发模式
 
 ```bash
