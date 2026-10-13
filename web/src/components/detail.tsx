@@ -4,6 +4,7 @@ import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/fr
 import { KlineChart, OverlayChart, PredictChart } from "@/components/charts";
 import { Button } from "@/components/ui/button";
 import { Skeleton, Tabs } from "@/components/ui/misc";
+import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { clsUpDown, money, nf, pct } from "@/lib/format";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
@@ -26,35 +27,36 @@ export function ContractDetail({
     () => (secid ? api.optKline(secid, klt, 240) : Promise.resolve({ bars: [] })),
     8000, [secid, klt]);
 
-  if (!contract) {
-    return (
-      <Frame spacing="sm"><FramePanel className="flex h-full min-h-[300px] items-center justify-center">
-        <span className="text-xs text-muted-foreground">在 T 型报价或候选中选择合约查看详情</span>
-      </FramePanel></Frame>
-    );
-  }
+  // 注意：图表始终保持挂载（不因未选合约而卸载），避免 ECharts 在同一 DOM 节点上
+  // 反复 dispose/init 造成崩溃；切合约只更新数据（固定 key）。
   const t = trends?.trends ?? [];
   const bars = kline?.bars ?? [];
   return (
     <Frame spacing="sm" stacked>
       <FramePanel dense>
         <FrameHeader className="flex-row items-center justify-between">
-          <div className="flex items-center gap-2">
-            <FrameTitle className="text-sm">{contract.name}</FrameTitle>
-            <span className="text-[11px] text-muted-foreground tnum">{contract.code}</span>
-            <Badge variant={contract.type === "call" ? "destructive-light" : "success-light"} size="xs">
-              {contract.type === "call" ? "认购" : "认沽"}
-            </Badge>
-          </div>
-          <div className="flex items-center gap-3 text-xs tnum">
-            <span className="text-base font-semibold">{nf(contract.last, 4)}</span>
-            <span className={clsUpDown(contract.pct)}>{pct(contract.pct)}</span>
-            <span className="text-muted-foreground">IV {nf(contract.iv, 1)}%</span>
-            <span className="text-muted-foreground">Δ {nf(contract.delta, 3)}</span>
-            <span className="text-muted-foreground">溢价 {nf(contract.premium_rate, 2)}%</span>
-            <span className="text-muted-foreground">离到期 {contract.days}天</span>
-            <span className="text-muted-foreground">额 {money(contract.amount)}</span>
-          </div>
+          {contract ? (
+            <>
+              <div className="flex items-center gap-2">
+                <FrameTitle className="text-sm">{contract.name}</FrameTitle>
+                <span className="text-[11px] text-muted-foreground tnum">{contract.code}</span>
+                <Badge variant={contract.type === "call" ? "destructive-light" : "success-light"} size="xs">
+                  {contract.type === "call" ? "认购" : "认沽"}
+                </Badge>
+              </div>
+              <div className="flex items-center gap-3 text-xs tnum">
+                <span className="text-base font-semibold">{nf(contract.last, 4)}</span>
+                <span className={clsUpDown(contract.pct)}>{pct(contract.pct)}</span>
+                <span className="text-muted-foreground">IV {nf(contract.iv, 1)}%</span>
+                <span className="text-muted-foreground">Δ {nf(contract.delta, 3)}</span>
+                <span className="text-muted-foreground">溢价 {nf(contract.premium_rate, 2)}%</span>
+                <span className="text-muted-foreground">离到期 {contract.days}天</span>
+                <span className="text-muted-foreground">额 {money(contract.amount)}</span>
+              </div>
+            </>
+          ) : (
+            <FrameTitle className="text-xs text-muted-foreground">在 T 型报价或候选中选择合约查看详情</FrameTitle>
+          )}
         </FrameHeader>
       </FramePanel>
       <FramePanel dense>
@@ -63,8 +65,9 @@ export function ContractDetail({
           <span className="text-[10px] text-muted-foreground">左轴 期权 · 右轴 标的ETF · 柱 主力净流入</span>
         </FrameHeader>
         <div className="px-1 pb-2">
-          {t.length ? <OverlayChart optTrends={t} etfTrends={etfTrends} flow={flow} height={300} />
-            : <Skeleton className="h-[300px] w-full" />}
+          <ErrorBoundary label="分时叠加图">
+            <OverlayChart id="overlay" optTrends={t} etfTrends={etfTrends} flow={flow} height={300} />
+          </ErrorBoundary>
         </div>
       </FramePanel>
       <FramePanel dense>
@@ -77,7 +80,9 @@ export function ContractDetail({
           />
         </FrameHeader>
         <div className="px-1 pb-2">
-          {bars.length ? <KlineChart bars={bars} height={220} /> : <Skeleton className="h-[220px] w-full" />}
+          <ErrorBoundary label="合约K线">
+            <KlineChart id="contract-kline" bars={bars} height={220} />
+          </ErrorBoundary>
         </div>
       </FramePanel>
     </Frame>
@@ -101,7 +106,9 @@ export function KronosPredict({ secid, klt = 5 }: { secid: string; klt?: number 
         </Badge>
         <span className="text-muted-foreground tnum">未来 {s?.path?.length ?? 0} 根 · 涨占比 {((s?.up_ratio ?? 0) * 100) | 0}% · 上沿 {nf(s?.pred_high, 4)} / 下沿 {nf(s?.pred_low, 4)}</span>
       </div>
-      <PredictChart bars={bars} pred={pred} height={200} />
+      <ErrorBoundary label="Kronos预测图">
+        <PredictChart id={secid} bars={bars} pred={pred} height={200} />
+      </ErrorBoundary>
     </div>
   );
 }

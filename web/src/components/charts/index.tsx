@@ -38,12 +38,13 @@ const base = {
 
 /** ETF 分时：价格线 + 均价线 + 主力资金柱（右轴）。 */
 export function IntradayChart({
-  trends, flow, height = 240, title,
+  trends, flow, height = 240, title, id,
 }: {
   trends: any[];
   flow: any[];
   height?: number;
   title?: string;
+  id?: string;
 }) {
   const option = useMemo(() => {
     const times = trends?.map((t) => t.time?.slice(11)) ?? [];
@@ -69,11 +70,11 @@ export function IntradayChart({
       ],
     };
   }, [trends, flow]);
-  return <ReactECharts option={option} style={{ height }} notMerge lazyUpdate />;
+  return <ReactECharts key={id} option={option} style={{ height }} />;
 }
 
 /** 通用 K 线 + 量能。 */
-export function KlineChart({ bars, height = 260 }: { bars: any[]; height?: number }) {
+export function KlineChart({ bars, height = 260, id }: { bars: any[]; height?: number; id?: string }) {
   const option = useMemo(() => {
     const data = bars ?? [];
     const cat = data.map((b) => (b.date?.length > 12 ? b.date.slice(5) : b.date));
@@ -81,7 +82,11 @@ export function KlineChart({ bars, height = 260 }: { bars: any[]; height?: numbe
     const vol = data.map((b, i) => ({ value: b.volume, itemStyle: { color: b.close >= b.open ? UP : DOWN } }));
     return {
       ...base,
-      grid: { left: 46, right: 16, top: 16, bottom: 54 },
+      // 两套坐标轴必须配两个 grid（数组），否则 gridIndex:1 找不到 coordinateSystem 而报错
+      grid: [
+        { left: 46, right: 16, top: 14, height: "60%" },
+        { left: 46, right: 16, top: "76%", height: "16%" },
+      ],
       tooltip: { ...base.tooltip, formatter: undefined },
       axisPointer: { link: [{ xAxisIndex: "all" }] },
       xAxis: [
@@ -100,17 +105,18 @@ export function KlineChart({ bars, height = 260 }: { bars: any[]; height?: numbe
       ],
     };
   }, [bars]);
-  return <ReactECharts option={option} style={{ height }} notMerge lazyUpdate />;
+  return <ReactECharts key={id} option={option} style={{ height }} />;
 }
 
 /** 合约分时叠加：期权价（左轴）+ 标的ETF价（右轴）+ 主力资金（柱，副轴）。 */
 export function OverlayChart({
-  optTrends, etfTrends, flow, height = 300,
+  optTrends, etfTrends, flow, height = 300, id,
 }: {
   optTrends: any[];
   etfTrends: any[];
   flow: any[];
   height?: number;
+  id?: string;
 }) {
   const option = useMemo(() => {
     const times = optTrends?.map((t) => t.time?.slice(11)) ?? [];
@@ -139,16 +145,17 @@ export function OverlayChart({
       ],
     };
   }, [optTrends, etfTrends, flow]);
-  return <ReactECharts option={option} style={{ height }} notMerge lazyUpdate />;
+  return <ReactECharts key={id} option={option} style={{ height }} />;
 }
 
 /** Kronos 预测：历史收盘 + 预测收盘路径（虚线）+ 预测高低带。 */
 export function PredictChart({
-  bars, pred, height = 220,
+  bars, pred, height = 220, id,
 }: {
   bars: any[];
   pred: any;
   height?: number;
+  id?: string;
 }) {
   const option = useMemo(() => {
     const hist = (bars ?? []).slice(-60);
@@ -176,22 +183,24 @@ export function PredictChart({
       ],
     };
   }, [bars, pred]);
-  return <ReactECharts option={option} style={{ height }} notMerge lazyUpdate />;
+  return <ReactECharts key={id} option={option} style={{ height }} />;
 }
 
-/** 迷你走势（用于 ETF 列表行）。 */
-export function Sparkline({ data, up, height = 28, width = 84 }: { data: number[]; up: boolean; height?: number; width?: number }) {
-  const option = useMemo(
-    () => ({
-      ...base,
-      animation: false,
-      grid: { left: 0, right: 0, top: 2, bottom: 2 },
-      xAxis: { type: "category", show: false, data: data.map((_, i) => i) },
-      yAxis: { type: "value", show: false, scale: true },
-      series: [{ type: "line", data, showSymbol: false, lineStyle: { width: 1.2, color: up ? UP : DOWN },
-        areaStyle: { color: up ? "rgba(239,68,68,0.12)" : "rgba(34,197,94,0.12)" } }],
-    }),
-    [data, up],
+/** 迷你走势（用于 ETF 列表行）——纯 SVG，无 ECharts 实例，避免列表频繁重绘时的生命周期问题。 */
+export function Sparkline({ data, up, height = 24, width = 54 }: { data: number[]; up: boolean; height?: number; width?: number }) {
+  const pts = (data || []).filter((v) => typeof v === "number" && isFinite(v));
+  if (pts.length < 2) return <svg width={width} height={height} className="shrink-0" aria-hidden />;
+  const min = Math.min(...pts);
+  const max = Math.max(...pts);
+  const rng = max - min || 1;
+  const step = width / (pts.length - 1);
+  const color = up ? UP : DOWN;
+  const line = pts.map((v, i) => `${(i * step).toFixed(1)},${(height - 2 - ((v - min) / rng) * (height - 4)).toFixed(1)}`).join(" ");
+  const area = `0,${height} ${line} ${width},${height}`;
+  return (
+    <svg width={width} height={height} className="shrink-0" aria-hidden>
+      <polygon points={area} fill={up ? "rgba(239,68,68,0.10)" : "rgba(22,163,74,0.10)"} />
+      <polyline points={line} fill="none" stroke={color} strokeWidth={1.3} strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
   );
-  return <ReactECharts option={option} style={{ height, width }} notMerge lazyUpdate />;
 }

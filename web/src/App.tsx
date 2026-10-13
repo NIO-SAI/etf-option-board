@@ -7,6 +7,7 @@ import { BiasBar, CandidateList, EtfList, OptionTQuote, PlanCard, SignalFeed } f
 import { ContractDetail, KronosPredict, LlmPanel } from "@/components/detail";
 import { AlertCenter } from "@/components/AlertCenter";
 import { Skeleton, Tabs } from "@/components/ui/misc";
+import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { clsUpDown, money, nf, pct, signedMoney } from "@/lib/format";
@@ -108,11 +109,13 @@ export default function App() {
                 </div>
               )}
               <div className="px-1 pb-2">
-                {ctx?.trends?.length ? (
-                  klt === 1
-                    ? <IntradayChart trends={ctx.trends} flow={ctx.flow} height={230} />
-                    : <KlineChart bars={ctx.kline_1m} height={250} />
-                ) : <Skeleton className="h-[240px] w-full" />}
+                <ErrorBoundary label="标的行情图">
+                  {ctx?.trends?.length ? (
+                    klt === 1
+                      ? <IntradayChart id="main-chart" trends={ctx.trends} flow={ctx.flow} height={230} />
+                      : <KlineChart id="main-chart" bars={ctx.kline_1m} height={250} />
+                  ) : <Skeleton className="h-[240px] w-full" />}
+                </ErrorBoundary>
               </div>
             </FramePanel>
           </Frame>
