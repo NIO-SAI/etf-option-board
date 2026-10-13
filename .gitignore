@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data / cache
+data/cache/
+data/*.json
+!data/.gitkeep
+
+# Secrets
+.env
+.env.local
+*.key
+
+# Node (web)
+web/node_modules/
+web/.vite/
+
+# OS
+.DS_Store

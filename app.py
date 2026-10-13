@@ -1,0 +1,66 @@
+"""ETF 期权日内决策看板 — FastAPI 入口。
+
+    /Users/xinxin/.browser-use-env/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port 6799
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from config import settings
+from routers import api
+from services import em, kronos, monitor
+
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+log = logging.getLogger("app")
+
+WEB_DIST = os.path.join(os.path.dirname(__file__), "web", "dist")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    log.info("启动：预热 Kronos（后台）")
+    task_k = asyncio.create_task(kronos.warmup())
+    task_m = asyncio.create_task(monitor.run_forever())
+    yield
+    log.info("关闭：停止监控与推理子进程")
+    for t in (task_k, task_m):
+        t.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.gather(task_k, task_m, return_exceptions=True)
+    await kronos.shutdown()
+    await em.close()
+
+
+app = FastAPI(title="ETF 期权日内决策看板", version="0.1.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+)
+app.include_router(api.router)
+
+
+@app.get("/")
+async def index():
+    idx = os.path.join(WEB_DIST, "index.html")
+    if os.path.exists(idx):
+        return FileResponse(idx)
+    return JSONResponse({
+        "msg": "前端尚未构建。开发模式请运行 web 目录的 vite dev（默认 http://localhost:5173）；"
+               "或执行 web/build.sh 生成 web/dist。",
+        "api_docs": "/docs",
+    })
+
+
+if os.path.isdir(WEB_DIST):
+    app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="static")

@@ -1,0 +1,139 @@
+"""大模型决策：把市场快照交给 LLM，产出结构化的日内交易决策（方向/合约/买卖点/止盈止损/理由）。"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import uuid
+
+import httpx
+
+from config import settings
+
+log = logging.getLogger("llm")
+
+_SYSTEM = """你是一位资深 A 股 ETF 期权日内交易员，擅长 50ETF/300ETF/500ETF/科创50/创业板等场内期权。
+你的任务：基于给定的市场快照（标的行情、期权链与隐波、资金流、关联指数、国家队护盘信号、外围市场、Kronos 量化预测），
+给出**当天日内**的可执行交易决策，当日做 1-2 次买卖，不频繁交易。
+
+交易原则：
+1) 期权与标的指数正相关，先判断标的 ETF 的日内方向，再选同向合约。
+2) 关键变盘时点：10:30 / 11:30 / 13:00 / 14:30 附近重点观察。
+3) 结合量能与主力资金判断真假突破（放量+主力净流入为真）。
+4) 用分钟级 MACD 动能与背离过滤信号，避免频繁噪音交易。
+5) 指数跌至支撑且出现国家队护盘（宽基 ETF 放量+主力净流入）时，倾向看反弹。
+6) 选合约：优先流动性好（成交额大、持仓大、买卖价差小）、Delta 0.35~0.65 的平值/轻虚值合约；
+   低溢价率更“实”，隐波过高则买方成本贵需谨慎。
+7) 必须给出明确：方向、合约代码、入场价、止损价、止盈价（含百分比），以及不确定性说明。
+8) 若信号冲突或置信度低，明确建议"观望"，不要强行给单。
+
+严格只输出一个 JSON 对象，不要任何解释文字或代码块标记。字段：
+{
+  "direction": "call|put|neutral",
+  "action": "buy_call|buy_put|wait",
+  "contract_code": "合约代码或空串",
+  "contract_name": "合约简称或空串",
+  "entry": 数字或null,
+  "stop": 数字或null,
+  "target": 数字或null,
+  "stop_pct": 数字（相对入场的止损%）或null,
+  "target_pct": 数字或null,
+  "confidence": 0-100 整数,
+  "hold_window": "建议持有到的时间点，如 14:30",
+  "reasons": ["要点1","要点2"],
+  "risks": ["风险1"],
+  "summary": "一句话结论"
+}"""
+
+
+def _load_key() -> str:
+    if settings.llm_auth_key:
+        return settings.llm_auth_key
+    try:
+        data = json.load(open(settings.llm_auth_json))
+        for name in ("opencode-go", "opencode"):
+            if name in data and data[name].get("key"):
+                return data[name]["key"]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("读取 LLM 密钥失败: %s", exc)
+    return ""
+
+
+def available() -> bool:
+    return bool(_load_key())
+
+
+def _extract_json(text: str) -> dict | None:
+    if not text:
+        return None
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.M).strip()
+    try:
+        return json.loads(text)
+    except Exception:  # noqa: BLE001
+        pass
+    m = re.search(r"\{.*\}", text, re.S)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
+def _compact(bundle: dict) -> dict:
+    """把策略快照裁剪为适合提示词的精简结构。"""
+    keep_keys = {"code", "name", "type", "strike", "expiry", "days", "last", "pct",
+                 "volume", "amount", "oi", "spread", "moneyness", "itm",
+                 "premium_rate", "iv", "delta", "gamma", "leverage", "score"}
+    return {
+        "标的": bundle.get("underlying"),
+        "链统计(近月隐波/偏斜/PCR)": bundle.get("chain_stats"),
+        "方向评分": bundle.get("bias"),
+        "技术点位": bundle.get("levels"),
+        "交易方案(按delta折算)": bundle.get("plans"),
+        "候选合约": [{k: c.get(k) for k in keep_keys} for c in (bundle.get("candidates") or [])[:6]],
+        "信号": [s.get("text") for s in (bundle.get("signals") or [])],
+        "Kronos量化预测": bundle.get("kronos"),
+        "关联指数": bundle.get("track"),
+        "国家队护盘": {k: bundle.get("national_team", {}).get(k)
+                    for k in ("score", "level", "surge_count", "main_5m_sum")},
+        "外围市场": [{"name": e.get("name_cn"), "pct": e.get("pct")}
+                  for e in (bundle.get("external") or [])],
+        "当前量能": bundle.get("volume"),
+        "当前MACD": bundle.get("macd"),
+    }
+
+
+async def decide(bundle: dict, timeout: int | None = None) -> dict:
+    key = _load_key()
+    if not key:
+        return {"error": "未找到 LLM 密钥"}
+    payload = _compact(bundle)
+    user = ("以下是当前市场快照（JSON）。请给出今日日内期权交易决策，"
+            "严格按系统要求输出 JSON：\n" + json.dumps(payload, ensure_ascii=False))
+    body = {
+        "model": settings.llm_model,
+        "messages": [{"role": "system", "content": _SYSTEM},
+                     {"role": "user", "content": user}],
+        "temperature": 0.4,
+        "max_tokens": 3000,
+    }
+    headers = {"Authorization": f"Bearer {key}", "x-opencode-session": uuid.uuid4().hex}
+    try:
+        async with httpx.AsyncClient(timeout=timeout or settings.llm_timeout) as c:
+            r = await c.post(f"{settings.llm_api_base}/chat/completions", json=body, headers=headers)
+        if r.status_code != 200:
+            return {"error": f"LLM HTTP {r.status_code}: {r.text[:200]}"}
+        msg = r.json()["choices"][0]["message"]
+        content = msg.get("content") or msg.get("reasoning_content") or ""
+        parsed = _extract_json(content)
+        if not parsed:
+            return {"error": "LLM 返回无法解析为 JSON", "raw": content[:500]}
+        parsed["_model"] = settings.llm_model
+        return parsed
+    except Exception as exc:  # noqa: BLE001
+        log.warning("LLM 决策失败: %s", exc)
+        return {"error": str(exc)}

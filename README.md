@@ -1,0 +1,73 @@
+# ETF 期权日内决策看板
+
+面向 A 股场内 ETF 期权（9 个标的）的**日内交易决策系统**：实时行情 + 期权链/隐波 + 资金流 +
+关联指数 + 国家队护盘信号 + Kronos 量化预测，并由**大模型**综合给出当天 1~2 次买卖的
+入场/止盈/止损方案。前端为 REUI + Tailwind v4 深色看板，支持声音与弹窗告警。
+
+> 仅供研究学习，不构成投资建议。
+
+## 覆盖标的（可交易期权的 9 只 ETF）
+
+| 标的 | 代码 | 期权简称前缀 | 关联指数 |
+|---|---|---|---|
+| 上证50ETF华夏 | 510050 | 50ETF | 上证50 |
+| 沪深300ETF华泰柏瑞 | 510300 | 300ETF | 沪深300 |
+| 中证500ETF南方 | 510500 | 500ETF | 中证500 |
+| 科创50ETF华夏 | 588000 | 科创50 | 科创50 |
+| 科创50ETF易方达 | 588080 | 科创板50 | 科创50 |
+| 沪深300ETF嘉实 | 159919 | 沪深300ETF | 沪深300 |
+| 创业板ETF易方达 | 159915 | 创业板ETF | 创业板指 |
+| 中证500ETF嘉实 | 159922 | 中证500ETF | 中证500 |
+| 深证100ETF易方达 | 159901 | 深证100ETF | 深证100 |
+
+## 快速开始
+
+```bash
+# 1) 构建前端（首次）
+bash web/build.sh
+
+# 2) 启动后端（含监控循环 + 托管前端）
+bash run.sh
+# 打开 http://127.0.0.1:6799
+```
+
+前置：Python 解释器用 `~/.browser-use-env/bin/python3`（已含 fastapi/uvicorn/httpx）。
+Kronos 预测依赖本地 `facecat-kronos` 仓库的 `.venv` 与模型权重；缺失时看板其余功能正常，
+预测区域提示离线。
+
+### 开发模式
+
+```bash
+bash run.sh          # 后端 :6799
+bash web/dev.sh      # 前端 :5273（/api 代理到 6799）
+```
+
+## 目录结构
+
+```
+ETF/
+├─ app.py                 FastAPI 入口（lifespan 启动监控 + Kronos 预热）
+├─ config.py              配置（token/利率/关键时点/Kronos/LLM）
+├─ routers/api.py         全部 HTTP 接口 + SSE 告警流
+├─ services/
+│  ├─ em.py               东方财富客户端（直连 + curl 兜底 + TTL 缓存）
+│  ├─ universe.py         标的/指数/外围/国家队 清单与映射
+│  ├─ option_service.py   期权链、T型报价、合约优选、IV/希腊字母装配
+│  ├─ bs.py               Black-Scholes 隐波/希腊字母/溢价率
+│  ├─ indicators.py       EMA/MACD/ATR/量能/背离/支撑压力
+│  ├─ market_service.py   指数、ETF行情/资金流、国家队护盘、外围
+│  ├─ strategy.py         方向评分、信号、买卖点、止盈止损
+│  ├─ kronos.py           Kronos 预测子进程桥（复用 facecat-kronos）
+│  ├─ llm.py              大模型决策（结构化 JSON）
+│  ├─ alerts.py           告警总线（发布/订阅/历史）
+│  └─ monitor.py          实时轮询触发告警
+└─ web/                   REUI + React + Vite + Tailwind v4 前端
+```
+
+## 数据来源
+
+东方财富公开接口（`push2 / push2his / emdatah5`）。期权链为 `fs=m:10`（沪）/`m:12`（深）
+按简称前缀切分；K 线 `klt∈{1,5,15,30,60,101}`（3 分钟由 1 分钟聚合）；资金流用
+`stock/fflow/kline/get`。隐波与希腊字母由本系统按 BS 口径自算（与市场口径一致）。
+
+详见 `CONTEXT.md`（架构、策略逻辑、以及进一步提升期权交易的专业建议）。
