@@ -1,16 +1,16 @@
 import { useMemo, useState } from "react";
 import { Badge } from "@/components/reui/badge";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
-import { KlineChart, OverlayChart, PredictChart } from "@/components/charts";
+import { OverlayChart, PredictChart } from "@/components/charts";
 import { Button } from "@/components/ui/button";
-import { Skeleton, Tabs } from "@/components/ui/misc";
+import { Skeleton } from "@/components/ui/misc";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { clsUpDown, money, nf, pct } from "@/lib/format";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { BrainCircuit, Loader2 } from "lucide-react";
 
-/* ---------------- 合约详情（叠加图 + K线） ---------------- */
+/* ---------------- 合约详情（分时叠加） ---------------- */
 export function ContractDetail({
   contract, etfTrends, flow,
 }: {
@@ -18,19 +18,14 @@ export function ContractDetail({
   etfTrends: any[];
   flow: any[];
 }) {
-  const [klt, setKlt] = useState(1);
   const secid = contract?.secid;
   const { data: trends } = usePolling(
     () => (secid ? api.optTrends(secid) : Promise.resolve({ trends: [] })),
     10_000, [secid]);
-  const { data: kline } = usePolling(
-    () => (secid ? api.optKline(secid, klt, 240) : Promise.resolve({ bars: [] })),
-    15_000, [secid, klt]);
 
   // 注意：图表始终保持挂载（不因未选合约而卸载），避免 ECharts 在同一 DOM 节点上
   // 反复 dispose/init 造成崩溃；切合约只更新数据（固定 key）。
   const t = trends?.trends ?? [];
-  const bars = kline?.bars ?? [];
   return (
     <Frame spacing="sm" stacked>
       <FramePanel dense>
@@ -67,27 +62,6 @@ export function ContractDetail({
         <div className="px-1 pb-2">
           <ErrorBoundary label="分时叠加图">
             <OverlayChart id="overlay" optTrends={t} etfTrends={etfTrends} flow={flow} height={300} />
-          </ErrorBoundary>
-        </div>
-      </FramePanel>
-      <FramePanel dense>
-        <FrameHeader className="flex-row items-center justify-between">
-          <FrameTitle className="text-xs">合约 K 线</FrameTitle>
-          <Tabs
-            tabs={[{ key: "1", label: "1分" }, { key: "3", label: "3分" }, { key: "5", label: "5分" }, { key: "15", label: "15分" }]}
-            value={String(klt)}
-            onChange={(k) => setKlt(Number(k))}
-          />
-        </FrameHeader>
-        <div className="px-1 pb-2">
-          <ErrorBoundary label="合约K线">
-            {bars.length ? (
-              <KlineChart id="contract-kline" bars={bars} height={220} />
-            ) : (
-              <div className="flex h-[220px] items-center justify-center text-xs text-muted-foreground">
-                {secid ? "合约 K 线暂不可用（东财接口限流），稍后自动重试" : "选择合约查看 K 线"}
-              </div>
-            )}
           </ErrorBoundary>
         </div>
       </FramePanel>

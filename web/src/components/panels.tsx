@@ -8,9 +8,6 @@ import { cn } from "@/lib/utils";
 import { ArrowDownRight, ArrowUpRight, Flame, Minus } from "lucide-react";
 
 /* ---------------- 标的列表 ---------------- */
-const shortName = (n: string) =>
-  (n || "").replace(/(华泰柏瑞|易方达|华夏|嘉实|南方|广发|国泰|银华)$/, "");
-
 // 方向标签：A 股约定 —— 看多红、看空绿、观望灰（与 bias.direction 对应）
 const DIR_MAP: Record<string, { v: any; t: string }> = {
   call: { v: "destructive-light", t: "看多" },
@@ -51,23 +48,19 @@ export function EtfList({
                 key={e.code}
                 onClick={() => onSelect(e.code)}
                 className={cn(
-                  "flex w-full items-center gap-2.5 px-2.5 py-2.5 text-left transition-colors",
+                  "flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors",
                   on ? "bg-primary/10" : "hover:bg-muted/50",
                 )}
               >
-                {/* 当前选中：最左侧蓝点 */}
-                <span className="flex w-2 shrink-0 items-center justify-center self-stretch">
-                  {on && <span className="size-1.5 rounded-full bg-primary" />}
-                </span>
-                {/* 主信息：商标 + 方向标签 / 代码·指数 */}
+                {/* 主信息：全名 + 方向标签 / 代码·指数 */}
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <div className="flex items-center gap-1.5">
-                    <span className={cn("truncate text-xs font-medium", on && "text-primary")}>{shortName(e.name)}</span>
+                    <span className={cn("truncate text-xs font-medium", on && "text-primary")}>{e.name}</span>
                     {dm && <Badge variant={dm.v} size="xs" className="shrink-0">{dm.t}</Badge>}
                   </div>
                   <div className="truncate text-[10px] text-muted-foreground tnum">{e.code} · {e.track}</div>
                 </div>
-                <Sparkline data={trendsMap[e.code] ?? []} up={(q?.pct ?? 0) >= 0} width={46} height={26} />
+                <Sparkline data={trendsMap[e.code] ?? []} up={(q?.pct ?? 0) >= 0} width={40} height={26} />
                 <div className="w-14 shrink-0 text-right">
                   <div className="text-xs font-semibold tnum">{q ? nf(q.price, 3) : "—"}</div>
                   <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>
@@ -82,8 +75,7 @@ export function EtfList({
           {indexRows.map((ix) => {
             const q = ix.quote;
             return (
-              <div key={ix.code} className="flex w-full items-center gap-2.5 px-2.5 py-2.5">
-                <span className="w-2 shrink-0" />
+              <div key={ix.code} className="flex w-full items-center gap-2.5 px-3 py-2.5">
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <div className="flex items-center gap-1.5">
                     <span className="truncate text-xs font-medium">{ix.name}</span>
@@ -91,7 +83,7 @@ export function EtfList({
                   </div>
                   <div className="truncate text-[10px] text-muted-foreground tnum">{ix.code}</div>
                 </div>
-                <Sparkline data={trendsMap[ix.code] ?? []} up={(q?.pct ?? 0) >= 0} width={46} height={26} />
+                <Sparkline data={trendsMap[ix.code] ?? []} up={(q?.pct ?? 0) >= 0} width={40} height={26} />
                 <div className="w-14 shrink-0 text-right">
                   <div className="text-xs font-semibold tnum">{q ? nf(q.price, 2) : "—"}</div>
                   <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>

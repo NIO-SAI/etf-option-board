@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
@@ -71,6 +71,20 @@ async def index():
                "或执行 web/build.sh 生成 web/dist。",
         "api_docs": "/docs",
     })
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots():
+    return PlainTextResponse("User-agent: *\nAllow: /\n")
+
+
+@app.get("/llms.txt", include_in_schema=False)
+async def llms():
+    return PlainTextResponse(
+        "# ETF 期权日内决策看板\n\n"
+        "> A 股 9 只宽基 ETF 期权的日内决策看板（实时行情/期权链/资金流/预测），仅供研究，不构成投资建议。\n\n"
+        "- [看板首页](/): 实时行情与期权链\n",
+        media_type="text/markdown; charset=utf-8")
 
 
 if os.path.isdir(WEB_DIST):

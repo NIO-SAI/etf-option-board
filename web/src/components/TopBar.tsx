@@ -1,14 +1,13 @@
 import { Badge } from "@/components/reui/badge";
 import { Button } from "@/components/ui/button";
-import { clsUpDown, nf, pct } from "@/lib/format";
+import { clsUpDown, pct } from "@/lib/format";
 import { sound } from "@/lib/sound";
 import { Activity, Bell, BellOff, RefreshCw, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 
 export function TopBar({
-  indices, external, national, health, clock, onRefresh,
+  external, national, health, clock, onRefresh,
 }: {
-  indices: any[];
   external: any[];
   national: any;
   health: any;
@@ -25,15 +24,7 @@ export function TopBar({
           <Activity className="size-4 text-primary" />
           <span className="text-sm font-semibold whitespace-nowrap">ETF 期权日内决策看板</span>
         </div>
-        <div className="flex flex-1 items-center gap-4 overflow-x-auto">
-          {(indices ?? []).map((i) => (
-            <div key={i.secid} className="flex items-baseline gap-1.5 whitespace-nowrap">
-              <span className="text-xs text-muted-foreground">{i.short}</span>
-              <span className="text-xs font-semibold tnum">{nf(i.price, 2)}</span>
-              <span className={`text-xs tnum ${clsUpDown(i.pct)}`}>{pct(i.pct)}</span>
-            </div>
-          ))}
-        </div>
+        <div className="flex-1" />
         <div className="hidden items-center gap-2 xl:flex">
           {(external ?? []).slice(0, 5).map((e) => (
             <div key={e.key} className="flex items-baseline gap-1 whitespace-nowrap">
