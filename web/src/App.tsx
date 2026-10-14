@@ -13,6 +13,13 @@ import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { clsUpDown, nf, pct, signedWan } from "@/lib/format";
 
+// 当前加载的前端 bundle 哈希（用于判断浏览器是否加载了最新构建）
+const BUNDLE_ID = (() => {
+  const s = document.querySelector('script[type="module"]') as HTMLScriptElement | null;
+  const m = (s?.src || "").match(/index-([A-Za-z0-9_-]+)\.js/);
+  return m ? m[1] : "dev";
+})();
+
 export default function App() {
   const [etfCode, setEtfCode] = useState("510300");
   const [month, setMonth] = useState<number | null>(null);
@@ -201,6 +208,7 @@ export default function App() {
       </main>
       <footer className="px-4 py-3 text-center text-[10px] text-muted-foreground">
         数据来源：东方财富 · 期权定价 BS · 预测 Kronos · 决策大模型 — 仅供研究，不构成投资建议
+        <span className="ml-2">· 构建 {BUNDLE_ID}</span>
       </footer>
     </div>
   );
