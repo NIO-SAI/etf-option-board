@@ -87,7 +87,7 @@ export default function App() {
       <main className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-[300px_minmax(0,1fr)_360px]">
         {/* 左：标的 */}
         <div className="lg:sticky lg:top-[52px] lg:h-[calc(100vh-3.25rem)]">
-          <EtfList etfs={etfs} quotes={quotes} trendsMap={trendsMap} directions={directions?.items ?? {}} selected={etfCode} onSelect={setEtfCode} />
+          <EtfList etfs={etfs} quotes={quotes} trendsMap={trendsMap} directions={directions?.items ?? {}} indices={indices?.items ?? []} selected={etfCode} onSelect={setEtfCode} />
         </div>
 
         {/* 中：标的行情 + 合约详情 + T报价 */}
