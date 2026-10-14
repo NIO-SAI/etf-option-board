@@ -175,7 +175,8 @@ async def track_index_state(track: str) -> dict:
     secid = TRACK_INDEX.get(track)
     if not secid:
         return {}
-    q, sup = await asyncio.gather(quote(secid), index_support_state(secid))
+    q, sup, tr = await asyncio.gather(
+        quote(secid), index_support_state(secid), trends(secid))
     k1 = await kline(secid, klt=5, lmt=60)
     closes = [b["close"] for b in k1]
-    return {"secid": secid, "quote": q, "support": sup, "macd": macd_state(closes)}
+    return {"secid": secid, "quote": q, "support": sup, "trends": tr, "macd": macd_state(closes)}

@@ -129,7 +129,7 @@ export default function App() {
                     <Skeleton className="h-[240px] w-full" />
                   ) : klt === "trend" ? (
                     ctx?.trends?.length
-                      ? <IntradayChart id="main-chart" trends={ctx.trends} flow={flowSeries} height={230} />
+                      ? <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} height={230} />
                       : <Skeleton className="h-[240px] w-full" />
                   ) : (
                     kline?.bars?.length
@@ -170,6 +170,16 @@ export default function App() {
             </FramePanel>
           </Frame>
 
+          <Frame spacing="sm">
+            <FramePanel dense>
+              <FrameHeader className="flex-row items-center justify-between">
+                <FrameTitle className="text-xs">Kronos 量化预测</FrameTitle>
+                <span className="text-[10px] text-muted-foreground">5分钟级</span>
+              </FrameHeader>
+              <KronosPredict secid={ctx?.etf?.secid ?? etfs.find((e: any) => e.code === etfCode)?.secid ?? "1.510300"} klt={5} />
+            </FramePanel>
+          </Frame>
+
           {strategy && <PlanCard bundle={strategy} />}
 
           <Frame spacing="sm">
@@ -180,16 +190,6 @@ export default function App() {
                   <CandidateList candidates={strategy.candidates} selected={contractSecid ?? undefined} onSelect={onPickContract} />
                 ) : <div className="py-4 text-center text-xs text-muted-foreground">—</div>}
               </div>
-            </FramePanel>
-          </Frame>
-
-          <Frame spacing="sm">
-            <FramePanel dense>
-              <FrameHeader className="flex-row items-center justify-between">
-                <FrameTitle className="text-xs">Kronos 量化预测</FrameTitle>
-                <span className="text-[10px] text-muted-foreground">5分钟级</span>
-              </FrameHeader>
-              <KronosPredict secid={ctx?.etf?.secid ?? etfs.find((e: any) => e.code === etfCode)?.secid ?? "1.510300"} klt={5} />
             </FramePanel>
           </Frame>
 

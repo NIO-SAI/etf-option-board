@@ -36,40 +36,53 @@ const base = {
   },
 };
 
-/** ETF 分时：价格线 + 均价线 + 主力资金柱（右轴）。 */
+/** ETF 分时：标的价（左轴）+ 关联指数（右外轴）+ 主力净流入（右内轴，柱）。 */
 export function IntradayChart({
-  trends, flow, height = 240, title, id,
+  trends, indexTrends = [], indexName = "", flow, height = 240, title, id,
 }: {
   trends: any[];
+  indexTrends?: any[];
+  indexName?: string;
   flow: any[];
   height?: number;
   title?: string;
   id?: string;
 }) {
   const option = useMemo(() => {
-    const times = trends?.map((t) => t.time?.slice(-5)) ?? [];
+    const tt = (t: any) => (t || "").slice(-5);
+    const times = trends?.map((t) => tt(t.time)) ?? [];
     const prices = trends?.map((t) => t.price) ?? [];
-    const avg = trends?.map((t) => t.avg) ?? [];
-    const flowMap = new Map((flow ?? []).map((f) => [f.time?.slice(-5), f.main]));
+    const idxMap = new Map((indexTrends ?? []).map((t) => [tt(t.time), t.price]));
+    const idxPx = times.map((t) => idxMap.get(t) ?? null);
+    const flowMap = new Map((flow ?? []).map((f) => [tt(f.time), f.main]));
     const mains = times.map((t) => flowMap.get(t) ?? null);
+    const hasIdx = idxPx.some((v) => v !== null);
     return {
       ...base,
-      legend: undefined,
+      grid: { left: 50, right: hasIdx ? 100 : 58, top: 24, bottom: 34 },
+      legend: {
+        top: 0, left: 6, itemWidth: 12, itemHeight: 8, itemGap: 12,
+        textStyle: { color: AXIS, fontSize: 10 },
+        data: ["标的ETF", ...(hasIdx ? [`关联指数${indexName ? " " + indexName : ""}`] : []), "主力净流入"],
+      },
       xAxis: { ...base.xAxisBase, data: times },
       yAxis: [
-        { ...base.yAxisBase, position: "left", axisLabel: { color: AXIS, formatter: (v: number) => v.toFixed(3) } },
+        { ...base.yAxisBase, position: "left", axisLabel: { color: "#60a5fa", formatter: (v: number) => v.toFixed(3) } },
         { ...base.yAxisBase, position: "right", splitLine: { show: false },
           axisLabel: { color: "#7c3aed", formatter: (v: number) => (v / 1e8).toFixed(1) + "亿" } },
+        { ...base.yAxisBase, position: "right", offset: hasIdx ? 58 : 0, splitLine: { show: false },
+          axisLabel: { color: "#d97706", formatter: (v: number) => v.toFixed(0) } },
       ],
       series: [
-        { name: "价格", type: "line", data: prices, showSymbol: false, lineStyle: { width: 1.4, color: "#60a5fa" },
+        { name: "标的ETF", type: "line", data: prices, showSymbol: false, lineStyle: { width: 1.4, color: "#60a5fa" },
           areaStyle: { color: "rgba(96,165,250,0.08)" } },
-        { name: "均价", type: "line", data: avg, showSymbol: false, lineStyle: { width: 1, color: "#f59e0b", type: "dashed" } },
         { name: "主力净流入", type: "bar", yAxisIndex: 1, data: mains, barWidth: "60%",
           itemStyle: { color: (p: any) => (p.value >= 0 ? "rgba(239,68,68,0.55)" : "rgba(34,197,94,0.55)") } },
+        { name: `关联指数${indexName ? " " + indexName : ""}`, type: "line", yAxisIndex: 2, data: idxPx,
+          showSymbol: false, lineStyle: { width: 1.3, color: "#d97706", type: "dashed" } },
       ],
     };
-  }, [trends, flow]);
+  }, [trends, indexTrends, indexName, flow]);
   return <ReactECharts key={id} option={option} style={{ height }} />;
 }
 
