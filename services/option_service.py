@@ -124,7 +124,7 @@ def _enrich(row: dict, s: float, today: dt.date) -> dict:
 async def _raw_chain(etf: dict) -> list[dict]:
     # 期权列表按行权价归并后是全量列表（612/468 条），单标的链取其前缀
     fields = OPT_LIST_FIELDS
-    rows = await em.clist_all(f"m:{etf['opt_market']}", fields, pz=100, ttl=4.0)
+    rows = await em.clist_all(f"m:{etf['opt_market']}", fields, pz=100, ttl=20.0)
     prefix = etf["prefix"]
     out = []
     for r in rows:

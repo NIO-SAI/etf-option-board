@@ -112,8 +112,21 @@ async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
         })
 
 
+def _in_trading_window(now: dt.datetime) -> bool:
+    """工作日 09:30–11:30 / 13:00–15:00；非交易时段不发请求（降频防封）。"""
+    if now.weekday() >= 5:
+        return False
+    hm = now.strftime("%H:%M")
+    return (settings.session_am[0] <= hm <= settings.session_am[1]) or \
+           (settings.session_pm[0] <= hm <= settings.session_pm[1])
+
+
 async def cycle() -> None:
     now = dt.datetime.now()
+    if not _in_trading_window(now):
+        _state["last_cycle"] = now.isoformat(timespec="seconds")
+        _state["cycles"] += 1
+        return
     hm = now.strftime("%H:%M")
     key_hm = strategy.near_key_time(hm, window=2)
     try:

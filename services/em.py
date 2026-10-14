@@ -21,6 +21,18 @@ _UA = settings.user_agent
 _UT = settings.em_token
 _REFERER = "https://quote.eastmoney.com/"
 
+# H5 快照主源：emdatah5 直连稳定（push2 被代理/限流时仍可用）。
+#   getZJLXData  = push2 stock/get 等价（个股/指数/外围/期权行情 + 资金流）
+#   getZDYLBData = push2 clist 等价（列表：期权链/板块/成分股）
+_H5_URL = "https://emdatah5.eastmoney.com/dc/ZJLX"
+_H5_UT = "fa5fd1943c7b386f172d6893dbfba10b"
+_H5_REF = "https://data.eastmoney.com/"
+# 腾讯行情：K 线/分时兜底（push2his / push2 trends 不可用时）
+_TX_DAY = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+_TX_MIN = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
+_TX_TREND = "https://web.ifzq.gtimg.cn/appstock/app/minute/query"
+
+
 _CLIENT: httpx.AsyncClient | None = None
 _CACHE: dict[str, tuple[float, float, object]] = {}
 # 传输路径记忆：(host|path) -> (mode, ts)；mode: "direct" | "curl"
@@ -57,12 +69,13 @@ def _build(url: str, params: dict) -> str:
     return f"{url}?{urlencode(params, safe=',:+')}"
 
 
-async def _curl_json(url: str, params: dict | None = None) -> object:
+async def _curl_json(url: str, params: dict | None = None,
+                     referer: str | None = None) -> object:
     p = dict(params or {})
     p["_"] = int(time.time() * 1000)
     full = _build(url, p)
     proc = await asyncio.create_subprocess_exec(
-        "curl", "-s", "-m", "8", "-A", _UA, "-e", _REFERER,
+        "curl", "-s", "-m", "8", "-A", _UA, "-e", referer or _REFERER,
         "-H", "Accept: application/json, text/plain, */*",
         full,
         stdout=asyncio.subprocess.PIPE,
@@ -73,7 +86,7 @@ async def _curl_json(url: str, params: dict | None = None) -> object:
 
 
 async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
-                   force: bool = False) -> object | None:
+                   force: bool = False, referer: str | None = None) -> object | None:
     """带缓存与传输兜底的 GET JSON。失败返回 None（绝不抛给上层）。"""
     params = params or {}
     key = _build(url, params)
@@ -88,12 +101,13 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
     prefer = memo[0] if memo and now - memo[1] < _MEMO_TTL else None
 
     async def _direct():
-        r = await _client().get(_build(url, params))
+        r = await _client().get(_build(url, params),
+                                headers={"Referer": referer} if referer else None)
         r.raise_for_status()
         return r.json()
 
     async def _curl():
-        return await _curl_json(url, params)
+        return await _curl_json(url, params, referer)
 
     transports = [("curl", _curl), ("direct", _direct)]
     if prefer != "curl":
@@ -138,16 +152,22 @@ def _fields2():
 
 
 # --------------------------------------------------------------------------
-# 行情
+# 行情（主源 emdatah5，兜底 push2）
 # --------------------------------------------------------------------------
 async def clist(fs: str, fields: str, pn: int = 1, pz: int = 100, fid: str = "f12",
                 po: int = 1, ttl: float = 8.0) -> list[dict]:
-    url = "https://push2.eastmoney.com/api/qt/clist/get"
-    params = {
-        "pn": pn, "pz": pz, "po": po, "np": 1, "fltt": 2, "invt": 2,
-        "fid": fid, "fs": fs, "fields": fields, "ut": _UT,
-    }
-    d = await get_json(url, params, ttl=ttl)
+    # 主源：emdatah5 getZDYLBData（与 push2 clist 同参同构，稳定直连）
+    d = await get_json(f"{_H5_URL}/getZDYLBData",
+                       {"fields": fields, "pn": pn, "pz": pz, "fid": fid,
+                        "po": po, "fs": fs, "ut": _H5_UT},
+                       ttl=ttl, referer=_H5_REF)
+    data = (d or {}).get("data") if isinstance(d, dict) else None
+    if data and data.get("diff"):
+        return data["diff"]
+    # 兜底：push2 clist
+    d = await get_json("https://push2.eastmoney.com/api/qt/clist/get",
+                       {"pn": pn, "pz": pz, "po": po, "np": 1, "fltt": 2, "invt": 2,
+                        "fid": fid, "fs": fs, "fields": fields, "ut": _UT}, ttl=ttl)
     if not d or not d.get("data"):
         return []
     return d["data"].get("diff") or []
@@ -167,50 +187,141 @@ async def clist_all(fs: str, fields: str, pz: int = 100, max_page: int = 8,
 
 
 async def stock_get(secid: str, fields: str, ttl: float = 6.0) -> dict | None:
-    url = "https://push2.eastmoney.com/api/qt/stock/get"
-    d = await get_json(url, {"secid": secid, "fltt": 2, "invt": 2, "fields": fields, "ut": _UT}, ttl=ttl)
+    # 主源：emdatah5 getZJLXData（个股/指数/外围/期权行情）
+    d = await get_json(f"{_H5_URL}/getZJLXData",
+                       {"secid": secid, "fields": fields, "ut": _H5_UT},
+                       ttl=ttl, referer=_H5_REF)
+    data = (d or {}).get("data") if isinstance(d, dict) else None
+    if data:
+        return data
+    # 兜底：push2 stock/get
+    d = await get_json("https://push2.eastmoney.com/api/qt/stock/get",
+                       {"secid": secid, "fltt": 2, "invt": 2, "fields": fields, "ut": _UT}, ttl=ttl)
     if not d or not d.get("data"):
         return None
     return d["data"]
 
 
-async def kline(secid: str, klt: int = 1, lmt: int = 240, fqt: int = 1, ttl: float = 20.0) -> dict | None:
-    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-    params = {
-        "secid": secid, "fields1": _fields1(), "fields2": _fields2(),
-        "klt": klt, "fqt": fqt, "end": "20500101", "lmt": lmt, "ut": _UT,
-    }
-    d = await get_json(url, params, ttl=ttl)
-    return d.get("data") if d else None
+def _tx_code(secid: str) -> str | None:
+    """东财 secid -> 腾讯行情代码（沪 1./深 0.）；期权(10./12.)与外围(100.)不支持。"""
+    mk, _, code = secid.partition(".")
+    if mk == "1":
+        return "sh" + code
+    if mk == "0":
+        return "sz" + code
+    return None
 
 
-async def trends(secid: str, ndays: int = 1, ttl: float = 10.0) -> dict | None:
-    url = "https://push2.eastmoney.com/api/qt/stock/trends2/get"
-    params = {
-        "secid": secid, "fields1": "f1,f2,f3,f4,f5,f6,f7,f8",
-        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58", "iscr": 0, "ndays": ndays, "ut": _UT,
-    }
-    d = await get_json(url, params, ttl=ttl)
-    return d.get("data") if d else None
+def _numf(v, default: float = 0.0) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+async def _tx_kline(secid: str, klt: int, lmt: int, ttl: float) -> list[dict]:
+    code = _tx_code(secid)
+    if not code:
+        return []
+    if klt >= 100:  # 日/周/月线
+        period = {101: "day", 102: "week", 103: "month"}.get(klt, "day")
+        d = await get_json(_TX_DAY, {"param": f"{code},{period},,,{lmt},qfq"}, ttl=ttl)
+        node = ((d or {}).get("data") or {}).get(code) or {}
+        rows = node.get(f"qfq{period}") or node.get(period) or []
+        # row: [date, open, close, high, low, volume, ...]
+        return [{"date": r[0], "open": _numf(r[1]), "close": _numf(r[2]),
+                 "high": _numf(r[3]), "low": _numf(r[4]),
+                 "volume": _numf(r[5]), "amount": 0.0, "pct": None}
+                for r in rows if len(r) >= 6]
+    m = {3: "m1", 5: "m5", 15: "m15", 30: "m30", 60: "m60"}.get(klt, "m1")
+    d = await get_json(_TX_MIN, {"param": f"{code},{m},,{lmt}"}, ttl=ttl)
+    node = ((d or {}).get("data") or {}).get(code) or {}
+    out = []
+    for r in node.get(m) or []:
+        # row: [datetime, open, close, high, low, volume, {}, amount]
+        if len(r) < 6:
+            continue
+        t = str(r[0])
+        if len(t) == 12:  # "202610141102" -> "2026-10-14 11:02"
+            t = f"{t[0:4]}-{t[4:6]}-{t[6:8]} {t[8:10]}:{t[10:12]}"
+        out.append({"date": t, "open": _numf(r[1]), "close": _numf(r[2]),
+                    "high": _numf(r[3]), "low": _numf(r[4]),
+                    "volume": _numf(r[5]), "amount": 0.0, "pct": None})
+    return out
+
+
+async def kline(secid: str, klt: int = 1, lmt: int = 240, fqt: int = 1,
+                ttl: float = 20.0) -> list[dict]:
+    """历史 K 线（归一化 bars）。腾讯优先（稳定），push2his 兜底（期权只剩这条路）。"""
+    bars = await _tx_kline(secid, klt, lmt, ttl)
+    if bars:
+        return bars
+    d = await get_json("https://push2his.eastmoney.com/api/qt/stock/kline/get",
+                       {"secid": secid, "fields1": _fields1(), "fields2": _fields2(),
+                        "klt": klt, "fqt": fqt, "end": "20500101", "lmt": lmt, "ut": _UT},
+                       ttl=ttl)
+    return parse_klines(d.get("data") if d else None)
+
+
+async def trends(secid: str, ndays: int = 1, ttl: float = 10.0) -> list[dict]:
+    """分时（归一化）。腾讯优先（稳定），push2 trends2 兜底。"""
+    code = _tx_code(secid)
+    if code:
+        d = await get_json(_TX_TREND, {"code": code}, ttl=ttl)
+        node = ((d or {}).get("data") or {}).get(code) or {}
+        raw = ((node.get("data") or {}).get("data")) or []
+        today = time.strftime("%Y-%m-%d")
+        out = []
+        for line in raw:
+            p = line.split()
+            if len(p) < 2:
+                continue
+            t = p[0]
+            hhmm = f"{t[0:2]}:{t[2:4]}" if len(t) == 4 else t
+            out.append({"time": f"{today} {hhmm}", "price": _numf(p[1]),
+                        "high": _numf(p[1]), "low": _numf(p[1]),
+                        "volume": _numf(p[2]), "amount": _numf(p[3]), "avg": None})
+        if out:
+            return out
+    d = await get_json("https://push2.eastmoney.com/api/qt/stock/trends2/get",
+                       {"secid": secid, "fields1": "f1,f2,f3,f4,f5,f6,f7,f8",
+                        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58", "iscr": 0,
+                        "ndays": ndays, "ut": _UT}, ttl=ttl)
+    return parse_trends(d.get("data") if d else None)
 
 
 async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 15.0) -> dict | None:
-    """分钟级资金流（主力/超大/大/中/小）。"""
-    url = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
-    params = {
-        "secid": secid, "klt": klt, "lmt": lmt,
-        "fields1": "f1,f2,f3,f7",
-        "fields2": "f51,f52,f53,f54,f55,f56", "ut": _UT,
-    }
-    d = await get_json(url, params, ttl=ttl)
-    return d.get("data") if d else None
+    """分钟级资金流序列。主源 push2 fflow；兜底 emdatah5 单点快照合成单点序列。"""
+    d = await get_json("https://push2.eastmoney.com/api/qt/stock/fflow/kline/get",
+                       {"secid": secid, "klt": klt, "lmt": lmt, "fields1": "f1,f2,f3,f7",
+                        "fields2": "f51,f52,f53,f54,f55,f56", "ut": _UT}, ttl=ttl)
+    data = d.get("data") if d else None
+    if data and data.get("klines"):
+        return data
+    q = await get_json(f"{_H5_URL}/getZJLXData",
+                       {"secid": secid, "fields": "f57,f58,f137,f140,f143,f146,f149",
+                        "ut": _H5_UT}, ttl=ttl, referer=_H5_REF)
+    row = (q or {}).get("data") if isinstance(q, dict) else None
+    if not row:
+        return None
+    main = _numf(row.get("f137"))
+    super_ = _numf(row.get("f140"))
+    big = _numf(row.get("f143"))
+    mid = _numf(row.get("f146"))
+    small = _numf(row.get("f149"))
+    return {"klines": [f"{time.strftime('%Y-%m-%d %H:%M')},{main},{small},{mid},{big},{super_}"]}
 
 
 # --------------------------------------------------------------------------
 # 解析
 # --------------------------------------------------------------------------
 def parse_klines(data: dict | None) -> list[dict]:
-    """kline 接口 klines: "date,open,close,high,low,vol,amount,amp,pct,chg,turn" """
+    """kline 接口 klines: "date,open,close,high,low,vol,amount,amp,pct,chg,turn"
+
+    兼容已归一化的 bars 列表（kline() 直接返回 list 时原样透传）。
+    """
+    if isinstance(data, list):
+        return data
     if not data:
         return []
     out = []
@@ -228,7 +339,12 @@ def parse_klines(data: dict | None) -> list[dict]:
 
 
 def parse_trends(data: dict | None) -> list[dict]:
-    """trends2: "time,close,high,low,vol,amount,avg" """
+    """trends2: "time,close,high,low,vol,amount,avg"
+
+    兼容已归一化的分时列表（trends() 直接返回 list 时原样透传）。
+    """
+    if isinstance(data, list):
+        return data
     if not data:
         return []
     out = []

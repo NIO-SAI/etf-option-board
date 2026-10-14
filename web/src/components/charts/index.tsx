@@ -47,10 +47,10 @@ export function IntradayChart({
   id?: string;
 }) {
   const option = useMemo(() => {
-    const times = trends?.map((t) => t.time?.slice(11)) ?? [];
+    const times = trends?.map((t) => t.time?.slice(-5)) ?? [];
     const prices = trends?.map((t) => t.price) ?? [];
     const avg = trends?.map((t) => t.avg) ?? [];
-    const flowMap = new Map((flow ?? []).map((f) => [f.time?.slice(11), f.main]));
+    const flowMap = new Map((flow ?? []).map((f) => [f.time?.slice(-5), f.main]));
     const mains = times.map((t) => flowMap.get(t) ?? null);
     return {
       ...base,
@@ -119,11 +119,14 @@ export function OverlayChart({
   id?: string;
 }) {
   const option = useMemo(() => {
-    const times = optTrends?.map((t) => t.time?.slice(11)) ?? [];
-    const optPx = optTrends?.map((t) => t.price) ?? [];
-    const etfMap = new Map((etfTrends ?? []).map((t) => [t.time?.slice(11), t.price]));
+    const norm = (t: any) => (t || "").slice(-5);
+    const axisSrc: any[] = optTrends?.length ? optTrends : (etfTrends?.length ? etfTrends : flow) ?? [];
+    const times = axisSrc.map((t: any) => norm(t.time));
+    const optMap = new Map((optTrends ?? []).map((t) => [norm(t.time), t.price]));
+    const etfMap = new Map((etfTrends ?? []).map((t) => [norm(t.time), t.price]));
+    const flowMap = new Map((flow ?? []).map((f) => [norm(f.time), f.main]));
+    const optPx = times.map((t) => optMap.get(t) ?? null);
     const etfPx = times.map((t) => etfMap.get(t) ?? null);
-    const flowMap = new Map((flow ?? []).map((f) => [f.time?.slice(11), f.main]));
     const mains = times.map((t) => flowMap.get(t) ?? null);
     return {
       ...base,

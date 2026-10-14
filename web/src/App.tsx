@@ -170,7 +170,7 @@ export default function App() {
                 <FrameTitle className="text-xs">Kronos 量化预测</FrameTitle>
                 <span className="text-[10px] text-muted-foreground">5分钟级</span>
               </FrameHeader>
-              <KronosPredict secid={ctx?.etf?.secid ?? etfs.find((e: any) => e.code === etfCode)?.secid ?? "1.510300"} klt={klt} />
+              <KronosPredict secid={ctx?.etf?.secid ?? etfs.find((e: any) => e.code === etfCode)?.secid ?? "1.510300"} klt={5} />
             </FramePanel>
           </Frame>
 
