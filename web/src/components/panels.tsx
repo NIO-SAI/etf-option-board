@@ -29,11 +29,12 @@ export function EtfList({
   selected: string;
   onSelect: (c: string) => void;
 }) {
-  // 大盘指数（只读补充信息，非期权标的）
-  const INDEX_CODES = ["000001", "000985"];
-  const indexRows = INDEX_CODES
-    .map((c) => indices.find((i) => i.code === c))
-    .filter(Boolean);
+  // 大盘指数（只读补充信息，非期权标的；固定清单保证始终显示）
+  const BIG_INDEXES = [
+    { code: "000001", name: "上证指数" },
+    { code: "000985", name: "中证全指" },
+  ];
+  const indexRows = BIG_INDEXES.map((b) => ({ ...b, quote: indices.find((i) => i.code === b.code) }));
   return (
     <Frame spacing="sm" className="h-full">
       <FramePanel dense className="flex h-full flex-col">
@@ -78,22 +79,26 @@ export function EtfList({
           {indexRows.length > 0 && (
             <div className="px-3 py-1.5 text-[10px] font-medium text-muted-foreground">大盘指数</div>
           )}
-          {indexRows.map((ix) => (
-            <div key={ix.code} className="flex w-full items-center gap-2.5 px-2.5 py-2">
-              <span className="w-2 shrink-0" />
-              <div className="flex min-w-0 flex-1 flex-col gap-1">
-                <div className="flex items-center gap-1.5">
-                  <span className="truncate text-xs font-medium">{ix.name}</span>
-                  <Badge variant="outline" size="xs" className="shrink-0">指数</Badge>
+          {indexRows.map((ix) => {
+            const q = ix.quote;
+            return (
+              <div key={ix.code} className="flex w-full items-center gap-2.5 px-2.5 py-2.5">
+                <span className="w-2 shrink-0" />
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-xs font-medium">{ix.name}</span>
+                    <Badge variant="outline" size="xs" className="shrink-0">指数</Badge>
+                  </div>
+                  <div className="truncate text-[10px] text-muted-foreground tnum">{ix.code}</div>
                 </div>
-                <div className="truncate text-[10px] text-muted-foreground tnum">{ix.code}</div>
+                <Sparkline data={trendsMap[ix.code] ?? []} up={(q?.pct ?? 0) >= 0} width={46} height={26} />
+                <div className="w-14 shrink-0 text-right">
+                  <div className="text-xs font-semibold tnum">{q ? nf(q.price, 2) : "—"}</div>
+                  <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>
+                </div>
               </div>
-              <div className="w-14 shrink-0 text-right">
-                <div className="text-xs font-semibold tnum">{nf(ix.price, 2)}</div>
-                <div className={cn("text-[11px] tnum", clsUpDown(ix.pct))}>{pct(ix.pct)}</div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </FramePanel>
     </Frame>

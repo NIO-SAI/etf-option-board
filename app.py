@@ -47,6 +47,17 @@ app = FastAPI(title="ETF 期权日内决策看板", version="0.1.0", lifespan=li
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _no_cache_html(request, call_next):
+    """HTML 一律 no-cache（每次重新校验），避免浏览器缓存旧 bundle 导致看不到新版。"""
+    resp = await call_next(request)
+    if "text/html" in resp.headers.get("content-type", ""):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 app.include_router(api.router)
 
 
@@ -54,7 +65,7 @@ app.include_router(api.router)
 async def index():
     idx = os.path.join(WEB_DIST, "index.html")
     if os.path.exists(idx):
-        return FileResponse(idx)
+        return FileResponse(idx, headers={"Cache-Control": "no-cache"})
     return JSONResponse({
         "msg": "前端尚未构建。开发模式请运行 web 目录的 vite dev（默认 http://localhost:5173）；"
                "或执行 web/build.sh 生成 web/dist。",

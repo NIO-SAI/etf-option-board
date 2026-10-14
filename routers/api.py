@@ -51,15 +51,18 @@ async def directions():
 
 @router.get("/etfs/spark")
 async def etfs_spark():
-    """9 只标的的日内收盘价序列（供列表迷你走势）。"""
-    async def one(e):
-        tr = await ms.trends(e["secid"])
-        return {"code": e["code"], "closes": [x["price"] for x in tr][::3]}
-    res = await asyncio.gather(*[one(e) for e in ETFS], return_exceptions=True)
-    out = {}
-    for e, r in zip(ETFS, res):
-        if isinstance(r, dict):
-            out[r["code"]] = r["closes"]
+    """9 只标的 + 2 个大盘指数(上证指数/中证全指)的日内收盘价序列（供列表迷你走势）。"""
+    targets = [(e["secid"], e["code"]) for e in ETFS] + [("1.000001", "000001"), ("1.000985", "000985")]
+
+    async def one(secid: str, code: str):
+        tr = await ms.trends(secid)
+        return code, [x["price"] for x in tr][::3]
+
+    res = await asyncio.gather(*[one(s, c) for s, c in targets], return_exceptions=True)
+    out: dict[str, list] = {}
+    for r in res:
+        if isinstance(r, tuple) and r[1]:
+            out[r[0]] = r[1]
     return {"items": out}
 
 
