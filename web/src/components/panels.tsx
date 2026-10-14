@@ -232,7 +232,7 @@ export function OptionTQuote({
     ? rows.reduce((best: number, r: any) => (Math.abs(r.strike - s) < Math.abs(best - s) ? r.strike : best), rows[0].strike)
     : null;
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex flex-col">
       <div className="flex items-center justify-between px-1 pb-2">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold">{chain.etf?.name} 期权链</span>
@@ -245,7 +245,7 @@ export function OptionTQuote({
           <Tabs tabs={expiries.map((m: number) => ({ key: String(m), label: `${m}月` }))} value={String(month)} onChange={(k) => onMonth(Number(k))} />
         </div>
       </div>
-      <div className="flex-1 overflow-auto">
+      <div className="max-h-[62vh] overflow-auto">
         <Table>
           <THead>
             <TR>

@@ -141,19 +141,17 @@ export default function App() {
             </FramePanel>
           </Frame>
 
-          <Frame spacing="sm" className="min-h-[440px] flex-1">
-            <FramePanel dense className="flex h-full flex-col">
-              <div className="flex-1">
-                {chainReady && !chain.error ? (
-                  <OptionTQuote
-                    chain={chain}
-                    month={month ?? chain.front_month}
-                    onMonth={setMonth}
-                    selectedSecid={contractSecid ?? undefined}
-                    onSelect={onPickContract}
-                  />
-                ) : <Skeleton className="m-3 h-[380px]" />}
-              </div>
+          <Frame spacing="sm">
+            <FramePanel dense>
+              {chainReady && !chain.error ? (
+                <OptionTQuote
+                  chain={chain}
+                  month={month ?? chain.front_month}
+                  onMonth={setMonth}
+                  selectedSecid={contractSecid ?? undefined}
+                  onSelect={onPickContract}
+                />
+              ) : <Skeleton className="m-3 h-[380px]" />}
             </FramePanel>
           </Frame>
 
