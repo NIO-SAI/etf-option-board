@@ -52,7 +52,10 @@ async def directions():
 @router.get("/etfs/spark")
 async def etfs_spark():
     """9 只标的 + 2 个大盘指数(上证指数/中证全指)的日内收盘价序列（供列表迷你走势）。"""
-    targets = [(e["secid"], e["code"]) for e in ETFS] + [("1.000001", "000001"), ("1.000985", "000985")]
+    targets = [(e["secid"], e["code"]) for e in ETFS] + [
+        ("1.000001", "000001"), ("1.000985", "000985"),
+        ("47.800000", "800000"), ("47.800005", "800005"),
+    ]
 
     async def one(secid: str, code: str):
         tr = await ms.trends(secid)

@@ -30,39 +30,17 @@ export function EtfList({
   const BIG_INDEXES = [
     { code: "000001", name: "上证指数" },
     { code: "000985", name: "中证全指" },
+    { code: "800000", name: "东财全A" },
+    { code: "800005", name: "平均股价" },
   ];
   const indexRows = BIG_INDEXES.map((b) => ({ ...b, quote: indices.find((i) => i.code === b.code) }));
   return (
     <Frame spacing="sm" className="h-full">
       <FramePanel dense className="flex h-full flex-col">
         <FrameHeader>
-          <FrameTitle className="text-xs">大盘指数 · 期权标的</FrameTitle>
+          <FrameTitle className="text-xs">期权标的（9）</FrameTitle>
         </FrameHeader>
         <div className="flex-1 divide-y divide-border/60 overflow-auto">
-          {indexRows.length > 0 && (
-            <div className="px-3 py-1.5 text-[10px] font-medium text-muted-foreground">大盘指数</div>
-          )}
-          {indexRows.map((ix) => {
-            const q = ix.quote;
-            return (
-              <div key={ix.code} className="flex w-full items-center gap-2.5 px-3 py-2.5">
-                <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate text-xs font-medium">{ix.name}</span>
-                    <Badge variant="outline" size="xs" className="shrink-0">指数</Badge>
-                  </div>
-                  <div className="truncate text-[10px] text-muted-foreground tnum">{ix.code}</div>
-                </div>
-                <Sparkline data={trendsMap[ix.code] ?? []} up={(q?.pct ?? 0) >= 0} width={40} height={26} />
-                <div className="w-14 shrink-0 text-right">
-                  <div className="text-xs font-semibold tnum">{q ? nf(q.price, 2) : "—"}</div>
-                  <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>
-                </div>
-              </div>
-            );
-          })}
-
-          <div className="px-3 py-1.5 text-[10px] font-medium text-muted-foreground">期权标的（9）</div>
           {etfs.map((e) => {
             const q = quotes[e.code];
             const on = e.code === selected;
@@ -90,6 +68,27 @@ export function EtfList({
                   <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>
                 </div>
               </button>
+            );
+          })}
+
+          <div className="px-3 py-1.5 text-[10px] font-medium text-muted-foreground">大盘指数</div>
+          {indexRows.map((ix) => {
+            const q = ix.quote;
+            return (
+              <div key={ix.code} className="flex w-full items-center gap-2.5 px-3 py-2.5">
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-xs font-medium">{ix.name}</span>
+                    <Badge variant="outline" size="xs" className="shrink-0">指数</Badge>
+                  </div>
+                  <div className="truncate text-[10px] text-muted-foreground tnum">{ix.code}</div>
+                </div>
+                <Sparkline data={trendsMap[ix.code] ?? []} up={(q?.pct ?? 0) >= 0} width={40} height={26} />
+                <div className="w-14 shrink-0 text-right">
+                  <div className="text-xs font-semibold tnum">{q ? nf(q.price, 2) : "—"}</div>
+                  <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>
+                </div>
+              </div>
             );
           })}
         </div>
