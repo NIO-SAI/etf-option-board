@@ -41,7 +41,7 @@ class Settings:
     risk_free_rate: float = 0.018
 
     # 监控轮询间隔（秒）。原先 3s 会让每轮上百个东财请求，触发限流/封禁，故放宽。
-    poll_interval: int = 20
+    poll_interval: int = 30
     # 交易时段
     session_am = ("09:30", "11:30")
     session_pm = ("13:00", "15:00")

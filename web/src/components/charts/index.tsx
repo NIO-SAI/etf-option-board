@@ -36,14 +36,15 @@ const base = {
   },
 };
 
-/** ETF 分时：标的价（左轴）+ 关联指数（右外轴）+ 主力净流入（右内轴，柱）。 */
+/** ETF 分时：左轴价（标的/关联指数），右轴主力净流入（标的柱/指数线）。 */
 export function IntradayChart({
-  trends, indexTrends = [], indexName = "", flow, height = 240, title, id,
+  trends, indexTrends = [], indexName = "", flow, indexFlow = [], height = 240, title, id,
 }: {
   trends: any[];
   indexTrends?: any[];
   indexName?: string;
   flow: any[];
+  indexFlow?: any[];
   height?: number;
   title?: string;
   id?: string;
@@ -56,33 +57,63 @@ export function IntradayChart({
     const idxPx = times.map((t) => idxMap.get(t) ?? null);
     const flowMap = new Map((flow ?? []).map((f) => [tt(f.time), f.main]));
     const mains = times.map((t) => flowMap.get(t) ?? null);
+    const iflowMap = new Map((indexFlow ?? []).map((f) => [tt(f.time), f.main]));
+    const imains = times.map((t) => iflowMap.get(t) ?? null);
     const hasIdx = idxPx.some((v) => v !== null);
+    const hasIdxFlow = imains.some((v) => v !== null);
+    const idxLabel = `关联指数${indexName ? " " + indexName : ""}`;
     return {
       ...base,
-      grid: { left: 50, right: hasIdx ? 100 : 58, top: 24, bottom: 34 },
+      grid: { left: hasIdx ? 98 : 50, right: hasIdxFlow ? 100 : 58, top: 24, bottom: 34 },
       legend: {
-        top: 0, left: 6, itemWidth: 12, itemHeight: 8, itemGap: 12,
+        top: 0, left: 6, itemWidth: 12, itemHeight: 8, itemGap: 10,
         textStyle: { color: AXIS, fontSize: 10 },
-        data: ["标的ETF", ...(hasIdx ? [`关联指数${indexName ? " " + indexName : ""}`] : []), "主力净流入"],
+        data: ["标的ETF", ...(hasIdx ? [idxLabel] : []), "主力净流入", ...(hasIdxFlow ? ["指数主力净流入"] : [])],
+      },
+      tooltip: {
+        ...base.tooltip,
+        formatter: (ps: any) => {
+          const arr = Array.isArray(ps) ? ps : [ps];
+          const head = arr[0]?.axisValueLabel ?? arr[0]?.name ?? "";
+          const body = arr.map((p: any) => {
+            const n = Number(p.value);
+            let val = "—";
+            if (p.value !== null && p.value !== undefined && isFinite(n)) {
+              if (p.seriesName === "标的ETF") val = n.toFixed(3);
+              else if (String(p.seriesName).startsWith("关联指数")) val = n.toFixed(0);
+              else val = `${Math.round(n / 1e4)}万`;   // 主力净流入：万·整数
+            }
+            return `${p.marker}${p.seriesName} <b>${val}</b>`;
+          }).join("<br/>");
+          return `${head}<br/>${body}`;
+        },
       },
       xAxis: { ...base.xAxisBase, data: times },
       yAxis: [
+        // 0 左：标的 ETF 价
         { ...base.yAxisBase, position: "left", axisLabel: { color: "#60a5fa", formatter: (v: number) => v.toFixed(3) } },
-        { ...base.yAxisBase, position: "right", splitLine: { show: false },
-          axisLabel: { color: "#7c3aed", formatter: (v: number) => (v / 1e8).toFixed(1) + "亿" } },
-        { ...base.yAxisBase, position: "right", offset: hasIdx ? 58 : 0, splitLine: { show: false },
+        // 1 左：关联指数 点位
+        { ...base.yAxisBase, position: "left", offset: hasIdx ? 56 : 0, splitLine: { show: false },
           axisLabel: { color: "#d97706", formatter: (v: number) => v.toFixed(0) } },
+        // 2 右：标的 ETF 主力净流入（柱）
+        { ...base.yAxisBase, position: "right", splitLine: { show: false },
+          axisLabel: { color: "#7c3aed", formatter: (v: number) => Math.round(v / 1e4) + "万" } },
+        // 3 右：关联指数 主力净流入（线）
+        { ...base.yAxisBase, position: "right", offset: hasIdxFlow ? 56 : 0, splitLine: { show: false },
+          axisLabel: { color: "#0d9488", formatter: (v: number) => Math.round(v / 1e4) + "万" } },
       ],
       series: [
         { name: "标的ETF", type: "line", data: prices, showSymbol: false, lineStyle: { width: 1.4, color: "#60a5fa" },
           areaStyle: { color: "rgba(96,165,250,0.08)" } },
-        { name: "主力净流入", type: "bar", yAxisIndex: 1, data: mains, barWidth: "60%",
-          itemStyle: { color: (p: any) => (p.value >= 0 ? "rgba(239,68,68,0.55)" : "rgba(34,197,94,0.55)") } },
-        { name: `关联指数${indexName ? " " + indexName : ""}`, type: "line", yAxisIndex: 2, data: idxPx,
-          showSymbol: false, lineStyle: { width: 1.3, color: "#d97706", type: "dashed" } },
+        { name: idxLabel, type: "line", yAxisIndex: 1, data: idxPx, showSymbol: false,
+          lineStyle: { width: 1.3, color: "#d97706", type: "dashed" } },
+        { name: "主力净流入", type: "bar", yAxisIndex: 2, data: mains, barWidth: "55%",
+          itemStyle: { color: (p: any) => (p.value >= 0 ? "rgba(239,68,68,0.5)" : "rgba(34,197,94,0.5)") } },
+        { name: "指数主力净流入", type: "line", yAxisIndex: 3, data: imains, showSymbol: false,
+          lineStyle: { width: 1.3, color: "#0d9488" } },
       ],
     };
-  }, [trends, indexTrends, indexName, flow]);
+  }, [trends, indexTrends, indexName, flow, indexFlow]);
   return <ReactECharts key={id} option={option} style={{ height }} />;
 }
 

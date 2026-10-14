@@ -39,11 +39,11 @@ _CACHE: dict[str, tuple[float, float, object]] = {}
 # 传输路径记忆：(host|path) -> (mode, ts)；mode: "direct" | "curl"
 _MEMO: dict[str, tuple[str, float]] = {}
 _MEMO_TTL = 300
-# 东财 push2 限流抖动：失败重试（重试会放大请求量，3 次为折中）
-_RETRY_TRIES = 3
-_RETRY_DELAY = 0.25
-# 全局并发闸：东财对同 IP 并发突发很敏感，超出即整批被拒；限流后串行通过更稳。
-_SEM = asyncio.Semaphore(4)
+# 东财/腾讯抖动重试：重试会放大请求量（触发反爬），配合"过期缓存兜底"改为 2 轮
+_RETRY_TRIES = 2
+_RETRY_DELAY = 0.3
+# 全局并发闸：东财对同 IP 并发突发很敏感；主源已切 H5/腾讯，放宽到 8 提升吞吐
+_SEM = asyncio.Semaphore(8)
 
 
 def _client() -> httpx.AsyncClient:
@@ -140,6 +140,11 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
             await asyncio.sleep(_RETRY_DELAY)
 
     if data is None:
+        # 全部尝试失败 → 退回上次成功值（忽略 TTL），避免上游瞬时抖动导致页面缺数据
+        stale = _CACHE.get(key)
+        if stale and stale[2] is not None:
+            log.debug("em 使用过期缓存 url=%s", key)
+            return stale[2]
         return None
     _MEMO[hostkey] = (used, now)
 
@@ -162,7 +167,7 @@ def _fields2():
 # 行情（主源 emdatah5，兜底 push2）
 # --------------------------------------------------------------------------
 async def clist(fs: str, fields: str, pn: int = 1, pz: int = 100, fid: str = "f12",
-                po: int = 1, ttl: float = 8.0) -> list[dict]:
+                po: int = 1, ttl: float = 15.0) -> list[dict]:
     # 主源：emdatah5 getZDYLBData（与 push2 clist 同参同构，稳定直连）
     d = await get_json(f"{_H5_URL}/getZDYLBData",
                        {"fields": fields, "pn": pn, "pz": pz, "fid": fid,
@@ -181,7 +186,7 @@ async def clist(fs: str, fields: str, pn: int = 1, pz: int = 100, fid: str = "f1
 
 
 async def clist_all(fs: str, fields: str, pz: int = 100, max_page: int = 8,
-                    ttl: float = 15.0) -> list[dict]:
+                    ttl: float = 20.0) -> list[dict]:
     out: list[dict] = []
     for pn in range(1, max_page + 1):
         rows = await clist(fs, fields, pn=pn, pz=pz, ttl=ttl)
@@ -193,7 +198,7 @@ async def clist_all(fs: str, fields: str, pz: int = 100, max_page: int = 8,
     return out
 
 
-async def stock_get(secid: str, fields: str, ttl: float = 6.0) -> dict | None:
+async def stock_get(secid: str, fields: str, ttl: float = 12.0) -> dict | None:
     # 主源：emdatah5 getZJLXData（个股/指数/外围/期权行情）
     d = await get_json(f"{_H5_URL}/getZJLXData",
                        {"secid": secid, "fields": fields, "ut": _H5_UT},
@@ -258,7 +263,7 @@ async def _tx_kline(secid: str, klt: int, lmt: int, ttl: float) -> list[dict]:
 
 
 async def kline(secid: str, klt: int = 1, lmt: int = 240, fqt: int = 1,
-                ttl: float = 20.0) -> list[dict]:
+                ttl: float = 45.0) -> list[dict]:
     """历史 K 线（归一化 bars）。腾讯优先（稳定），push2his 兜底（期权只剩这条路）。"""
     bars = await _tx_kline(secid, klt, lmt, ttl)
     if bars:
@@ -270,7 +275,7 @@ async def kline(secid: str, klt: int = 1, lmt: int = 240, fqt: int = 1,
     return parse_klines(d.get("data") if d else None)
 
 
-async def trends(secid: str, ndays: int = 1, ttl: float = 10.0) -> list[dict]:
+async def trends(secid: str, ndays: int = 1, ttl: float = 30.0) -> list[dict]:
     """分时（归一化）。腾讯优先（稳定），push2 trends2 兜底。"""
     code = _tx_code(secid)
     if code:
@@ -313,7 +318,7 @@ def _now_in_session(now: dt.datetime | None = None) -> bool:
     return now.weekday() < 5 and _hm_in_session(now.strftime("%H:%M"))
 
 
-async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 15.0) -> dict | None:
+async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 20.0) -> dict | None:
     """分钟级资金流序列。
 
     1) push2 fflow（真·分钟序列，时间戳=行情时间）——tries=1 快速失败；

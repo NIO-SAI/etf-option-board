@@ -22,10 +22,10 @@ export function ContractDetail({
   const secid = contract?.secid;
   const { data: trends } = usePolling(
     () => (secid ? api.optTrends(secid) : Promise.resolve({ trends: [] })),
-    5000, [secid]);
+    10_000, [secid]);
   const { data: kline } = usePolling(
     () => (secid ? api.optKline(secid, klt, 240) : Promise.resolve({ bars: [] })),
-    8000, [secid, klt]);
+    15_000, [secid, klt]);
 
   // 注意：图表始终保持挂载（不因未选合约而卸载），避免 ECharts 在同一 DOM 节点上
   // 反复 dispose/init 造成崩溃；切合约只更新数据（固定 key）。

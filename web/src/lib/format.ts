@@ -25,6 +25,22 @@ export const signedMoney = (v: any): string => {
   return `${n > 0 ? "+" : ""}${money(n)}`;
 };
 
+/** 主力净流入等：以「万」为单位，精确到个位数（整数万）。 */
+export const wan = (v: any): string => {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = Number(v);
+  if (!isFinite(n)) return "—";
+  return `${Math.round(n / 1e4)}万`;
+};
+
+export const signedWan = (v: any): string => {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = Number(v);
+  if (!isFinite(n)) return "—";
+  const r = Math.round(n / 1e4);
+  return `${r > 0 ? "+" : ""}${r}万`;
+};
+
 export const upDown = (v: any): "up" | "down" | "flat" => {
   const n = Number(v);
   if (!isFinite(n) || n === 0) return "flat";

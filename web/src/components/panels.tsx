@@ -106,7 +106,8 @@ export function BiasBar({ bias }: { bias: any }) {
   const pos = ((s + 100) / 200) * 100;
   const dir = bias?.direction ?? "neutral";
   const label = dir === "call" ? "看多（认购）" : dir === "put" ? "看空（认沽）" : "观望（中性）";
-  const variant = dir === "call" ? "success" : dir === "put" ? "destructive" : "secondary";
+  // 统一：看多=红、看空=绿（与其它方向标签一致）
+  const variant = dir === "call" ? "destructive-light" : dir === "put" ? "success-light" : "secondary";
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">

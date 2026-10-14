@@ -78,8 +78,11 @@ async def etf_context(code: str, klt: int = 1):
     etf = next((e for e in ETFS if e["code"] == code), None)
     if not etf:
         return {"error": f"未知标的 {code}"}
-    ctx = await ms.etf_context(code, etf["secid"])
-    track = await ms.track_index_state(etf["track"])
+    # 串行会是两者耗时相加；并发聚合可减半
+    ctx, track = await asyncio.gather(
+        ms.etf_context(code, etf["secid"]),
+        ms.track_index_state(etf["track"]),
+    )
     return {"etf": etf, **ctx, "track": track}
 
 

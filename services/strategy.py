@@ -14,10 +14,10 @@ from services.universe import ETF_BY_CODE, ETFS, TRACK_INDEX
 log = logging.getLogger("strategy")
 
 _NT_CACHE: tuple[float, dict] | None = None
-_NT_TTL = 20
+_NT_TTL = 30
 
 _DIR_CACHE: tuple[float, dict] | None = None
-_DIR_TTL = 15
+_DIR_TTL = 60
 
 
 async def national_team_cached() -> dict:

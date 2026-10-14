@@ -11,7 +11,7 @@ import { Skeleton, Tabs } from "@/components/ui/misc";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
-import { clsUpDown, money, nf, pct, signedMoney } from "@/lib/format";
+import { clsUpDown, nf, pct, signedWan } from "@/lib/format";
 
 export default function App() {
   const [etfCode, setEtfCode] = useState("510300");
@@ -26,21 +26,21 @@ export default function App() {
   }, []);
 
   const { data: universe } = usePolling(() => api.universe(), 3600_000);
-  const { data: health } = usePolling(() => api.health(), 30_000);
-  const { data: indices } = usePolling(() => api.indices(), 5_000);
-  const { data: external } = usePolling(() => api.external(), 15_000);
-  const { data: national } = usePolling(() => api.national(), 20_000);
-  const { data: etfQuotes } = usePolling(() => api.etfs(), 5_000);
-  const { data: directions } = usePolling(() => api.directions(), 15_000);
-  const { data: spark } = usePolling(() => api.etfs_spark(), 30_000, []);
+  const { data: health } = usePolling(() => api.health(), 60_000);
+  const { data: indices } = usePolling(() => api.indices(), 10_000);
+  const { data: external } = usePolling(() => api.external(), 30_000);
+  const { data: national } = usePolling(() => api.national(), 30_000);
+  const { data: etfQuotes } = usePolling(() => api.etfs(), 10_000);
+  const { data: directions } = usePolling(() => api.directions(), 60_000);
+  const { data: spark } = usePolling(() => api.etfs_spark(), 120_000, []);
 
   const kltNum = klt === "trend" ? 1 : Number(klt);
-  const { data: ctx, refresh: refreshCtx } = usePolling(() => api.etf(etfCode, kltNum), 5_000, [etfCode, kltNum]);
+  const { data: ctx, refresh: refreshCtx } = usePolling(() => api.etf(etfCode, kltNum), 10_000, [etfCode, kltNum]);
   const { data: kline } = usePolling(
     () => (klt === "trend" ? Promise.resolve({ bars: [] }) : api.etfKline(etfCode, Number(klt), 240)),
-    5_000, [etfCode, klt]);
-  const { data: chain } = usePolling(() => api.chain(etfCode, month ?? undefined), 5_000, [etfCode, month]);
-  const { data: strategy } = usePolling(() => api.strategy(etfCode, 0, 1), 15_000, [etfCode]);
+    10_000, [etfCode, klt]);
+  const { data: chain } = usePolling(() => api.chain(etfCode, month ?? undefined), 15_000, [etfCode, month]);
+  const { data: strategy } = usePolling(() => api.strategy(etfCode, 0, 1), 30_000, [etfCode]);
 
   // 合约：优先链内按 secid 定位，保持实时刷新
   const contract = useMemo(() => {
@@ -118,7 +118,7 @@ export default function App() {
               {ctxReady && (
                 <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-[11px] text-muted-foreground">
                   <MiniKv k="量能" v={`${ctx.volume?.ratio ?? "—"}x`} tone={ctx.volume?.is_surge ? "warn" : undefined} />
-                  <MiniKv k="主力5分" v={signedMoney(ctx.flow_main_delta5m)} tone={ctx.flow_main_delta5m == null ? undefined : ctx.flow_main_delta5m > 0 ? "up" : "down"} />
+                  <MiniKv k="主力5分" v={signedWan(ctx.flow_main_delta5m)} tone={ctx.flow_main_delta5m == null ? undefined : ctx.flow_main_delta5m > 0 ? "up" : "down"} />
                   <MiniKv k="MACD" v={ctx.macd?.cross === "golden" ? "金叉" : ctx.macd?.cross === "dead" ? "死叉" : "—"} />
                   <MiniKv k="背离" v={ctx.macd?.divergence?.type === "bullish" ? "底背离" : ctx.macd?.divergence?.type === "bearish" ? "顶背离" : "无"} />
                   <MiniKv k="关联指数" v={`${ctx.track?.quote?.name ?? ""} ${pct(ctx.track?.quote?.pct)}`} />
@@ -130,7 +130,7 @@ export default function App() {
                     <Skeleton className="h-[240px] w-full" />
                   ) : klt === "trend" ? (
                     ctx?.trends?.length
-                      ? <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} height={230} />
+                      ? <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexFlow={ctx.track?.flow ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} height={230} />
                       : <Skeleton className="h-[240px] w-full" />
                   ) : (
                     kline?.bars?.length
