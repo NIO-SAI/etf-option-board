@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 import logging
 import time
@@ -301,11 +302,23 @@ _FLOW_HIST: dict[str, list[str]] = {}
 _FLOW_MAX = 240
 
 
+def _hm_in_session(hm: str) -> bool:
+    """HH:MM 是否落在交易时段内（用于过滤掉非交易时段累积的脏点）。"""
+    return (settings.session_am[0] <= hm <= settings.session_am[1]) or \
+           (settings.session_pm[0] <= hm <= settings.session_pm[1])
+
+
+def _now_in_session(now: dt.datetime | None = None) -> bool:
+    now = now or dt.datetime.now()
+    return now.weekday() < 5 and _hm_in_session(now.strftime("%H:%M"))
+
+
 async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 15.0) -> dict | None:
     """分钟级资金流序列。
 
-    1) push2 fflow（真·分钟序列）——tries=1 快速失败，避免死主机拖慢切换；
-    2) 否则用 emdatah5 getZJLXData 快照按分钟累积成序列（稳定，随会话增长）。
+    1) push2 fflow（真·分钟序列，时间戳=行情时间）——tries=1 快速失败；
+    2) 否则用 emdatah5 getZJLXData 快照按分钟累积——但**只在交易时段累积**，
+       否则墙上时钟点(如午休 12:xx)会落在行情时间轴之外、图上一根柱都画不出。
     """
     d = await get_json("https://push2.eastmoney.com/api/qt/stock/fflow/kline/get",
                        {"secid": secid, "klt": klt, "lmt": lmt, "fields1": "f1,f2,f3,f7",
@@ -320,24 +333,24 @@ async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 15.0) -> di
                         "ut": _H5_UT}, ttl=ttl, referer=_H5_REF)
     row = (q or {}).get("data") if isinstance(q, dict) else None
     today = time.strftime("%Y-%m-%d")
-    if not row:
-        hist = _FLOW_HIST.get(secid) or []
-        return {"klines": hist} if hist else None
-    ts = time.strftime("%Y-%m-%d %H:%M")
-    line = ",".join(str(x) for x in (
-        ts, _numf(row.get("f137")), _numf(row.get("f149")),
-        _numf(row.get("f146")), _numf(row.get("f143")), _numf(row.get("f140"))))
     hist = _FLOW_HIST.get(secid)
     if not hist or hist[-1].split(" ", 1)[0] != today:   # 跨日/首次 → 重置
         hist = []
         _FLOW_HIST[secid] = hist
-    if hist and hist[-1].split(",", 1)[0] == ts:          # 同一分钟 → 覆盖
-        hist[-1] = line
-    else:
-        hist.append(line)
-    if len(hist) > _FLOW_MAX:
-        del hist[:len(hist) - _FLOW_MAX]
-    return {"klines": list(hist)}
+    if row and _now_in_session():
+        ts = time.strftime("%Y-%m-%d %H:%M")
+        line = ",".join(str(x) for x in (
+            ts, _numf(row.get("f137")), _numf(row.get("f149")),
+            _numf(row.get("f146")), _numf(row.get("f143")), _numf(row.get("f140"))))
+        if hist and hist[-1].split(",", 1)[0] == ts:      # 同一分钟 → 覆盖
+            hist[-1] = line
+        else:
+            hist.append(line)
+        if len(hist) > _FLOW_MAX:
+            del hist[:len(hist) - _FLOW_MAX]
+    # 只回交易时段内的点（清掉任何历史脏点）
+    kept = [l for l in hist if _hm_in_session(l.split(",", 1)[0][-5:])]
+    return {"klines": kept} if kept else None
 
 
 # --------------------------------------------------------------------------

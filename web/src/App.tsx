@@ -141,8 +141,6 @@ export default function App() {
             </FramePanel>
           </Frame>
 
-          <ContractDetail contract={contract} etfTrends={ctxReady ? (ctx?.trends ?? []) : []} flow={ctxReady ? flowSeries : []} />
-
           <Frame spacing="sm" className="min-h-[440px] flex-1">
             <FramePanel dense className="flex h-full flex-col">
               <div className="flex-1">
@@ -158,6 +156,8 @@ export default function App() {
               </div>
             </FramePanel>
           </Frame>
+
+          <ContractDetail contract={contract} etfTrends={ctxReady ? (ctx?.trends ?? []) : []} flow={ctxReady ? flowSeries : []} />
         </div>
 
         {/* 右：决策栏 */}
