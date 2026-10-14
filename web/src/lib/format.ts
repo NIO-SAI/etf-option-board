@@ -9,6 +9,7 @@ export const pct = (v: any, d = 2): string =>
     : `${Number(v) > 0 ? "+" : ""}${Number(v).toFixed(d)}%`;
 
 export const money = (v: any): string => {
+  if (v === null || v === undefined || v === "") return "—";
   const n = Number(v);
   if (!isFinite(n)) return "—";
   const a = Math.abs(n);
@@ -18,6 +19,7 @@ export const money = (v: any): string => {
 };
 
 export const signedMoney = (v: any): string => {
+  if (v === null || v === undefined || v === "") return "—";
   const n = Number(v);
   if (!isFinite(n)) return "—";
   return `${n > 0 ? "+" : ""}${money(n)}`;

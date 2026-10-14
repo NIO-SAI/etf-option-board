@@ -84,7 +84,7 @@ async def etf_context(code: str, etf_secid: str) -> dict:
     closes = [b["close"] for b in k1]
     vols = [b["volume"] for b in k1]
     flow_tail = fl[-5:] if fl else []
-    flow_delta = (flow_tail[-1]["main"] - flow_tail[0]["main"]) if len(flow_tail) >= 2 else 0
+    flow_delta = (flow_tail[-1]["main"] - flow_tail[0]["main"]) if len(flow_tail) >= 2 else None
     return {
         "quote": q, "kline_1m": k1, "trends": tr, "flow": fl,
         "macd": macd_state(closes),

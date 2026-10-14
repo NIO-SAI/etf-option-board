@@ -86,8 +86,13 @@ async def _curl_json(url: str, params: dict | None = None,
 
 
 async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
-                   force: bool = False, referer: str | None = None) -> object | None:
-    """带缓存与传输兜底的 GET JSON。失败返回 None（绝不抛给上层）。"""
+                   force: bool = False, referer: str | None = None,
+                   tries: int | None = None) -> object | None:
+    """带缓存与传输兜底的 GET JSON。失败返回 None（绝不抛给上层）。
+
+    tries 可覆盖重试轮数（默认 _RETRY_TRIES）；对"已确定死掉且非关键"的兜底主机
+    传 tries=1 以快速失败。
+    """
     params = params or {}
     key = _build(url, params)
     now = time.time()
@@ -96,6 +101,7 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
         if hit and now - hit[0] < hit[1]:
             return hit[2]
 
+    n_tries = _RETRY_TRIES if tries is None else max(1, tries)
     hostkey = url.split("//", 1)[-1].split("/", 1)[0]
     memo = _MEMO.get(hostkey)
     prefer = memo[0] if memo and now - memo[1] < _MEMO_TTL else None
@@ -116,7 +122,7 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
     data = None
     used = None
     # 东财限流：单次成功率约 30~50%，失败即重试（direct 被 WAF 拒绝时很快失败）
-    for attempt in range(_RETRY_TRIES):
+    for attempt in range(n_tries):
         for name, fn in transports:
             try:
                 async with _SEM:
@@ -129,7 +135,7 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
                 break
         if data is not None:
             break
-        if attempt < _RETRY_TRIES - 1:
+        if attempt < n_tries - 1:
             await asyncio.sleep(_RETRY_DELAY)
 
     if data is None:
@@ -290,26 +296,48 @@ async def trends(secid: str, ndays: int = 1, ttl: float = 10.0) -> list[dict]:
     return parse_trends(d.get("data") if d else None)
 
 
+# 资金流快照累积：push2 fflow 不可用时，用 emdatah5 快照按分钟累积成序列。
+_FLOW_HIST: dict[str, list[str]] = {}
+_FLOW_MAX = 240
+
+
 async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 15.0) -> dict | None:
-    """分钟级资金流序列。主源 push2 fflow；兜底 emdatah5 单点快照合成单点序列。"""
+    """分钟级资金流序列。
+
+    1) push2 fflow（真·分钟序列）——tries=1 快速失败，避免死主机拖慢切换；
+    2) 否则用 emdatah5 getZJLXData 快照按分钟累积成序列（稳定，随会话增长）。
+    """
     d = await get_json("https://push2.eastmoney.com/api/qt/stock/fflow/kline/get",
                        {"secid": secid, "klt": klt, "lmt": lmt, "fields1": "f1,f2,f3,f7",
-                        "fields2": "f51,f52,f53,f54,f55,f56", "ut": _UT}, ttl=ttl)
+                        "fields2": "f51,f52,f53,f54,f55,f56", "ut": _UT},
+                       ttl=ttl, tries=1)
     data = d.get("data") if d else None
-    if data and data.get("klines"):
+    if data and len(data.get("klines") or []) >= 2:
         return data
+    # emdatah5 单点快照 → 累积
     q = await get_json(f"{_H5_URL}/getZJLXData",
                        {"secid": secid, "fields": "f57,f58,f137,f140,f143,f146,f149",
                         "ut": _H5_UT}, ttl=ttl, referer=_H5_REF)
     row = (q or {}).get("data") if isinstance(q, dict) else None
+    today = time.strftime("%Y-%m-%d")
     if not row:
-        return None
-    main = _numf(row.get("f137"))
-    super_ = _numf(row.get("f140"))
-    big = _numf(row.get("f143"))
-    mid = _numf(row.get("f146"))
-    small = _numf(row.get("f149"))
-    return {"klines": [f"{time.strftime('%Y-%m-%d %H:%M')},{main},{small},{mid},{big},{super_}"]}
+        hist = _FLOW_HIST.get(secid) or []
+        return {"klines": hist} if hist else None
+    ts = time.strftime("%Y-%m-%d %H:%M")
+    line = ",".join(str(x) for x in (
+        ts, _numf(row.get("f137")), _numf(row.get("f149")),
+        _numf(row.get("f146")), _numf(row.get("f143")), _numf(row.get("f140"))))
+    hist = _FLOW_HIST.get(secid)
+    if not hist or hist[-1].split(" ", 1)[0] != today:   # 跨日/首次 → 重置
+        hist = []
+        _FLOW_HIST[secid] = hist
+    if hist and hist[-1].split(",", 1)[0] == ts:          # 同一分钟 → 覆盖
+        hist[-1] = line
+    else:
+        hist.append(line)
+    if len(hist) > _FLOW_MAX:
+        del hist[:len(hist) - _FLOW_MAX]
+    return {"klines": list(hist)}
 
 
 # --------------------------------------------------------------------------

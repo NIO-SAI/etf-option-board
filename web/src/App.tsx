@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { IntradayChart, KlineChart } from "@/components/charts";
@@ -64,6 +65,12 @@ export default function App() {
   const etfs = universe?.etfs ?? [];
   const trendsMap = spark?.items ?? {};
 
+  // 切换标的时 usePolling 会保留上一只的数据，直到新请求返回；用 code 校验避免显示旧数据
+  const ctxReady = !!ctx && ctx.etf?.code === etfCode;
+  const chainReady = !!chain && chain.etf?.code === etfCode;
+  // 主力资金序列 <2 点时不成序列，避免渲染成一根孤立柱子
+  const flowSeries = (ctx?.flow?.length ?? 0) >= 2 ? ctx!.flow : [];
+
   const onPickContract = (c: any) => setContractSecid(c.secid);
 
   return (
@@ -88,13 +95,17 @@ export default function App() {
             <FramePanel dense>
               <FrameHeader className="flex-row items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <FrameTitle className="text-sm">{ctx?.etf?.name ?? etfCode}</FrameTitle>
+                  <FrameTitle className="text-sm">{ctxReady ? (ctx!.etf?.name ?? etfCode) : (etfs.find((e: any) => e.code === etfCode)?.name ?? etfCode)}</FrameTitle>
                   <Badge variant="outline" size="xs">{etfCode}</Badge>
-                  {ctx?.quote && (
+                  {ctxReady && ctx?.quote ? (
                     <>
                       <span className="text-sm font-semibold tnum">{nf(ctx.quote.price, 3)}</span>
                       <span className={`text-xs tnum ${clsUpDown(ctx.quote.pct)}`}>{pct(ctx.quote.pct)}</span>
                     </>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <Loader2 className="size-3 animate-spin" />加载中…
+                    </span>
                   )}
                 </div>
                 <Tabs
@@ -103,10 +114,10 @@ export default function App() {
                   onChange={setKlt}
                 />
               </FrameHeader>
-              {ctx && (
+              {ctxReady && (
                 <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-[11px] text-muted-foreground">
                   <MiniKv k="量能" v={`${ctx.volume?.ratio ?? "—"}x`} tone={ctx.volume?.is_surge ? "warn" : undefined} />
-                  <MiniKv k="主力5分" v={signedMoney(ctx.flow_main_delta5m)} tone={ctx.flow_main_delta5m > 0 ? "up" : "down"} />
+                  <MiniKv k="主力5分" v={signedMoney(ctx.flow_main_delta5m)} tone={ctx.flow_main_delta5m == null ? undefined : ctx.flow_main_delta5m > 0 ? "up" : "down"} />
                   <MiniKv k="MACD" v={ctx.macd?.cross === "golden" ? "金叉" : ctx.macd?.cross === "dead" ? "死叉" : "—"} />
                   <MiniKv k="背离" v={ctx.macd?.divergence?.type === "bullish" ? "底背离" : ctx.macd?.divergence?.type === "bearish" ? "顶背离" : "无"} />
                   <MiniKv k="关联指数" v={`${ctx.track?.quote?.name ?? ""} ${pct(ctx.track?.quote?.pct)}`} />
@@ -114,9 +125,11 @@ export default function App() {
               )}
               <div className="px-1 pb-2">
                 <ErrorBoundary label="标的行情图">
-                  {klt === "trend" ? (
+                  {!ctxReady ? (
+                    <Skeleton className="h-[240px] w-full" />
+                  ) : klt === "trend" ? (
                     ctx?.trends?.length
-                      ? <IntradayChart id="main-chart" trends={ctx.trends} flow={ctx.flow} height={230} />
+                      ? <IntradayChart id="main-chart" trends={ctx.trends} flow={flowSeries} height={230} />
                       : <Skeleton className="h-[240px] w-full" />
                   ) : (
                     kline?.bars?.length
@@ -128,12 +141,12 @@ export default function App() {
             </FramePanel>
           </Frame>
 
-          <ContractDetail contract={contract} etfTrends={ctx?.trends ?? []} flow={ctx?.flow ?? []} />
+          <ContractDetail contract={contract} etfTrends={ctxReady ? (ctx?.trends ?? []) : []} flow={ctxReady ? flowSeries : []} />
 
           <Frame spacing="sm" className="min-h-[440px] flex-1">
             <FramePanel dense className="flex h-full flex-col">
               <div className="flex-1">
-                {chain && !chain.error ? (
+                {chainReady && !chain.error ? (
                   <OptionTQuote
                     chain={chain}
                     month={month ?? chain.front_month}
