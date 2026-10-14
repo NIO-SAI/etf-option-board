@@ -83,7 +83,7 @@ export default function App() {
         clock={clock}
         onRefresh={() => { refreshCtx(); api.monitorCycle().catch(() => {}); }}
       />
-      <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-[268px_minmax(0,1fr)_360px]">
+      <main className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-[268px_minmax(0,1fr)_360px]">
         {/* 左：标的 */}
         <div className="lg:sticky lg:top-[52px] lg:h-[calc(100vh-3.25rem)]">
           <EtfList etfs={etfs} quotes={quotes} trendsMap={trendsMap} selected={etfCode} onSelect={setEtfCode} />
@@ -199,7 +199,7 @@ export default function App() {
 
           <AlertCenter />
         </div>
-      </div>
+      </main>
       <footer className="px-4 py-3 text-center text-[10px] text-muted-foreground">
         数据来源：东方财富 · 期权定价 BS · 预测 Kronos · 决策大模型 — 仅供研究，不构成投资建议
       </footer>

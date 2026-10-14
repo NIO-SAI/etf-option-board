@@ -81,7 +81,13 @@ export function ContractDetail({
         </FrameHeader>
         <div className="px-1 pb-2">
           <ErrorBoundary label="合约K线">
-            <KlineChart id="contract-kline" bars={bars} height={220} />
+            {bars.length ? (
+              <KlineChart id="contract-kline" bars={bars} height={220} />
+            ) : (
+              <div className="flex h-[220px] items-center justify-center text-xs text-muted-foreground">
+                {secid ? "合约 K 线暂不可用（东财接口限流），稍后自动重试" : "选择合约查看 K 线"}
+              </div>
+            )}
           </ErrorBoundary>
         </div>
       </FramePanel>
