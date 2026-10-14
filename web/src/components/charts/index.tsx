@@ -64,7 +64,7 @@ export function IntradayChart({
     const idxLabel = `关联指数${indexName ? " " + indexName : ""}`;
     return {
       ...base,
-      grid: { left: hasIdx ? 98 : 50, right: hasIdxFlow ? 100 : 58, top: 24, bottom: 34 },
+      grid: { left: 14, right: 14, top: 24, bottom: 34 },
       legend: {
         top: 0, left: 6, itemWidth: 12, itemHeight: 8, itemGap: 10,
         textStyle: { color: AXIS, fontSize: 10 },
@@ -90,17 +90,14 @@ export function IntradayChart({
       },
       xAxis: { ...base.xAxisBase, data: times },
       yAxis: [
-        // 0 左：标的 ETF 价
-        { ...base.yAxisBase, position: "left", axisLabel: { color: "#60a5fa", formatter: (v: number) => v.toFixed(3) } },
+        // 0 左：标的 ETF 价（数值标注隐藏）
+        { ...base.yAxisBase, position: "left", axisLabel: { show: false } },
         // 1 左：关联指数 点位
-        { ...base.yAxisBase, position: "left", offset: hasIdx ? 56 : 0, splitLine: { show: false },
-          axisLabel: { color: "#d97706", formatter: (v: number) => v.toFixed(0) } },
+        { ...base.yAxisBase, position: "left", splitLine: { show: false }, axisLabel: { show: false } },
         // 2 右：标的 ETF 主力净流入（柱）
-        { ...base.yAxisBase, position: "right", splitLine: { show: false },
-          axisLabel: { color: "#7c3aed", formatter: (v: number) => Math.round(v / 1e4) + "万" } },
+        { ...base.yAxisBase, position: "right", splitLine: { show: false }, axisLabel: { show: false } },
         // 3 右：关联指数 主力净流入（线）
-        { ...base.yAxisBase, position: "right", offset: hasIdxFlow ? 56 : 0, splitLine: { show: false },
-          axisLabel: { color: "#0d9488", formatter: (v: number) => Math.round(v / 1e4) + "万" } },
+        { ...base.yAxisBase, position: "right", splitLine: { show: false }, axisLabel: { show: false } },
       ],
       series: [
         { name: "标的ETF", type: "line", data: prices, showSymbol: false, lineStyle: { width: 1.4, color: "#60a5fa" },
