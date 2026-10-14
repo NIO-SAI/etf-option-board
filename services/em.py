@@ -26,6 +26,11 @@ _CACHE: dict[str, tuple[float, float, object]] = {}
 # 传输路径记忆：(host|path) -> (mode, ts)；mode: "direct" | "curl"
 _MEMO: dict[str, tuple[str, float]] = {}
 _MEMO_TTL = 300
+# 东财 push2 限流抖动：失败重试（重试会放大请求量，3 次为折中）
+_RETRY_TRIES = 3
+_RETRY_DELAY = 0.25
+# 全局并发闸：东财对同 IP 并发突发很敏感，超出即整批被拒；限流后串行通过更稳。
+_SEM = asyncio.Semaphore(4)
 
 
 def _client() -> httpx.AsyncClient:
@@ -52,8 +57,10 @@ def _build(url: str, params: dict) -> str:
     return f"{url}?{urlencode(params, safe=',:+')}"
 
 
-async def _curl_json(url: str) -> object:
-    full = _build(url, {"_": int(time.time() * 1000)})
+async def _curl_json(url: str, params: dict | None = None) -> object:
+    p = dict(params or {})
+    p["_"] = int(time.time() * 1000)
+    full = _build(url, p)
     proc = await asyncio.create_subprocess_exec(
         "curl", "-s", "-m", "8", "-A", _UA, "-e", _REFERER,
         "-H", "Accept: application/json, text/plain, */*",
@@ -86,26 +93,35 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
         return r.json()
 
     async def _curl():
-        return await _curl_json(url)
+        return await _curl_json(url, params)
+
+    transports = [("curl", _curl), ("direct", _direct)]
+    if prefer != "curl":
+        transports.reverse()
 
     data = None
-    if prefer == "curl":
-        order = [_curl, _direct]
-    else:
-        order = [_direct, _curl]
-
-    for fn in order:
-        try:
-            data = await fn()
+    used = None
+    # 东财限流：单次成功率约 30~50%，失败即重试（direct 被 WAF 拒绝时很快失败）
+    for attempt in range(_RETRY_TRIES):
+        for name, fn in transports:
+            try:
+                async with _SEM:
+                    data = await fn()
+            except Exception as exc:  # noqa: BLE001
+                log.debug("em fetch %s via %s 失败: %s", hostkey, name, exc)
+                data = None
             if data is not None:
-                _MEMO[hostkey] = ("curl" if fn is _curl else "direct", now)
+                used = name
                 break
-        except Exception as exc:  # noqa: BLE001
-            log.debug("em fetch %s via %s 失败: %s", hostkey, fn.__name__, exc)
-            continue
+        if data is not None:
+            break
+        if attempt < _RETRY_TRIES - 1:
+            await asyncio.sleep(_RETRY_DELAY)
 
     if data is None:
         return None
+    _MEMO[hostkey] = (used, now)
+
     if isinstance(data, dict) and data.get("rc") not in (None, 0):
         log.debug("em rc=%s url=%s", data.get("rc"), key)
 
@@ -125,7 +141,7 @@ def _fields2():
 # 行情
 # --------------------------------------------------------------------------
 async def clist(fs: str, fields: str, pn: int = 1, pz: int = 100, fid: str = "f12",
-                po: int = 1, ttl: float = 3.0) -> list[dict]:
+                po: int = 1, ttl: float = 8.0) -> list[dict]:
     url = "https://push2.eastmoney.com/api/qt/clist/get"
     params = {
         "pn": pn, "pz": pz, "po": po, "np": 1, "fltt": 2, "invt": 2,
@@ -138,7 +154,7 @@ async def clist(fs: str, fields: str, pn: int = 1, pz: int = 100, fid: str = "f1
 
 
 async def clist_all(fs: str, fields: str, pz: int = 100, max_page: int = 8,
-                    ttl: float = 5.0) -> list[dict]:
+                    ttl: float = 15.0) -> list[dict]:
     out: list[dict] = []
     for pn in range(1, max_page + 1):
         rows = await clist(fs, fields, pn=pn, pz=pz, ttl=ttl)
@@ -150,7 +166,7 @@ async def clist_all(fs: str, fields: str, pz: int = 100, max_page: int = 8,
     return out
 
 
-async def stock_get(secid: str, fields: str, ttl: float = 2.0) -> dict | None:
+async def stock_get(secid: str, fields: str, ttl: float = 6.0) -> dict | None:
     url = "https://push2.eastmoney.com/api/qt/stock/get"
     d = await get_json(url, {"secid": secid, "fltt": 2, "invt": 2, "fields": fields, "ut": _UT}, ttl=ttl)
     if not d or not d.get("data"):
@@ -158,7 +174,7 @@ async def stock_get(secid: str, fields: str, ttl: float = 2.0) -> dict | None:
     return d["data"]
 
 
-async def kline(secid: str, klt: int = 1, lmt: int = 240, fqt: int = 1, ttl: float = 5.0) -> dict | None:
+async def kline(secid: str, klt: int = 1, lmt: int = 240, fqt: int = 1, ttl: float = 20.0) -> dict | None:
     url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
     params = {
         "secid": secid, "fields1": _fields1(), "fields2": _fields2(),
@@ -168,7 +184,7 @@ async def kline(secid: str, klt: int = 1, lmt: int = 240, fqt: int = 1, ttl: flo
     return d.get("data") if d else None
 
 
-async def trends(secid: str, ndays: int = 1, ttl: float = 3.0) -> dict | None:
+async def trends(secid: str, ndays: int = 1, ttl: float = 10.0) -> dict | None:
     url = "https://push2.eastmoney.com/api/qt/stock/trends2/get"
     params = {
         "secid": secid, "fields1": "f1,f2,f3,f4,f5,f6,f7,f8",
@@ -178,7 +194,7 @@ async def trends(secid: str, ndays: int = 1, ttl: float = 3.0) -> dict | None:
     return d.get("data") if d else None
 
 
-async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 5.0) -> dict | None:
+async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 15.0) -> dict | None:
     """分钟级资金流（主力/超大/大/中/小）。"""
     url = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
     params = {
