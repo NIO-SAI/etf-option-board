@@ -54,7 +54,7 @@ async def _no_cache_html(request, call_next):
     """HTML 一律 no-cache（每次重新校验），避免浏览器缓存旧 bundle 导致看不到新版。"""
     resp = await call_next(request)
     if "text/html" in resp.headers.get("content-type", ""):
-        resp.headers["Cache-Control"] = "no-cache"
+        resp.headers["Cache-Control"] = "no-store"
     return resp
 
 

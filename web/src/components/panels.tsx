@@ -71,7 +71,7 @@ export function EtfList({
             );
           })}
 
-          <div className="px-3 py-1.5 text-[10px] font-medium text-muted-foreground">大盘指数</div>
+          <div className="px-3 py-1.5 text-[10px] font-medium text-muted-foreground">大盘指数（{indexRows.length}）</div>
           {indexRows.map((ix) => {
             const q = ix.quote;
             return (
