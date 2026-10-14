@@ -1,4 +1,7 @@
-"""实时监控：轮询 9 只 ETF（及其近月平值期权），触发量能/资金/暴动/关键时点等告警。"""
+"""实时监控：轮询 9 只 ETF，触发量能/资金/背离/关键时点/国家队等告警。
+
+（已按需求移除「价格异动 price_spike」与「合约异动 opt_spike」两类告警。）
+"""
 
 from __future__ import annotations
 
@@ -7,8 +10,7 @@ import datetime as dt
 import logging
 
 from config import settings
-from services import alerts, em, market_service as ms, option_service as osvc, strategy
-from services.indicators import pct_change, volume_stats
+from services import alerts, market_service as ms, strategy
 from services.universe import ETFS
 
 log = logging.getLogger("monitor")
@@ -27,23 +29,11 @@ async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
     q = ctx.get("quote") or {}
     if not q:
         return
-    k1 = ctx.get("kline_1m") or []
-    closes = [b["close"] for b in k1]
     name = etf["name"]
 
-    # 价格突动
-    p3 = pct_change(closes, 3)
-    if p3 is not None and abs(p3) >= 0.5 and alerts.should_alert(etf["code"], "price_spike", 60):
-        await alerts.publish({
-            "etf_code": etf["code"], "etf_name": name, "type": "price_spike",
-            "level": "critical", "dir": "bull" if p3 > 0 else "bear",
-            "title": f"{name} 3分钟急{'拉' if p3>0 else '跌'} {p3:+.2f}%",
-            "text": f"现价 {q['price']}（{q['pct']:+.2f}%），3分钟变动 {p3:+.2f}%，注意异动。",
-        })
-
-    # 量能骤放
+    # 量能骤放（冷却 300s）
     vs = ctx.get("volume") or {}
-    if vs.get("is_surge") and alerts.should_alert(etf["code"], "volume_surge", 120):
+    if vs.get("is_surge") and alerts.should_alert(etf["code"], "volume_surge", 300):
         await alerts.publish({
             "etf_code": etf["code"], "etf_name": name, "type": "volume_surge",
             "level": "warn", "dir": "neutral",
@@ -51,9 +41,9 @@ async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
             "text": f"近5分钟量能为日内均量 {vs['ratio']} 倍，配合价格方向判断有效性。",
         })
 
-    # 主力资金突入
+    # 主力资金突入（冷却 240s）
     d5 = ctx.get("flow_main_delta5m") or 0
-    if abs(d5) >= 1.2e8 and alerts.should_alert(etf["code"], "main_inflow", 120):
+    if abs(d5) >= 1.2e8 and alerts.should_alert(etf["code"], "main_inflow", 240):
         await alerts.publish({
             "etf_code": etf["code"], "etf_name": name, "type": "main_inflow",
             "level": "critical", "dir": "bull" if d5 > 0 else "bear",
@@ -61,34 +51,15 @@ async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
             "text": f"近5分钟主力净{'流入' if d5>0 else '流出'} {abs(d5)/1e8:.2f} 亿元。",
         })
 
-    # MACD 背离
+    # MACD 背离（冷却 600s）
     div = (ctx.get("macd") or {}).get("divergence") or {}
-    if div.get("type") in ("bullish", "bearish") and alerts.should_alert(etf["code"], "divergence", 180):
+    if div.get("type") in ("bullish", "bearish") and alerts.should_alert(etf["code"], "divergence", 600):
         await alerts.publish({
             "etf_code": etf["code"], "etf_name": name, "type": "divergence",
             "level": "warn", "dir": "bull" if div["type"] == "bullish" else "bear",
             "title": f"{name} 1分钟MACD {'底背离' if div['type']=='bullish' else '顶背离'}",
             "text": "动能与价格背离，留意反转。",
         })
-
-    # 近月平值期权放量/暴动
-    try:
-        chain = await osvc.chain(etf["code"])
-        front = chain.get("front_month")
-        s = (chain.get("underlying") or {}).get("price") or 0
-        atm = [c for c in chain.get("contracts", []) if c["month"] == front]
-        if atm:
-            top = sorted(atm, key=lambda c: -(c.get("amount") or 0))[:3]
-            for c in top:
-                if (c.get("pct") or 0) and abs(c["pct"]) >= 15 and alerts.should_alert(c["code"], "opt_spike", 120):
-                    await alerts.publish({
-                        "etf_code": etf["code"], "etf_name": name, "type": "opt_spike",
-                        "level": "warn", "dir": "bull" if c["pct"] > 0 else "bear",
-                        "title": f"{c['name']} {c['pct']:+.1f}%",
-                        "text": f"近月活跃合约 {c['code']} 现价 {c['last']}，涨跌 {c['pct']:+.1f}%，成交额 {c['amount']/1e4:.0f} 万。",
-                    })
-    except Exception as exc:  # noqa: BLE001
-        log.debug("期权检查失败 %s: %s", etf["code"], exc)
 
     # 关键时点（针对关联指数较敏感的标的，只推一次/时点）
     if key_hm:
@@ -102,8 +73,8 @@ async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
                 "text": f"{name} 处于关键时点窗口，关注方向选择与量能。",
             })
 
-    # 国家队
-    if nt_score >= 60 and alerts.should_alert(etf["code"], "national_team", 300):
+    # 国家队（冷却 600s）
+    if nt_score >= 60 and alerts.should_alert(etf["code"], "national_team", 600):
         await alerts.publish({
             "etf_code": etf["code"], "etf_name": name, "type": "national_team",
             "level": "critical", "dir": "bull",

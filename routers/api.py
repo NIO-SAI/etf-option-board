@@ -172,9 +172,9 @@ async def alerts_stream():
 
     async def gen():
         try:
-            # 先补发最近若干条，避免连接后空白
+            # 先补发最近若干条（标记 backfill，前端只入列表、不弹窗不出声）
             for a in reversed(alerts.history(10)):
-                yield f"data: {json.dumps(a, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({**a, 'backfill': True}, ensure_ascii=False)}\n\n"
             while True:
                 try:
                     item = await asyncio.wait_for(q.get(), timeout=15)

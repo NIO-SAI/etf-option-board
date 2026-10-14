@@ -28,11 +28,15 @@ export function AlertCenter() {
     if (seen.current.has(a.id)) return;
     seen.current.add(a.id);
     setItems((prev) => [a, ...prev].slice(0, 80));
-    sound.play(a.level);
-    toast(a.title, { description: a.text, duration: 6000 });
-    if (a.level === "critical" || a.type === "price_spike" || a.type === "main_inflow") {
-      setPopup(a);
+    // 重放的历史（连接/刷新时补发）：只进列表，不弹窗不出声
+    if (a.backfill) return;
+    // info（变盘时点）不打扰，只进列表
+    if (a.level !== "info") {
+      sound.play(a.level);
+      toast(a.title, { description: a.text, duration: 6000 });
     }
+    // 仅主力资金弹模态框（价格异动/合约异动已移除，国家队等不再弹框）
+    if (a.type === "main_inflow") setPopup(a);
   };
   useAlertStream(onAlert);
 
