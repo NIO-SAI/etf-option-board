@@ -16,7 +16,7 @@ export default function App() {
   const [etfCode, setEtfCode] = useState("510300");
   const [month, setMonth] = useState<number | null>(null);
   const [contractSecid, setContractSecid] = useState<string | null>(null);
-  const [klt, setKlt] = useState(1);
+  const [klt, setKlt] = useState("trend");
   const [clock, setClock] = useState(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
 
   useEffect(() => {
@@ -32,7 +32,11 @@ export default function App() {
   const { data: etfQuotes } = usePolling(() => api.etfs(), 5_000);
   const { data: spark } = usePolling(() => api.etfs_spark(), 30_000, []);
 
-  const { data: ctx, refresh: refreshCtx } = usePolling(() => api.etf(etfCode, klt), 5_000, [etfCode, klt]);
+  const kltNum = klt === "trend" ? 1 : Number(klt);
+  const { data: ctx, refresh: refreshCtx } = usePolling(() => api.etf(etfCode, kltNum), 5_000, [etfCode, kltNum]);
+  const { data: kline } = usePolling(
+    () => (klt === "trend" ? Promise.resolve({ bars: [] }) : api.etfKline(etfCode, Number(klt), 240)),
+    5_000, [etfCode, klt]);
   const { data: chain } = usePolling(() => api.chain(etfCode, month ?? undefined), 5_000, [etfCode, month]);
   const { data: strategy } = usePolling(() => api.strategy(etfCode, 0, 1), 15_000, [etfCode]);
 
@@ -94,9 +98,9 @@ export default function App() {
                   )}
                 </div>
                 <Tabs
-                  tabs={[{ key: "1", label: "1分" }, { key: "3", label: "3分" }, { key: "5", label: "5分" }, { key: "15", label: "15分" }]}
-                  value={String(klt)}
-                  onChange={(k) => setKlt(Number(k))}
+                  tabs={[{ key: "trend", label: "分时" }, { key: "1", label: "1分" }, { key: "3", label: "3分" }, { key: "5", label: "5分" }, { key: "15", label: "15分" }]}
+                  value={klt}
+                  onChange={setKlt}
                 />
               </FrameHeader>
               {ctx && (
@@ -110,11 +114,15 @@ export default function App() {
               )}
               <div className="px-1 pb-2">
                 <ErrorBoundary label="标的行情图">
-                  {ctx?.trends?.length ? (
-                    klt === 1
+                  {klt === "trend" ? (
+                    ctx?.trends?.length
                       ? <IntradayChart id="main-chart" trends={ctx.trends} flow={ctx.flow} height={230} />
-                      : <KlineChart id="main-chart" bars={ctx.kline_1m} height={250} />
-                  ) : <Skeleton className="h-[240px] w-full" />}
+                      : <Skeleton className="h-[240px] w-full" />
+                  ) : (
+                    kline?.bars?.length
+                      ? <KlineChart id="main-chart" bars={kline.bars} height={250} />
+                      : <Skeleton className="h-[240px] w-full" />
+                  )}
                 </ErrorBoundary>
               </div>
             </FramePanel>
