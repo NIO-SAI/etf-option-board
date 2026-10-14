@@ -11,12 +11,20 @@ import { ArrowDownRight, ArrowUpRight, Flame, Minus } from "lucide-react";
 const shortName = (n: string) =>
   (n || "").replace(/(华泰柏瑞|易方达|华夏|嘉实|南方|广发|国泰|银华)$/, "");
 
+// 方向标签：A 股约定 —— 看多红、看空绿、观望灰（与 bias.direction 对应）
+const DIR_MAP: Record<string, { v: any; t: string }> = {
+  call: { v: "destructive-light", t: "看多" },
+  put: { v: "success-light", t: "看空" },
+  neutral: { v: "secondary", t: "观望" },
+};
+
 export function EtfList({
-  etfs, quotes, trendsMap, selected, onSelect,
+  etfs, quotes, trendsMap, directions = {}, selected, onSelect,
 }: {
   etfs: any[];
   quotes: Record<string, any>;
   trendsMap: Record<string, number[]>;
+  directions?: Record<string, { direction: string; score: number; confidence: number }>;
   selected: string;
   onSelect: (c: string) => void;
 }) {
@@ -30,6 +38,7 @@ export function EtfList({
           {etfs.map((e) => {
             const q = quotes[e.code];
             const on = e.code === selected;
+            const dm = DIR_MAP[directions[e.code]?.direction] ?? null;
             return (
               <button
                 key={e.code}
@@ -42,6 +51,7 @@ export function EtfList({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
                     <span className={cn("truncate text-xs font-medium", on && "text-primary")}>{shortName(e.name)}</span>
+                    {dm && <Badge variant={dm.v} size="xs" className="shrink-0">{dm.t}</Badge>}
                     {on && <span className="size-1.5 shrink-0 rounded-full bg-primary" />}
                   </div>
                   <div className="text-[10px] text-muted-foreground tnum">{e.code} · {e.track}</div>

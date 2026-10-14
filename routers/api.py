@@ -43,6 +43,12 @@ async def etfs_quotes():
     return {"items": [q for q in res if q]}
 
 
+@router.get("/directions")
+async def directions():
+    """9 只标的的实时方向（看多/看空/观望），供左侧列表标签。"""
+    return {"items": await strategy.directions()}
+
+
 @router.get("/etfs/spark")
 async def etfs_spark():
     """9 只标的的日内收盘价序列（供列表迷你走势）。"""

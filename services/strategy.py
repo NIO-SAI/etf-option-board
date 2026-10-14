@@ -9,12 +9,15 @@ import time
 
 from services import kronos, market_service as ms, option_service as osvc
 from services.indicators import atr, macd_state, pct_change, support_resistance, volume_stats
-from services.universe import ETF_BY_CODE, TRACK_INDEX
+from services.universe import ETF_BY_CODE, ETFS, TRACK_INDEX
 
 log = logging.getLogger("strategy")
 
 _NT_CACHE: tuple[float, dict] | None = None
 _NT_TTL = 20
+
+_DIR_CACHE: tuple[float, dict] | None = None
+_DIR_TTL = 15
 
 
 async def national_team_cached() -> dict:
@@ -25,6 +28,32 @@ async def national_team_cached() -> dict:
     data = await ms.national_team_signal()
     _NT_CACHE = (now, data)
     return data
+
+
+async def directions() -> dict:
+    """全部标的的实时方向（看多/看空/观望）。轻量：不含 Kronos，带 15s 缓存。"""
+    global _DIR_CACHE
+    now = time.time()
+    if _DIR_CACHE and now - _DIR_CACHE[0] < _DIR_TTL:
+        return _DIR_CACHE[1]
+    national, ext = await asyncio.gather(national_team_cached(), ms.external_snapshot())
+
+    async def one(etf: dict) -> tuple[str, dict]:
+        try:
+            ctx, track = await asyncio.gather(
+                ms.etf_context(etf["code"], etf["secid"]),
+                ms.track_index_state(etf["track"]),
+            )
+            b = bias_score(ctx, track, national, ext, None)
+            return etf["code"], {"direction": b["direction"], "score": b["score"],
+                                 "confidence": b["confidence"]}
+        except Exception as exc:  # noqa: BLE001
+            log.debug("direction 计算失败 %s: %s", etf.get("code"), exc)
+            return etf["code"], {"direction": "neutral", "score": 0, "confidence": 0}
+
+    out = dict(await asyncio.gather(*[one(e) for e in ETFS]))
+    _DIR_CACHE = (now, out)
+    return out
 
 
 def _now_hm() -> str:

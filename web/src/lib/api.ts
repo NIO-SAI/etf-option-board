@@ -13,6 +13,7 @@ export const api = {
   external: () => get("/external"),
   national: () => get("/national"),
   etfs: () => get("/etfs"),
+  directions: () => get("/directions"),
   etfs_spark: () => get("/etfs/spark"),
   etf: (code: string, klt = 1) => get(`/etf/${code}?klt=${klt}`),
   etfKline: (code: string, klt = 1, lmt = 240) => get(`/etf/${code}/kline?klt=${klt}&lmt=${lmt}`),

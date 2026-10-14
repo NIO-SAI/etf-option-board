@@ -31,6 +31,7 @@ export default function App() {
   const { data: external } = usePolling(() => api.external(), 15_000);
   const { data: national } = usePolling(() => api.national(), 20_000);
   const { data: etfQuotes } = usePolling(() => api.etfs(), 5_000);
+  const { data: directions } = usePolling(() => api.directions(), 15_000);
   const { data: spark } = usePolling(() => api.etfs_spark(), 30_000, []);
 
   const kltNum = klt === "trend" ? 1 : Number(klt);
@@ -86,7 +87,7 @@ export default function App() {
       <main className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-[268px_minmax(0,1fr)_360px]">
         {/* 左：标的 */}
         <div className="lg:sticky lg:top-[52px] lg:h-[calc(100vh-3.25rem)]">
-          <EtfList etfs={etfs} quotes={quotes} trendsMap={trendsMap} selected={etfCode} onSelect={setEtfCode} />
+          <EtfList etfs={etfs} quotes={quotes} trendsMap={trendsMap} directions={directions?.items ?? {}} selected={etfCode} onSelect={setEtfCode} />
         </div>
 
         {/* 中：标的行情 + 合约详情 + T报价 */}
