@@ -226,6 +226,11 @@ export function OptionTQuote({
   const expiries = chain?.expiries ?? [];
   if (!chain || chain.error) return <div className="p-4 text-xs text-muted-foreground">加载中…</div>;
   const s = chain.underlying?.price ?? 0;
+  const rows: any[] = tq?.rows ?? [];
+  // 最接近当前标的价格的那一档行权价（单一行）→ 特殊色标记
+  const atmStrike = rows.length
+    ? rows.reduce((best: number, r: any) => (Math.abs(r.strike - s) < Math.abs(best - s) ? r.strike : best), rows[0].strike)
+    : null;
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between px-1 pb-2">
@@ -255,13 +260,16 @@ export function OptionTQuote({
             </TR>
           </THead>
           <TBody>
-            {tq?.rows?.map((row: any) => {
+            {rows.map((row: any) => {
               const c = row.call, p = row.put;
-              const atm = Math.abs(row.strike - s) / (s || 1) <= 0.015;
+              const isAtm = row.strike === atmStrike;
               return (
-                <TR key={row.strike} className={cn(atm && "bg-primary/10")}>
+                <TR key={row.strike} className={cn(isAtm && "bg-warning/15 ring-1 ring-inset ring-warning/40")}>
                   <ContractCells c={c} selected={selectedSecid} onSelect={onSelect} align="left" />
-                  <TD className="text-center font-semibold tnum">{row.strike.toFixed(3)}</TD>
+                  <TD className={cn("text-center font-semibold tnum", isAtm && "text-warning-foreground")}>
+                    {isAtm && <span className="mr-1 rounded bg-warning/25 px-1 align-middle text-[9px] leading-4">ATM</span>}
+                    {row.strike.toFixed(3)}
+                  </TD>
                   <ContractCells c={p} selected={selectedSecid} onSelect={onSelect} align="right" />
                 </TR>
               );
