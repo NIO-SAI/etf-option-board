@@ -271,6 +271,8 @@ export function OptionTQuote({
   if (!chain || chain.error) return <div className="p-4 text-xs text-muted-foreground">加载中…</div>;
   const s = chain.underlying?.price ?? 0;
   const rows: any[] = tq?.rows ?? [];
+  // 近月剩余天数（expiry_list 按天数升序，首个即近月）
+  const expiryDays = chain.expiry_list?.[0]?.days ?? null;
   // 最接近当前标的价格的那一档行权价（单一行）→ 特殊色标记
   const atmStrike = rows.length
     ? rows.reduce((best: number, r: any) => (Math.abs(r.strike - s) < Math.abs(best - s) ? r.strike : best), rows[0].strike)
@@ -284,7 +286,10 @@ export function OptionTQuote({
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-muted-foreground">
-            ATM IV {chain.stats?.atm_iv ?? "—"}% · 偏斜 {chain.stats?.skew ?? "—"} · PCR {chain.stats?.pcr ?? "—"}
+            ATM IV {chain.stats?.atm_iv ?? "—"}%{chain.stats?.atm_iv_pctl20 != null ? ` · 20日分位${Math.round(chain.stats.atm_iv_pctl20)}%` : ""} · 偏斜 {chain.stats?.skew ?? "—"} · PCR {chain.stats?.pcr ?? "—"}
+            {expiryDays != null && expiryDays < 7 && (
+              <span className="ml-1 font-semibold text-warning">距到期{expiryDays}天·Theta衰减快</span>
+            )}
           </span>
           <Tabs tabs={expiries.map((m: number) => ({ key: String(m), label: `${m}月` }))} value={String(month)} onChange={(k) => onMonth(Number(k))} />
         </div>

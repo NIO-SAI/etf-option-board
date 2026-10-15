@@ -21,6 +21,16 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   HTML 响应带 `no-store`，页脚有「构建 <bundle-hash>」戳可用于核对已加载的构建。
 - 已装 LaunchAgent `com.etf-option-board` 常驻 `:6799`（崩溃自动拉起）。手动起服务前先确认
   端口未被它占用（`launchctl print gui/$(id -u)/com.etf-option-board`），日志 `/tmp/etf-option-board.log`。
+- 后端代码更新后重启生效：`curl -s -X POST http://127.0.0.1:6799/api/admin/restart`
+  （先优雅关闭 Kronos 子进程再以非零码退出，LaunchAgent 约 5 秒自动拉起；curl 报连接重置属正常）。
+  首次上线该接口前需手动重启一次：`launchctl kickstart -k gui/$(id -u)/com.etf-option-board`。
+- **Agent 自部署（2026-10-15 起）**：Agent 改完代码后写 `data/.deploy_token`
+  （JSON，如 `{"build_frontend": true, "reason": "..."}`），monitor 主循环 30 秒内自动消费
+  并执行：`py_compile` 全量校验 → 可选 `bash web/build.sh` 重建前端 → `os._exit(42)`
+  由 LaunchAgent 拉起。校验/构建失败则不重启，结果见 `data/.deploy_status`。
+  用户也可手动触发：`curl -s -X POST http://127.0.0.1:6799/api/admin/deploy \
+  -H 'Content-Type: application/json' -d '{"build_frontend": true}'`（立即返回，后台执行）。
+  部署期间服务中断约 1-2 分钟（含前端构建），尽量避开交易时段。
 
 ## 架构与约定
 
@@ -33,6 +43,12 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   限流（空回包）。故行情/期权链主源改用 **`emdatah5.eastmoney.com`**（`getZJLXData`＝个股/指数/
   外围/期权行情+资金流，`getZDYLBData`＝clist 同参同构），K线/分时走**腾讯**（`ifzq.gtimg.cn`），
   `push2/push2his` 仅兜底。排查"没数据"先看这三条链路，别急着怪"没开盘"。
+- 资金流分钟序列：`services/em.py::fflow` 在交易时段内每次调用都用 emdatah5 快照累积
+  并落盘 `data/flow_history.jsonl`（push2 fflow 收盘后常返回空 klines，且经代理易被限流）。
+  收盘后/进程重启后用本地累积兜底，保证分时资金流图表可复盘；注意累积的是日累计值
+  口径（f137 等），与 push2 的分钟增量口径不同。当日已错过的数据无法回补。
+  另保留最近一个有数据的昨日序列：9:15 开盘前当日无数据时自动展示昨日（前端打
+  「昨日资金流」角标，`etf_context.flow_day` 标识数据日期），界面不空。
 - `services/universe.py` 维护标的/指数/外围/国家队清单；改标的只改这里。
 - 期权链：东财 `fs=m:10`(沪)/`m:12`(深) 全量列表，按简称前缀切分。**注意前缀顺序**
   （`科创50` vs `科创板50`，`300ETF` vs `沪深300ETF`）。
@@ -48,6 +64,11 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   （`/tmp/etf-option-board.log`）会原样记录，无需重启后端、无需用户操作（用户刷新即可）。
   用 `/tmp/etf-option-board.log` 按客户端 IP 区分设备。**定位后必须删信标并重建。**
 - 所有 API 失败**降级返回 `{error}`，不抛 500**。
+- **变盘开仓信号**（`services/reversal.py`，2026-10-15 新增）：多/空各一套 0~100 打分
+  （1m近3根金叉/死叉+25、3m确认+20、突破近15分钟高低+15、放量+10/+15、主力同向+10/+15、
+  指数同向+10、背离+10、时点共振+5），**55 分触发**，critical 级告警带开仓建议
+  （方向/因子/标的点位/优选合约/IV分位）。仅 09:40–14:45；同向 20 分钟冷却；
+  反向 15 分钟抑制。`GET /api/reversal/signals?code=` 供分时图打标记。
 
 ## 依赖的外部资产
 

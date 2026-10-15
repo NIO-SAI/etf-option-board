@@ -12,7 +12,7 @@ import { AlertTriangle, BellRing, Volume2 } from "lucide-react";
 const TYPE_LABEL: Record<string, string> = {
   price_spike: "价格异动", volume_surge: "量能放大", main_inflow: "主力资金",
   divergence: "MACD背离", key_time: "变盘时点", national_team: "国家队护盘",
-  opt_spike: "合约异动",
+  opt_spike: "合约异动", reversal: "变盘开仓",
 };
 
 export function AlertCenter() {
@@ -41,8 +41,8 @@ export function AlertCenter() {
       sound.play(a.level);
       toast(a.title, { description: a.text, duration: 6000 });
     }
-    // 仅主力资金弹模态框（价格异动/合约异动已移除，国家队等不再弹框）
-    if (a.type === "main_inflow") setPopup(a);
+    // 主力资金与变盘开仓弹模态框（后者是可执行的交易信号，优先级最高）
+    if (a.type === "main_inflow" || a.type === "reversal") setPopup(a);
   };
   useAlertStream(onAlert);
 

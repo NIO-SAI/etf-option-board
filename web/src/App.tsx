@@ -44,6 +44,7 @@ export default function App() {
   const { data: ctx, refresh: refreshCtx } = usePolling(() => api.etf(etfCode, 1), 10_000, [etfCode]);
   const { data: chain } = usePolling(() => api.chain(etfCode, month ?? undefined), 15_000, [etfCode, month]);
   const { data: strategy } = usePolling(() => api.strategy(etfCode, 0, 1), 30_000, [etfCode]);
+  const { data: revSignals } = usePolling(() => api.reversalSignals(etfCode), 30_000, [etfCode]);
 
   // 合约：优先链内按 secid 定位，保持实时刷新
   const contract = useMemo(() => {
@@ -116,6 +117,10 @@ export default function App() {
                 <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-[11px] text-muted-foreground">
                   <MiniKv k="量能" v={`${ctx.volume?.ratio ?? "—"}x`} tone={ctx.volume?.is_surge ? "warn" : undefined} />
                   <MiniKv k="主力5分" v={signedWan(ctx.flow_main_delta5m)} tone={ctx.flow_main_delta5m == null ? undefined : ctx.flow_main_delta5m > 0 ? "up" : "down"} />
+                  <MiniKv k="主力累计" v={signedWan(ctx.flow_snapshot?.main)} tone={ctx.flow_snapshot?.main == null ? undefined : ctx.flow_snapshot.main > 0 ? "up" : "down"} />
+                  {ctx.flow_day && ctx.flow_day < new Date().toLocaleDateString("en-CA") && (
+                    <Badge variant="outline" size="xs" className="text-amber-600 border-amber-300">昨日资金流</Badge>
+                  )}
                   <MiniKv k="MACD" v={ctx.macd?.cross === "golden" ? "金叉" : ctx.macd?.cross === "dead" ? "死叉" : "—"} />
                   <MiniKv k="背离3分" v={ctx.macd3?.divergence?.type === "bullish" ? "底背离" : ctx.macd3?.divergence?.type === "bearish" ? "顶背离" : "无"} />
                   <MiniKv k="关联指数" v={`${ctx.track?.quote?.name ?? ""} ${pct(ctx.track?.quote?.pct)}`} />
@@ -126,7 +131,7 @@ export default function App() {
                   {!ctxReady ? (
                     <Skeleton className="h-[240px] w-full" />
                   ) : ctx?.trends?.length ? (
-                    <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexFlow={ctx.track?.flow ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} height={230} />
+                    <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexFlow={ctx.track?.flow ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} signals={revSignals?.items ?? []} height={230} />
                   ) : (
                     <Skeleton className="h-[240px] w-full" />
                   )}

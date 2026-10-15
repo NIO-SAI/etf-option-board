@@ -31,7 +31,7 @@ async def national_team_cached() -> dict:
 
 
 async def directions() -> dict:
-    """全部标的的实时方向（看多/看空/观望）。轻量：不含 Kronos，带 15s 缓存。"""
+    """全部标的的实时方向（看多/看空/观望）。轻量：不含 Kronos，带 60s 缓存。"""
     global _DIR_CACHE
     now = time.time()
     if _DIR_CACHE and now - _DIR_CACHE[0] < _DIR_TTL:
@@ -250,9 +250,10 @@ def contract_levels(contract: dict, und_levels: dict, s_now: float) -> dict:
     entry = px(und_levels.get("entry_break"))
     stop = px(und_levels.get("stop"))
     target = px(und_levels.get("target"))
-    # 合约层硬止损：-30%
-    hard_stop = round(cur * 0.70, 4)
-    stop = max(stop, hard_stop) if und_levels["side"] == "long" else stop
+    # 合约层硬止损：相对入场价 -30%，认购/认沽双向生效
+    # （标的触及止损位时合约价恒低于入场价，故 stop 取两者较高者即收紧到 -30%）
+    hard_stop = round(entry * 0.70, 4)
+    stop = max(stop, hard_stop)
     return {
         "contract": contract.get("name"), "code": contract.get("code"),
         "current": cur, "delta": delta,

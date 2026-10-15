@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
-from services import (alerts, em, kronos, llm, market_service as ms, monitor,
-                      option_service as osvc, strategy)
+from services import (alerts, deploy as deploy_svc, em, kronos, llm,
+                      market_service as ms, monitor, option_service as osvc,
+                      reversal, strategy)
 from services.universe import ETFS, EXTERNAL, INDICES, NATIONAL_TEAM_ETFS
 
 router = APIRouter(prefix="/api")
@@ -167,6 +169,39 @@ async def alerts_history(limit: int = 50):
 async def monitor_once():
     await monitor.cycle()
     return {"ok": True, "status": monitor.status()}
+
+
+@router.post("/admin/restart")
+async def admin_restart():
+    """热重启后端（代码更新后生效）：先优雅关闭 Kronos 子进程与网络客户端，
+    再以非零码退出，由 LaunchAgent KeepAlive 自动拉起（约 5 秒）。
+
+    仅内网/Tailscale 可达；调用方会看到连接重置，属正常。注意：若服务是手动
+    `bash run.sh` 起的（非 launchd），退出后不会自动拉起，需手动再起。"""
+    await kronos.shutdown()
+    await em.close()
+    os._exit(42)  # noqa: unreachable，launchd 视非零退出为崩溃并拉起
+
+
+@router.post("/admin/deploy")
+async def admin_deploy(payload: dict | None = None):
+    """手动触发自部署（与 Agent 写 data/.deploy_token 等价）：先做 py_compile
+    校验，可选重建前端，然后热重启。立即返回，部署在后台进行，约 1-2 分钟后生效。
+    body 可选 {"build_frontend": bool}。"""
+    build = bool((payload or {}).get("build_frontend", False))
+
+    async def _bg():
+        await asyncio.sleep(2)  # 先让响应发出
+        await deploy_svc.deploy_now(build_frontend=build, reason="api手动触发")
+
+    asyncio.create_task(_bg())
+    return {"ok": True, "msg": "部署已触发，稍后生效（前端构建约需 1 分钟）"}
+
+
+@router.get("/reversal/signals")
+async def reversal_signals(code: str = Query(...)):
+    """当日该标的的变盘信号（供分时图打标记）。"""
+    return {"items": reversal.recent(code)}
 
 
 @router.get("/alerts/stream")

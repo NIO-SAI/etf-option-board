@@ -1,6 +1,7 @@
 """ETF 期权日内决策看板 — FastAPI 入口。
 
-    /Users/xinxin/.browser-use-env/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port 6799
+    /Users/xinxin/.browser-use-env/bin/python3 -m uvicorn app:app --host 0.0.0.0 --port 6799
+    （run.sh 实际绑 0.0.0.0，供局域网/Tailscale 访问）
 """
 
 from __future__ import annotations

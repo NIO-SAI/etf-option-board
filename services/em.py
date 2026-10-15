@@ -9,6 +9,7 @@ import asyncio
 import datetime as dt
 import json
 import logging
+import os
 import time
 from urllib.parse import urlencode
 
@@ -326,9 +327,91 @@ async def trends(secid: str, ndays: int = 1, ttl: float = 30.0) -> list[dict]:
     return _trends_trim(parse_trends(d.get("data") if d else None), ndays)
 
 
-# 资金流快照累积：push2 fflow 不可用时，用 emdatah5 快照按分钟累积成序列。
-_FLOW_HIST: dict[str, list[str]] = {}
+# 资金流快照累积：交易时段内每次调用都用 emdatah5 快照累积一分钟点（内存+磁盘），
+# push2 fflow 不可用/收盘后返回空 klines 时，用本地累积序列兜底，保证分时资金流
+# 图表在收盘后、进程重启后仍可画出当日完整序列（复盘用）。
+# 另保留最近一个有数据的昨日序列：9:15 开盘前当日无数据时展示昨日，界面不空。
+_FLOW_HIST: dict[str, list[str]] = {}   # 当日累积
+_FLOW_PREV: dict[str, list[str]] = {}   # 最近一个有数据的昨日
+_FLOW_DAY: str | None = None            # _FLOW_HIST 对应的日期
 _FLOW_MAX = 240
+_FLOW_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "flow_history.jsonl")
+_FLOW_LOADED = False
+_FLOW_FLUSHED: dict[str, str] = {}  # secid -> 已落盘的最后分钟 "YYYY-MM-DD HH:MM"
+
+
+def _flow_load() -> None:
+    """进程首次使用时从磁盘恢复（幂等）：当日 → _FLOW_HIST，最近一个有数据的
+    昨日 → _FLOW_PREV（9:15 前展示用）；磁盘只保留近 7 天的行。"""
+    global _FLOW_LOADED, _FLOW_DAY
+    if _FLOW_LOADED:
+        return
+    _FLOW_LOADED = True
+    today = time.strftime("%Y-%m-%d")
+    _FLOW_DAY = today
+    if not os.path.exists(_FLOW_PATH):
+        return
+
+    def _feed(bucket: dict[str, list[str]], secid: str, fline: str) -> None:
+        hist = bucket.setdefault(secid, [])
+        minute = fline.split(",", 1)[0]
+        if hist and hist[-1].split(",", 1)[0] == minute:
+            hist[-1] = fline
+        else:
+            hist.append(fline)
+            if len(hist) > _FLOW_MAX:
+                del hist[:len(hist) - _FLOW_MAX]
+
+    try:
+        by_day: dict[str, list[tuple[str, str]]] = {}
+        kept: list[str] = []
+        cutoff = (dt.datetime.now() - dt.timedelta(days=7)).strftime("%Y-%m-%d")
+        with open(_FLOW_PATH, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                d = r.get("date")
+                if not d or d < cutoff or d > today:
+                    continue
+                kept.append(line)
+                secid, fline = r.get("secid"), r.get("line")
+                if secid and fline:
+                    by_day.setdefault(d, []).append((secid, fline))
+        with open(_FLOW_PATH, "w", encoding="utf-8") as f:
+            for line in kept:
+                f.write(line + "\n")
+        for secid, fline in by_day.get(today, []):
+            _feed(_FLOW_HIST, secid, fline)
+            _FLOW_FLUSHED[secid] = fline.split(",", 1)[0]
+        prev_days = sorted(d for d in by_day if d < today)
+        if prev_days:
+            for secid, fline in by_day[prev_days[-1]]:
+                _feed(_FLOW_PREV, secid, fline)
+    except OSError as exc:
+        log.debug("资金流历史加载失败: %s", exc)
+
+
+def _flow_persist(secid: str, line: str) -> None:
+    """新分钟定稿时追加落盘；同一分钟内多次调用只落一次。"""
+    minute = line.split(",", 1)[0]
+    if _FLOW_FLUSHED.get(secid) == minute:
+        return
+    _FLOW_FLUSHED[secid] = minute
+    try:
+        os.makedirs(os.path.dirname(_FLOW_PATH), exist_ok=True)
+        with open(_FLOW_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(
+                {"date": minute.split(" ", 1)[0], "secid": secid, "line": line},
+                ensure_ascii=False) + "\n")
+    except OSError as exc:
+        log.debug("资金流历史落盘失败: %s", exc)
 
 
 def _hm_in_session(hm: str) -> bool:
@@ -345,41 +428,65 @@ def _now_in_session(now: dt.datetime | None = None) -> bool:
 async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 20.0) -> dict | None:
     """分钟级资金流序列。
 
-    1) push2 fflow（真·分钟序列，时间戳=行情时间）——tries=1 快速失败；
-    2) 否则用 emdatah5 getZJLXData 快照按分钟累积——但**只在交易时段累积**，
-       否则墙上时钟点(如午休 12:xx)会落在行情时间轴之外、图上一根柱都画不出。
+    1) 交易时段内：每次调用都用 emdatah5 getZJLXData 快照累积一分钟点
+       （内存+磁盘落盘），无论 push2 是否可用——保证收盘后/进程重启后
+       仍有当日完整序列；
+    2) push2 fflow（真·分钟序列，时间戳=行情时间）优先——tries=1 快速失败；
+    3) push2 无数据（收盘后常返回空 klines）时，用本地累积序列兜底；
+    4) 当日累积不足 2 点时（如 9:15 开盘前），用最近一个有数据的昨日序列
+       兜底，保证界面不空。
+
+    返回 {"klines": [...], "day": "YYYY-MM-DD"}（day 供前端判断是否昨日数据）。
+    注意累积的是快照的日累计值（f137 等为当日累计净流入），与 push2 的分钟增量
+    口径不同；下游的 flow_main_delta5m 等按累计口径计算（尾减首）。
     """
+    global _FLOW_DAY, _FLOW_HIST, _FLOW_PREV
+    _flow_load()
+    today = time.strftime("%Y-%m-%d")
+    if _FLOW_DAY != today:
+        # 跨天：昨日 ← 旧今日（若有数据；周末/节假日保持上一个交易日），今日清空
+        if _FLOW_HIST:
+            _FLOW_PREV = _FLOW_HIST
+        _FLOW_HIST = {}
+        _FLOW_FLUSHED.clear()
+        _FLOW_DAY = today
+    hist = _FLOW_HIST.setdefault(secid, [])
+    if _now_in_session():
+        # **只在交易时段累积**，否则墙上时钟点(如午休 12:xx)会落在行情时间轴之外、
+        # 图上一根柱都画不出。
+        q = await get_json(f"{_H5_URL}/getZJLXData",
+                           {"secid": secid, "fields": "f57,f58,f137,f140,f143,f146,f149",
+                            "ut": _H5_UT}, ttl=ttl, referer=_H5_REF)
+        row = (q or {}).get("data") if isinstance(q, dict) else None
+        if row:
+            ts = time.strftime("%Y-%m-%d %H:%M")
+            line = ",".join(str(x) for x in (
+                ts, _numf(row.get("f137")), _numf(row.get("f149")),
+                _numf(row.get("f146")), _numf(row.get("f143")), _numf(row.get("f140"))))
+            if hist and hist[-1].split(",", 1)[0] == ts:  # 同一分钟 → 覆盖
+                hist[-1] = line
+            else:
+                hist.append(line)
+                if len(hist) > _FLOW_MAX:
+                    del hist[:len(hist) - _FLOW_MAX]
+                _flow_persist(secid, line)
     d = await get_json("https://push2.eastmoney.com/api/qt/stock/fflow/kline/get",
                        {"secid": secid, "klt": klt, "lmt": lmt, "fields1": "f1,f2,f3,f7",
                         "fields2": "f51,f52,f53,f54,f55,f56", "ut": _UT},
                        ttl=ttl, tries=1)
     data = d.get("data") if d else None
     if data and len(data.get("klines") or []) >= 2:
-        return data
-    # emdatah5 单点快照 → 累积
-    q = await get_json(f"{_H5_URL}/getZJLXData",
-                       {"secid": secid, "fields": "f57,f58,f137,f140,f143,f146,f149",
-                        "ut": _H5_UT}, ttl=ttl, referer=_H5_REF)
-    row = (q or {}).get("data") if isinstance(q, dict) else None
-    today = time.strftime("%Y-%m-%d")
-    hist = _FLOW_HIST.get(secid)
-    if not hist or hist[-1].split(" ", 1)[0] != today:   # 跨日/首次 → 重置
-        hist = []
-        _FLOW_HIST[secid] = hist
-    if row and _now_in_session():
-        ts = time.strftime("%Y-%m-%d %H:%M")
-        line = ",".join(str(x) for x in (
-            ts, _numf(row.get("f137")), _numf(row.get("f149")),
-            _numf(row.get("f146")), _numf(row.get("f143")), _numf(row.get("f140"))))
-        if hist and hist[-1].split(",", 1)[0] == ts:      # 同一分钟 → 覆盖
-            hist[-1] = line
-        else:
-            hist.append(line)
-        if len(hist) > _FLOW_MAX:
-            del hist[:len(hist) - _FLOW_MAX]
+        return {"klines": data["klines"], "day": today}
     # 只回交易时段内的点（清掉任何历史脏点）
-    kept = [l for l in hist if _hm_in_session(l.split(",", 1)[0][-5:])]
-    return {"klines": kept} if kept else None
+    kept_today = [l for l in hist if _hm_in_session(l.split(",", 1)[0][-5:])]
+    if len(kept_today) >= 2:
+        return {"klines": kept_today, "day": today}
+    # 今日不足 2 点（9:15 前 / 首日无数据 / 收盘后首日）：用最近有数据的昨日兜底
+    prev = _FLOW_PREV.get(secid, [])
+    kept_prev = [l for l in prev if _hm_in_session(l.split(",", 1)[0][-5:])]
+    if kept_prev:
+        return {"klines": kept_prev, "day": kept_prev[-1].split(" ", 1)[0]}
+    return None
 
 
 # --------------------------------------------------------------------------

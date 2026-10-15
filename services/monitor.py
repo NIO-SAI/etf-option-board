@@ -10,13 +10,14 @@ import datetime as dt
 import logging
 
 from config import settings
-from services import alerts, market_service as ms, strategy
+from services import alerts, deploy as deploy_svc, market_service as ms, reversal, strategy
 from services.universe import ETFS
 
 log = logging.getLogger("monitor")
 
 _state: dict = {"running": False, "last_cycle": None, "cycles": 0, "last_error": None}
-# 上次关键时点已提醒记录
+# 上次关键时点已提醒记录（key 含日期；服务常驻不重启时，跨天自动恢复提醒，
+# 否则 key_time 告警只在进程启动当天生效一次）
 _key_fired: set[str] = set()
 
 
@@ -61,11 +62,15 @@ async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
             "text": "3分钟K线动能与价格背离，留意反转。",
         })
 
-    # 关键时点（针对关联指数较敏感的标的，只推一次/时点）
+    # 关键时点（每个交易日、每只标的、每个时点只推一次）
     if key_hm:
-        kk = f"{etf['code']}:{key_hm}"
+        today = dt.datetime.now().strftime("%Y-%m-%d")
+        kk = f"{today}:{etf['code']}:{key_hm}"
         if kk not in _key_fired and alerts.should_alert(etf["code"], "key_time", 300):
             _key_fired.add(kk)
+            # 顺手清理过期 key，防止常驻进程集合无限增长
+            for k in [k for k in _key_fired if not k.startswith(today)]:
+                _key_fired.discard(k)
             await alerts.publish({
                 "etf_code": etf["code"], "etf_name": name, "type": "key_time",
                 "level": "info", "dir": "neutral",
@@ -81,6 +86,15 @@ async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
             "title": "国家队护盘信号增强",
             "text": f"宽基ETF护盘评分 {nt_score}，短期关注反弹。",
         })
+
+    # 变盘开仓信号（多因子打分≥60；内部含 20 分钟同向冷却 + 15 分钟反向抑制）
+    try:
+        sig = await reversal.check(etf, ctx)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("变盘信号计算失败 %s: %s", etf["code"], exc)
+        sig = None
+    if sig:
+        await alerts.publish(sig)
 
 
 def _in_trading_window(now: dt.datetime) -> bool:
@@ -115,6 +129,11 @@ async def run_forever() -> None:
     log.info("监控循环启动，间隔 %ss", settings.poll_interval)
     while True:
         try:
+            # 自部署令牌：Agent 改完代码写 data/.deploy_token 即触发热更新（不分交易时段）
+            opts = deploy_svc.check_token()
+            if opts:
+                log.info("收到部署令牌，开始自部署: %s", opts.get("reason"))
+                await deploy_svc.deploy_now(**opts)  # 成功则退出进程，不返回
             await cycle()
             _state["last_error"] = None
         except asyncio.CancelledError:

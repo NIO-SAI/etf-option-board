@@ -9,7 +9,7 @@ import logging
 import re
 
 from config import settings
-from services import bs, em
+from services import bs, em, iv_history as ivh
 from services.universe import ETF_BY_CODE, ETFS
 
 log = logging.getLogger("option")
@@ -181,11 +181,12 @@ async def chain(etf_code: str) -> dict:
         "front_month": front,
         "count": len(contracts),
         "contracts": contracts,
-        "stats": _chain_stats(contracts, s, front),
+        "stats": _chain_stats(contracts, s, front, etf["code"]),
     }
 
 
-def _chain_stats(contracts: list[dict], s: float, front: int | None = None) -> dict:
+def _chain_stats(contracts: list[dict], s: float, front: int | None = None,
+                 code: str | None = None) -> dict:
     """ATM 隐波、隐波偏斜、认沽认购比（PCR）、平价套利偏离。"""
     if not contracts:
         return {}
@@ -221,9 +222,14 @@ def _chain_stats(contracts: list[dict], s: float, front: int | None = None) -> d
             if c_.get("last") and p_.get("last"):
                 synthetic = c_["last"] - p_["last"] + k
                 parity_gaps.append(round(synthetic - s, 4))
+    # 记入 IV 历史并算 20 日分位（买方择时用；失败/样本不足则为 None）
+    if code:
+        ivh.record(code, atm["iv"])
+    pctl20 = ivh.percentile(code, atm["iv"]) if code else None
     return {
         "near_month": near,
         "atm_iv": atm["iv"],
+        "atm_iv_pctl20": pctl20,
         "atm_iv_call": atm_iv_call,
         "atm_iv_put": atm_iv_put,
         "skew": skew,

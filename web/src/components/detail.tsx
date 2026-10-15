@@ -109,7 +109,8 @@ export function LlmPanel({ code }: { code: string }) {
   };
   const d = res?.decision;
   const actionLabel = d?.action === "buy_call" ? "买入认购" : d?.action === "buy_put" ? "买入认沽" : d?.action === "wait" ? "观望" : "—";
-  const variant = d?.direction === "call" ? "success" : d?.direction === "put" ? "destructive" : "secondary";
+  // 全站约定：看多=红、看空=绿（与 BiasBar / 左侧方向标签一致）
+  const variant = d?.direction === "call" ? "destructive-light" : d?.direction === "put" ? "success-light" : "secondary";
   return (
     <Frame spacing="sm">
       <FramePanel dense>

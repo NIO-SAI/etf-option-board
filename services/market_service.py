@@ -57,8 +57,10 @@ async def trends(secid: str, ndays: int = 1) -> list[dict]:
     return em.parse_trends(await em.trends(secid, ndays=ndays))
 
 
-async def flow_series(secid: str) -> list[dict]:
-    return em.parse_fflow(await em.fflow(secid))
+async def flow_series(secid: str) -> tuple[list[dict], str | None]:
+    """返回 (分钟点列表, 数据所属日期)。9:15 前等当日无数据时日期为昨日。"""
+    raw = await em.fflow(secid)
+    return em.parse_fflow(raw), (raw or {}).get("day")
 
 
 def _agg(bars: list[dict], n: int) -> list[dict]:
@@ -73,14 +75,27 @@ def _agg(bars: list[dict], n: int) -> list[dict]:
     return out
 
 
+def _snap_num(v):
+    """资金流快照取数：保留 None（与 em.num 遇空值回 0 不同，避免把"无数据"画成 0）。"""
+    if v in (None, "-", ""):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 async def etf_context(code: str, etf_secid: str) -> dict:
     """单只 ETF 的行情 + 分钟K + 分时 + 资金流。"""
-    q, k1, tr, fl = await asyncio.gather(
+    q, k1, tr, flr, fsnap = await asyncio.gather(
         quote(etf_secid),
         kline(etf_secid, klt=1, lmt=240),
         trends(etf_secid),
         flow_series(etf_secid),
+        # 当日累计资金流快照（收盘后分钟序列无数据时，前端仍可用此数字展示）
+        em.stock_get(etf_secid, "f137,f140,f143,f146,f149", ttl=30.0),
     )
+    fl, flow_day = flr
     closes = [b["close"] for b in k1]
     vols = [b["volume"] for b in k1]
     # 3 分钟 K 线（由 1 分钟本地聚合，不额外请求）——MACD 背离按 3 分钟口径监测
@@ -88,12 +103,19 @@ async def etf_context(code: str, etf_secid: str) -> dict:
     flow_tail = fl[-5:] if fl else []
     flow_delta = (flow_tail[-1]["main"] - flow_tail[0]["main"]) if len(flow_tail) >= 2 else None
     return {
-        "quote": q, "kline_1m": k1, "trends": tr, "flow": fl,
+        "quote": q, "kline_1m": k1, "trends": tr, "flow": fl, "flow_day": flow_day,
         "macd": macd_state(closes),        # 1 分钟：金叉/死叉
         "macd3": macd_state(closes3),      # 3 分钟：顶/底背离监测
         "volume": volume_stats(vols),
         "flow_main_delta5m": flow_delta,
         "flow_main_total": fl[-1]["main"] if fl else 0,
+        "flow_snapshot": {
+            "main": _snap_num(fsnap.get("f137")),
+            "small": _snap_num(fsnap.get("f140")),
+            "mid": _snap_num(fsnap.get("f143")),
+            "big": _snap_num(fsnap.get("f146")),
+            "super": _snap_num(fsnap.get("f149")),
+        } if fsnap else None,
         "pct": pct_change(closes, 5),
     }
 
@@ -178,9 +200,10 @@ async def track_index_state(track: str) -> dict:
     secid = TRACK_INDEX.get(track)
     if not secid:
         return {}
-    q, sup, tr, fl = await asyncio.gather(
+    q, sup, tr, flr = await asyncio.gather(
         quote(secid), index_support_state(secid), trends(secid), flow_series(secid))
+    fl, flow_day = flr
     k1 = await kline(secid, klt=5, lmt=60)
     closes = [b["close"] for b in k1]
     return {"secid": secid, "quote": q, "support": sup, "trends": tr, "flow": fl,
-            "macd": macd_state(closes)}
+            "flow_day": flow_day, "macd": macd_state(closes)}

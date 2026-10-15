@@ -38,7 +38,7 @@ const base = {
 
 /** ETF 分时：左轴价（标的/关联指数），右轴主力净流入（标的线/指数柱）。 */
 export function IntradayChart({
-  trends, indexTrends = [], indexName = "", flow, indexFlow = [], height = 240, title, id,
+  trends, indexTrends = [], indexName = "", flow, indexFlow = [], height = 240, title, id, signals = [],
 }: {
   trends: any[];
   indexTrends?: any[];
@@ -48,11 +48,31 @@ export function IntradayChart({
   height?: number;
   title?: string;
   id?: string;
+  signals?: any[];
 }) {
   const option = useMemo(() => {
     const tt = (t: any) => (t || "").slice(-5);
     const times = trends?.map((t) => tt(t.time)) ?? [];
     const prices = trends?.map((t) => t.price) ?? [];
+    const toMin = (hm: string) => Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5));
+    const sigPts = (signals ?? []).map((s: any) => {
+      const hm = (s.ts || "").slice(11, 16);
+      if (!hm || times.length === 0) return null;
+      const target = toMin(hm);
+      let best = 0, bestDiff = 1e9;
+      times.forEach((t, i) => {
+        const d = Math.abs(toMin(t) - target);
+        if (d < bestDiff) { bestDiff = d; best = i; }
+      });
+      if (bestDiff > 10 || prices[best] == null) return null;
+      const bull = s.dir === "bull";
+      return {
+        coord: [times[best], prices[best]],
+        value: (bull ? "多" : "空") + Math.round(s.score ?? 0),
+        itemStyle: { color: bull ? "#ef4444" : "#16a34a" },
+        symbolRotate: bull ? 0 : 180,
+      };
+    }).filter(Boolean);
     const idxMap = new Map((indexTrends ?? []).map((t) => [tt(t.time), t.price]));
     const idxPx = times.map((t) => idxMap.get(t) ?? null);
     const flowMap = new Map((flow ?? []).map((f) => [tt(f.time), f.main]));
@@ -101,7 +121,12 @@ export function IntradayChart({
       ],
       series: [
         { name: "标的ETF", type: "line", data: prices, showSymbol: false, lineStyle: { width: 1.4, color: "#60a5fa" },
-          areaStyle: { color: "rgba(96,165,250,0.08)" } },
+          areaStyle: { color: "rgba(96,165,250,0.08)" },
+          ...(sigPts.length ? { markPoint: {
+            symbol: "triangle", symbolSize: 11,
+            label: { fontSize: 9, color: "#fff", formatter: "{c}" },
+            data: sigPts,
+          } } : {}), },
         { name: idxLabel, type: "line", yAxisIndex: 1, data: idxPx, showSymbol: false,
           lineStyle: { width: 1.3, color: "#d97706", type: "dashed" } },
         { name: "主力净流入", type: "line", yAxisIndex: 2, data: mains, showSymbol: false,
@@ -110,7 +135,7 @@ export function IntradayChart({
           itemStyle: { color: (p: any) => (p.value >= 0 ? "rgba(239,68,68,0.5)" : "rgba(34,197,94,0.5)") } },
       ],
     };
-  }, [trends, indexTrends, indexName, flow, indexFlow]);
+  }, [trends, indexTrends, indexName, flow, indexFlow, signals]);
   return <ReactECharts key={id} option={option} style={{ height }} />;
 }
 

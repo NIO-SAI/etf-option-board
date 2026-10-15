@@ -32,5 +32,6 @@ export const api = {
     return r.json();
   },
   alerts: () => get("/alerts?limit=60"),
+  reversalSignals: (code: string) => get(`/reversal/signals?code=${code}`),
   monitorCycle: async () => (await fetch(`${BASE}/monitor/cycle`, { method: "POST" })).json(),
 };
