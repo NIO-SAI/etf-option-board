@@ -17,11 +17,18 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
 - **Python 解释器必须用** `/Users/xinxin/.browser-use-env/bin/python3`（含 fastapi/uvicorn/httpx）。
 - 前端 npm 依赖走国内镜像（npmmirror），脚本已设 `npm_config_registry`。
 - 无测试框架；用 `curl http://127.0.0.1:6799/api/health` 做冒烟。
+- 后端托管 `web/dist`（生产模式）：**改前端后必须 `bash web/build.sh`**，否则页面不变。
+  HTML 响应带 `no-store`，页脚有「构建 <bundle-hash>」戳可用于核对已加载的构建。
+- 已装 LaunchAgent `com.etf-option-board` 常驻 `:6799`（崩溃自动拉起）。手动起服务前先确认
+  端口未被它占用（`launchctl print gui/$(id -u)/com.etf-option-board`），日志 `/tmp/etf-option-board.log`。
 
 ## 架构与约定
 
 - `services/em.py` 是唯一网络出口：手拼 query（`safe=",:"`，否则 `fs=m:10` 变 `%3A` 返回空），
-  直连失败自动退 `curl` 并记忆路径，统一 TTL 缓存。新接口都加在这里。
+  直连失败自动退 `curl` 并记忆路径，统一 TTL 缓存；`get_json` 失败**返回上次成功缓存**
+  （stale-while-error，绝不抛异常）。新接口都加在这里。
+- 加一个接口：后端路由写 `routers/api.py`（前缀 `/api`），业务逻辑放 `services/`；
+  前端在 `web/src/lib/api.ts` 加方法，轮询用 `web/src/lib/usePolling.ts`。K 线 `klt∈{1,5,15,30,60,101}`（3 分钟本地由 1 分钟聚合）。
 - **数据源策略（重要，2026-10 起）**：本机出口经代理（境外 IP），东财 `push2/push2his` 常被反爬
   限流（空回包）。故行情/期权链主源改用 **`emdatah5.eastmoney.com`**（`getZJLXData`＝个股/指数/
   外围/期权行情+资金流，`getZDYLBData`＝clist 同参同构），K线/分时走**腾讯**（`ifzq.gtimg.cn`），
