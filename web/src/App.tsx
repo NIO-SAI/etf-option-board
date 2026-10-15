@@ -170,6 +170,8 @@ export default function App() {
 
         {/* 右：决策栏 */}
         <div className="flex flex-col gap-3">
+          <AlertCenter />
+
           <Frame spacing="sm">
             <FramePanel dense>
               <FrameHeader><FrameTitle className="text-xs">日内方向与信号</FrameTitle></FrameHeader>
@@ -204,8 +206,6 @@ export default function App() {
           </Frame>
 
           <LlmPanel code={etfCode} />
-
-          <AlertCenter />
         </div>
       </main>
       <footer className="px-4 py-3 text-center text-[10px] text-muted-foreground">
