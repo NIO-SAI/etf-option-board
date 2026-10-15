@@ -69,7 +69,6 @@ EXTERNAL = [
     {"secid": "100.UDI",  "name": "美元指数",    "key": "dxy"},
     {"secid": "101.GC00Y", "name": "COMEX黄金",  "key": "gold"},
     {"secid": "102.CL00Y", "name": "NYMEX原油",  "key": "oil"},
-    {"secid": "100.BDI",  "name": "波罗的海BDI", "key": "bdi"},
 ]
 
 # 国家队护盘常买的宽基 ETF（判断护盘信号）

@@ -39,6 +39,14 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
 - 隐波/希腊字母由 `services/bs.py` 自算（Eastmoney 不直接给），到期日 = 到期月第 4 个星期三。
 - 前端组件：REUI（`web/src/components/reui/*`，Tailwind v4 语法）与自研 shadcn 风格
   `web/src/components/ui/*` 混用；图表用 ECharts（`components/charts`）。
+- **左侧面板布局约定**：`EtfList` 里「期权标的」列表是唯一的滚动区（`flex-1 overflow-auto`），
+  「大盘指数」是**面板固定底栏**（不随列表滚动、矮窗口时内部滚动）——保证 4 个指数行
+  始终完整可见。别再把它塞回滚动列表，那正是"看不到某一行"类投诉的根源。
+- **排查"用户设备上页面不对"的标准手法**（用户常经 Tailscale 从另一台设备访问，本地无法复现）：
+  前端加临时信标，把 bundle 哈希/UA/视口/滚动状态/目标元素 `getBoundingClientRect`+
+  `getComputedStyle` 编码进一次 `fetch('/api/health?dbg=...')` 的 query，uvicorn 访问日志
+  （`/tmp/etf-option-board.log`）会原样记录，无需重启后端、无需用户操作（用户刷新即可）。
+  用 `/tmp/etf-option-board.log` 按客户端 IP 区分设备。**定位后必须删信标并重建。**
 - 所有 API 失败**降级返回 `{error}`，不抛 500**。
 
 ## 依赖的外部资产
