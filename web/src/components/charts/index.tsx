@@ -235,6 +235,12 @@ export function OverlayChart({
     const etfMap = new Map((etfTrends ?? []).map((t) => [norm(t.time), t.price]));
     const flowMap = new Map((flow ?? []).map((f) => [norm(f.time), f.main]));
     const mains = times.map((t) => flowMap.get(t) ?? null);
+    // 资金线要「红涨绿跌」。注意不能靠 visualMap 给线段分色：ECharts 5.6 对 line
+    // 做视觉映射会在 LineView.render→getVisualGradient 处抛 "Cannot read properties
+    // of undefined (reading 'coord')"，整张图会被 ErrorBoundary 吃掉。改为拆成正/负
+    // 两条同名 series；非本方向的点填 0（而非 null），保证穿越 0 轴时线段连续。
+    const flowPos = mains.map((v) => (v == null ? null : (v > 0 ? v : 0)));
+    const flowNeg = mains.map((v) => (v == null ? null : (v <= 0 ? v : 0)));
 
     // 昨收 -> 百分比。缺昨收（未选合约 / 新上市 / quote 未就绪）则整条线不画。
     const toPctSeries = (src: Map<any, any>, prev: number | null) => {
@@ -278,23 +284,29 @@ export function OverlayChart({
         formatter: (ps: any) => {
           const arr = Array.isArray(ps) ? ps : [ps];
           const head = arr[0]?.axisValueLabel ?? arr[0]?.name ?? "";
-          const body = arr.map((p: any) => {
+          // 资金已拆成正/负两条（只为给线段分色），tooltip 只呈现真实方向的那一条
+          const flowReal = arr.find((p: any) => p.seriesName === "主力净流入" && Number(p.value) !== 0);
+          const rows: string[] = [];
+          let flowShown = false;
+          for (const p of arr) {
+            if (p.seriesName === "主力净流入") {
+              if (flowShown) continue;          // 第二条是同名的反向系列，跳过
+              flowShown = true;
+              const src = flowReal ?? p;
+              const n = Number(src?.value);
+              const val = src && src.value !== null && isFinite(n) ? `${Math.round(n / 1e4)}万` : "—";
+              rows.push(`${p.marker}${p.seriesName} <b>${val}</b>`);
+              continue;
+            }
             const n = Number(p.value);
             let val = "—";
             if (p.value !== null && p.value !== undefined && isFinite(n)) {
-              // 价格系列已是百分比；主力仍是金额（元），保持「万」口径
-              val = p.seriesName === "主力净流入" ? `${Math.round(n / 1e4)}万` : `${n.toFixed(2)}%`;
+              val = `${n.toFixed(2)}%`;   // 价格系列已是百分比
             }
-            return `${p.marker}${p.seriesName} <b>${val}</b>`;
-          }).join("<br/>");
-          return `${head}<br/>${body}`;
+            rows.push(`${p.marker}${p.seriesName} <b>${val}</b>`);
+          }
+          return `${head}<br/>${rows.join("<br/>")}`;
         },
-      },
-      // 资金线按 0 分界分段着色（0 以上红=净流入，0 以下绿=净流出）：
-      // 折线默认整条单色，只能借 visualMap 把「红涨绿跌」搬到线段上。
-      visualMap: {
-        show: false, type: "piecewise" as const, seriesIndex: 2, dimension: 1,
-        pieces: [{ gt: 0, color: UP }, { lte: 0, color: DOWN }],
       },
       xAxis: { ...base.xAxisBase, data: times },
       yAxis: [
@@ -316,8 +328,11 @@ export function OverlayChart({
         { name: "标的涨跌幅", type: "line", yAxisIndex: 1, data: etfPct ?? [], showSymbol: false, connectNulls: false,
           lineStyle: { width: 1.4, color: "#a1a1aa" },
           ...(!optPct && etfPct ? { markLine: zeroLine } : {}) },
-        { name: "主力净流入", type: "line", yAxisIndex: 2, data: mains, showSymbol: false,
-          connectNulls: false, lineStyle: { width: 1.2 } },
+        // 同名拆两条只为让红涨绿跌落到线段上；legend 按 name 聚合，仍只显示一项
+        { name: "主力净流入", type: "line", yAxisIndex: 2, data: flowPos, showSymbol: false,
+          connectNulls: false, lineStyle: { width: 1.2, color: UP } },
+        { name: "主力净流入", type: "line", yAxisIndex: 2, data: flowNeg, showSymbol: false,
+          connectNulls: false, lineStyle: { width: 1.2, color: DOWN } },
       ],
     };
   }, [optTrends, etfTrends, flow, optPrevClose, etfPrevClose]);
