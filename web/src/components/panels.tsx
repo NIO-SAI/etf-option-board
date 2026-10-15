@@ -73,10 +73,10 @@ export function EtfList({
           })}
         </div>
 
-        {/* 大盘指数：面板固定底栏（ETF 列表滚动、本区常驻可见），固定清单保证 4 行必渲染 */}
-        <div className="shrink-0 border-t border-border/60 bg-card">
+        {/* 大盘指数：面板固定底栏（ETF 列表滚动、本区常驻可见）；窗口过矮时本区内部滚动，保证不被裁切 */}
+        <div className="flex min-h-0 flex-col border-t border-border/60 bg-card">
           <div className="px-3 py-1.5 text-[10px] font-medium text-muted-foreground">大盘指数（{indexRows.length}）</div>
-          <div className="divide-y divide-border/60">
+          <div className="divide-y divide-border/60 overflow-auto">
             {indexRows.map((ix) => {
               const q = ix.quote;
               return (

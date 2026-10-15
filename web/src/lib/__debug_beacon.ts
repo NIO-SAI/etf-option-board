@@ -2,12 +2,12 @@
 // 原理：页面加载后周期性把客户端真实 DOM 状态编码进一次 GET 的 query，uvicorn 访问日志原样记录。
 const TAG = "dbg7f3a";
 
-function box(r: HTMLElement) {
+function box(r: Element) {
   const b = r.getBoundingClientRect();
   return `y${Math.round(b.top)}-${Math.round(b.bottom)} h${Math.round(b.height)}`;
 }
 
-function clipState(r: HTMLElement, clip?: { top: number; bottom: number }) {
+function clipState(r: Element, clip?: { top: number; bottom: number }) {
   if (!clip) return "-";
   const b = r.getBoundingClientRect();
   if (b.bottom <= clip.top || b.top >= clip.bottom) return "OUTSIDE_CLIP";
@@ -15,8 +15,8 @@ function clipState(r: HTMLElement, clip?: { top: number; bottom: number }) {
   return "INSIDE";
 }
 
-function rowDesc(r: HTMLElement, clip?: { top: number; bottom: number }) {
-  const cs = getComputedStyle(r);
+function rowDesc(r: Element, clip?: { top: number; bottom: number }) {
+  const cs = getComputedStyle(r as HTMLElement);
   const name = r.querySelector("span.truncate") as HTMLElement | null;
   const ncs = name ? getComputedStyle(name) : null;
   const svg = r.querySelector("svg");
@@ -25,32 +25,28 @@ function rowDesc(r: HTMLElement, clip?: { top: number; bottom: number }) {
 
 function report(phase: string) {
   try {
-    // 大盘指数分区标题（可能在滚动容器内，也可能是固定底栏）
+    const view = { top: 0, bottom: window.innerHeight };
+    // 「大盘指数（N）」小标题：无元素子节点的纯文本 div
     const hdr = [...document.querySelectorAll("div")].find(
-      (d) => (d.textContent || "").trim().startsWith("大盘指数（"),
+      (d) => d.children.length === 0 && (d.textContent || "").trim().startsWith("大盘指数（"),
     ) as HTMLElement | undefined;
     const scroller = document.querySelector("div.overflow-auto") as HTMLElement | null;
-    const view = { top: 0, bottom: window.innerHeight };
     const lines = [
       phase,
       `vp=${window.innerWidth}x${window.innerHeight}@${window.devicePixelRatio}`,
       `pageY=${Math.round(window.scrollY)}`,
-      `scroller=${scroller ? `${scroller.clientHeight}/${scroller.scrollHeight}@${Math.round(scroller.scrollTop)} vis${Math.round(scroller.getBoundingClientRect().top)}-${Math.round(scroller.getBoundingClientRect().bottom)}` : "none"}`,
+      `scroller=${scroller ? `${scroller.clientHeight}/${scroller.scrollHeight}@${Math.round(scroller.scrollTop)} ${box(scroller)}` : "none"}`,
     ];
-    if (!hdr) {
+    if (!hdr || !hdr.parentElement) {
       lines.push("hdr=NOT_FOUND");
     } else {
       const footer = hdr.parentElement as HTMLElement;
-      const fb = footer.getBoundingClientRect();
-      const rows = [...footer.children]
-        .filter((c) => c !== hdr)
-        .flatMap((c) => [...(c as HTMLElement).children])
-        .concat([...footer.children].filter((c) => c !== hdr && (c as HTMLElement).children.length === 0 ? false : true))
-        .filter((c) => (c as HTMLElement).tagName === "DIV" && (c.textContent || "").length > 4);
+      const rowsWrap = [...footer.children].find((c) => c !== hdr && c.children.length > 0) as HTMLElement | undefined;
+      const rows = rowsWrap ? [...rowsWrap.children] : [];
       lines.push(
-        `footer=${box(footer)} bottomGapToScreen=${Math.round(window.innerHeight - fb.bottom)}`,
+        `footer=${box(footer)} gapToBottom=${Math.round(window.innerHeight - footer.getBoundingClientRect().bottom)}`,
         `hdr=${rowDesc(hdr, view)}`,
-        `idx=${rows.map((r) => rowDesc(r as HTMLElement, view)).join(" ; ")}`,
+        `idx=${rows.map((r) => rowDesc(r, view)).join(" ; ")}`,
       );
     }
     void fetch(`/api/health?${TAG}=${encodeURIComponent(lines.join(" | "))}`, { cache: "no-store" }).catch(() => {});
