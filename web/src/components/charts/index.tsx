@@ -174,15 +174,21 @@ export function KlineChart({ bars, height = 260, id }: { bars: any[]; height?: n
   return <ReactECharts key={id} option={option} style={{ height }} />;
 }
 
-/** 合约分时叠加：期权价（左轴）+ 标的ETF价（右轴）+ 主力资金（柱，副轴）。 */
+/** 合约分时叠加：期权涨跌幅（右轴 %）+ 标的ETF涨跌幅（独立右轴 %）+ 主力资金（柱，副轴）。
+ *  两条价格线各自按昨收换算为百分比、各自 0 居中对称：若共用一根轴，期权（日内可达数十%）
+ *  会把标的线压成一条贴着 0 的直线（实测标的 -1.21% vs 合约 -34.99%~+208.70%）。
+ *  左轴已移除，右侧只显示期权 % 一列标签。
+ */
 export function OverlayChart({
-  optTrends, etfTrends, flow, height = 300, id,
+  optTrends, etfTrends, flow, height = 300, id, optPrevClose = null, etfPrevClose = null,
 }: {
   optTrends: any[];
   etfTrends: any[];
   flow: any[];
   height?: number;
   id?: string;
+  optPrevClose?: number | null;
+  etfPrevClose?: number | null;
 }) {
   const option = useMemo(() => {
     const norm = (t: any) => (t || "").slice(-5);
@@ -191,32 +197,86 @@ export function OverlayChart({
     const optMap = new Map((optTrends ?? []).map((t) => [norm(t.time), t.price]));
     const etfMap = new Map((etfTrends ?? []).map((t) => [norm(t.time), t.price]));
     const flowMap = new Map((flow ?? []).map((f) => [norm(f.time), f.main]));
-    const optPx = times.map((t) => optMap.get(t) ?? null);
-    const etfPx = times.map((t) => etfMap.get(t) ?? null);
     const mains = times.map((t) => flowMap.get(t) ?? null);
+
+    // 昨收 -> 百分比。缺昨收（未选合约 / 新上市 / quote 未就绪）则整条线不画。
+    const toPctSeries = (src: Map<any, any>, prev: number | null) => {
+      if (!prev || !(prev > 0)) return null;
+      const arr: (number | null)[] = times.map((t) => {
+        const p = src.get(t);
+        return p != null && isFinite(Number(p)) ? ((Number(p) - prev) / prev) * 100 : null;
+      });
+      return arr.some((v) => v !== null) ? arr : null;
+    };
+    const optPct = toPctSeries(optMap, optPrevClose ?? null);
+    const etfPct = toPctSeries(etfMap, etfPrevClose ?? null);
+    // 右侧只出一列标签，且必须跟「实际画出来的那条线」匹配：
+    // 期权线存在时打期权%（默认诉求）；期权缺失（未选合约/缺昨收）时改打标的%，
+    // 否则右侧会留下一列 ±0.50% 的空档刻度，与图上真实画的标的线量程不符。
+    const labelOpt = !!optPct;
+    const labelEtf = !optPct && !!etfPct;
+    // 0 居中对称；最小带宽兜底，避免横盘时把噪声放大成假波动（也防极值=0 时轴退化）
+    const MIN_SPAN = 0.5;
+    const symRange = (arr: (number | null)[] | null) => {
+      const abs = (arr ?? []).filter((v): v is number => v !== null && isFinite(v)).map(Math.abs);
+      const m = Math.max(MIN_SPAN, ...abs);
+      return { min: -m, max: m, scale: false as const };
+    };
+
+    const zeroLine = {
+      silent: true, symbol: "none" as const,
+      lineStyle: { color: "#a1a1aa", type: "dashed" as const, width: 1 },
+      label: { show: false }, data: [{ yAxis: 0 }],
+    };
     return {
       ...base,
-      grid: { left: 56, right: 40, top: 30, bottom: 40 },
-      legend: { top: 2, textStyle: { color: AXIS }, itemWidth: 12, itemHeight: 8 },
+      grid: { left: 10, right: 56, top: 30, bottom: 40 },
+      legend: {
+        top: 2, textStyle: { color: AXIS }, itemWidth: 12, itemHeight: 8,
+        data: [...(optPct ? ["期权涨跌幅"] : []), ...(etfPct ? ["标的涨跌幅"] : []), "主力净流入"],
+      },
+      tooltip: {
+        ...base.tooltip,
+        formatter: (ps: any) => {
+          const arr = Array.isArray(ps) ? ps : [ps];
+          const head = arr[0]?.axisValueLabel ?? arr[0]?.name ?? "";
+          const body = arr.map((p: any) => {
+            const n = Number(p.value);
+            let val = "—";
+            if (p.value !== null && p.value !== undefined && isFinite(n)) {
+              // 价格系列已是百分比；主力仍是金额（元），保持「万」口径
+              val = p.seriesName === "主力净流入" ? `${Math.round(n / 1e4)}万` : `${n.toFixed(2)}%`;
+            }
+            return `${p.marker}${p.seriesName} <b>${val}</b>`;
+          }).join("<br/>");
+          return `${head}<br/>${body}`;
+        },
+      },
       xAxis: { ...base.xAxisBase, data: times },
       yAxis: [
-        { ...base.yAxisBase, position: "left", name: "期权", nameTextStyle: { color: "#60a5fa" },
-          axisLabel: { color: "#60a5fa", formatter: (v: number) => v.toFixed(4) } },
-        { ...base.yAxisBase, position: "right", name: "标的ETF", nameTextStyle: { color: "#fbbf24" },
-          splitLine: { show: false }, axisLabel: { show: false } },
-        // 主力净流入单独一根轴，避免与标的ETF价共用轴导致价格被压成直线
+        // 0 右：期权涨跌幅 %
+        { ...base.yAxisBase, position: "right", ...symRange(optPct),
+          axisLabel: { show: labelOpt, color: "#60a5fa", formatter: (v: number) => `${v.toFixed(2)}%` } },
+        // 1 右：标的ETF 涨跌幅 %（自有量纲；默认隐藏标签，避免两列 % 同一水平线互相误读）
+        { ...base.yAxisBase, position: "right", ...symRange(etfPct),
+          splitLine: { show: false },
+          axisLabel: { show: labelEtf, color: "#fbbf24", formatter: (v: number) => `${v.toFixed(2)}%` } },
+        // 2 右：主力净流入（金额，独立轴）
         { ...base.yAxisBase, position: "right", offset: 60, name: "主力", nameTextStyle: { color: "#7c3aed" },
           splitLine: { show: false }, axisLabel: { show: false } },
       ],
       series: [
-        { name: "期权价", type: "line", data: optPx, showSymbol: false, lineStyle: { width: 1.6, color: "#60a5fa" },
-          areaStyle: { color: "rgba(96,165,250,0.10)" } },
-        { name: "标的ETF", type: "line", yAxisIndex: 1, data: etfPx, showSymbol: false, lineStyle: { width: 1.4, color: "#fbbf24" } },
+        { name: "期权涨跌幅", type: "line", data: optPct ?? [], showSymbol: false, connectNulls: false,
+          lineStyle: { width: 1.6, color: "#60a5fa" }, areaStyle: { color: "rgba(96,165,250,0.08)" },
+          ...(optPct ? { markLine: zeroLine } : {}) },
+        { name: "标的涨跌幅", type: "line", yAxisIndex: 1, data: etfPct ?? [], showSymbol: false, connectNulls: false,
+          lineStyle: { width: 1.4, color: "#fbbf24" },
+          ...(!optPct && etfPct ? { markLine: zeroLine } : {}) },
         { name: "主力净流入", type: "bar", yAxisIndex: 2, data: mains, barWidth: "50%", opacity: 0.25,
           itemStyle: { color: (p: any) => (p.value >= 0 ? UP : DOWN) } },
       ],
     };
-  }, [optTrends, etfTrends, flow]);
+  }, [optTrends, etfTrends, flow, optPrevClose, etfPrevClose]);
   return <ReactECharts key={id} option={option} style={{ height }} />;
 }
 
