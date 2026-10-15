@@ -71,29 +71,32 @@ export function EtfList({
               </button>
             );
           })}
+        </div>
 
-          {/* 大盘指数（只读补充信息，非期权标的；固定清单保证始终显示）放在期权标的下方 */}
+        {/* 大盘指数：面板固定底栏（ETF 列表滚动、本区常驻可见），固定清单保证 4 行必渲染 */}
+        <div className="shrink-0 border-t border-border/60 bg-card">
           <div className="px-3 py-1.5 text-[10px] font-medium text-muted-foreground">大盘指数（{indexRows.length}）</div>
-          {indexRows.map((ix) => {
-            const q = ix.quote;
-            return (
-              <div key={ix.code} className="flex w-full items-center gap-2.5 px-3 py-2.5">
-                <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate text-xs font-medium">{ix.name}</span>
-                    <Badge variant="outline" size="xs" className="shrink-0">指数</Badge>
+          <div className="divide-y divide-border/60">
+            {indexRows.map((ix) => {
+              const q = ix.quote;
+              return (
+                <div key={ix.code} className="flex w-full items-center gap-2.5 px-3 py-2.5">
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-xs font-medium">{ix.name}</span>
+                      <Badge variant="outline" size="xs" className="shrink-0">指数</Badge>
+                    </div>
+                    <div className="truncate text-[10px] text-muted-foreground tnum">{ix.code}</div>
                   </div>
-                  <div className="truncate text-[10px] text-muted-foreground tnum">{ix.code}</div>
+                  <Sparkline data={trendsMap[ix.code] ?? []} up={(q?.pct ?? 0) >= 0} width={40} height={26} />
+                  <div className="w-14 shrink-0 text-right">
+                    <div className="text-xs font-semibold tnum">{q ? nf(q.price, 2) : "—"}</div>
+                    <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>
+                  </div>
                 </div>
-                <Sparkline data={trendsMap[ix.code] ?? []} up={(q?.pct ?? 0) >= 0} width={40} height={26} />
-                <div className="w-14 shrink-0 text-right">
-                  <div className="text-xs font-semibold tnum">{q ? nf(q.price, 2) : "—"}</div>
-                  <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>
-                </div>
-              </div>
-            );
-          })}
-
+              );
+            })}
+          </div>
         </div>
       </FramePanel>
     </Frame>
