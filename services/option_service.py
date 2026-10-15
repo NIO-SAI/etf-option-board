@@ -17,7 +17,11 @@ log = logging.getLogger("option")
 # clist 期权列表字段
 OPT_LIST_FIELDS = "f12,f13,f14,f2,f3,f4,f5,f6,f15,f16,f17,f18,f31,f32,f108,f161,f162,f152"
 
-_NAME_RE = re.compile(r"^(?P<prefix>.+?)(?P<cp>购|沽)(?P<month>\d{1,2})月(?P<strike>\d+)$")
+# 期权简称：前缀 + 购/沽 + N月 + 行权价（×1000 的整数）。
+# 末尾可能带调整合约后缀字母（如「500ETF沽12月6876A」，除权调整合约）——
+# 不匹配会把 month 解析成 0，进而把该标的的 front_month 判成 0、T 型报价整表错月。
+_NAME_RE = re.compile(
+    r"^(?P<prefix>.+?)(?P<cp>购|沽)(?P<month>\d{1,2})月(?P<strike>\d+)(?P<adj>[A-Za-z]*)$")
 
 
 def parse_name(name: str) -> dict | None:
@@ -165,6 +169,8 @@ async def chain(etf_code: str) -> dict:
     # 到期序列按剩余天数升序（近月在前）
     exp_map: dict[int, dict] = {}
     for c in contracts:
+        if not c["month"]:            # 解析失败的合约不参与到期序列，避免 front_month=0
+            continue
         exp_map.setdefault(c["month"], {"month": c["month"], "expiry": c["expiry"], "days": c["days"]})
     expiries = sorted(exp_map.values(), key=lambda x: x["days"])
     front = expiries[0]["month"] if expiries else None
@@ -231,7 +237,12 @@ def t_quote(chain_data: dict, month: int | None = None) -> dict:
     contracts = chain_data.get("contracts") or []
     if not contracts:
         return {"strikes": [], "month": month}
-    month = month or chain_data.get("front_month") or chain_data["expiries"][0]
+    month = month or chain_data.get("front_month")
+    exps = chain_data.get("expiries") or []
+    if not month:
+        month = exps[0] if exps else None
+    if not month:
+        return {"month": month, "rows": []}
     rows: dict[float, dict] = {}
     for c in contracts:
         if c["month"] != month:

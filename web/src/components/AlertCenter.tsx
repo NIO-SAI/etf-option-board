@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
@@ -21,7 +21,13 @@ export function AlertCenter() {
   const seen = useRef<Set<number>>(new Set());
 
   useEffect(() => {
-    api.alerts().then((d) => setItems(d.items ?? [])).catch(() => {});
+    api.alerts().then((d) => {
+      const list = d.items ?? [];
+      // 关键：把首屏历史的 id 记入 seen，否则 SSE 连接时的 backfill（重发最近 10 条、
+      // 且带相同 id）会被当成新告警再次插入，历史告警在列表里重复 2~3 次。
+      list.forEach((a: any) => seen.current.add(a.id));
+      setItems(list);
+    }).catch(() => {});
   }, []);
 
   const onAlert = (a: any) => {
@@ -40,6 +46,12 @@ export function AlertCenter() {
   };
   useAlertStream(onAlert);
 
+  // 兜底去重：无论如何渲染层都不出现同一 id 的两行
+  const rows = useMemo(() => {
+    const s = new Set<any>();
+    return items.filter((a) => a.id != null && !s.has(a.id) && (s.add(a.id), true));
+  }, [items]);
+
   return (
     <>
       <Frame spacing="sm">
@@ -53,8 +65,8 @@ export function AlertCenter() {
             </span>
           </FrameHeader>
           <div className="max-h-[260px] divide-y divide-border/60 overflow-auto">
-            {items.length === 0 && <div className="py-5 text-center text-xs text-muted-foreground">暂无告警</div>}
-            {items.map((a) => (
+            {rows.length === 0 && <div className="py-5 text-center text-xs text-muted-foreground">暂无告警</div>}
+            {rows.map((a) => (
               <div key={a.id} className="flex items-start gap-2 px-3 py-1.5">
                 <span className="mt-0.5">{a.level === "critical" ? <AlertTriangle className="size-3 text-destructive" /> : null}</span>
                 <div className="min-w-0 flex-1">

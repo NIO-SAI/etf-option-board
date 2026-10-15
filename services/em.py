@@ -29,9 +29,11 @@ _H5_URL = "https://emdatah5.eastmoney.com/dc/ZJLX"
 _H5_UT = "fa5fd1943c7b386f172d6893dbfba10b"
 _H5_REF = "https://data.eastmoney.com/"
 # 腾讯行情：K 线/分时兜底（push2his / push2 trends 不可用时）
-_TX_DAY = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+# 注意：一律用 ifzq.gtimg.cn（不带 web. 前缀）。web.ifzq.gtimg.cn 会触发腾讯 WAF，
+# 间歇性返回 JS 挑战页 → json 解析失败 → 回落 push2（多为空），造成"没数据/旧数据"。
+_TX_DAY = "https://ifzq.gtimg.cn/appstock/app/fqkline/get"
 _TX_MIN = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
-_TX_TREND = "https://web.ifzq.gtimg.cn/appstock/app/minute/query"
+_TX_TREND = "https://ifzq.gtimg.cn/appstock/app/minute/query"
 
 
 _CLIENT: httpx.AsyncClient | None = None
@@ -275,14 +277,35 @@ async def kline(secid: str, klt: int = 1, lmt: int = 240, fqt: int = 1,
     return parse_klines(d.get("data") if d else None)
 
 
+def _trends_trim(out: list[dict], ndays: int) -> list[dict]:
+    """分时清洗：单日视图只保留最后一个交易日；盘中若拿到的是旧日数据则丢弃。
+
+    典型故障：腾讯/push2 拉取失败 → get_json 回退"上次成功缓存"（可能是上一交易日的
+    全天分时）→ 若用墙上时钟重新贴日期，就会把整日旧数据渲染成"今天"，图上出现一条
+    延伸到收盘时间的错线。这里以数据源自身日期为准做校验。
+    """
+    if not out or ndays > 1:
+        return out
+    last_day = (out[-1].get("time") or "")[:10]
+    if _now_in_session() and last_day != time.strftime("%Y-%m-%d"):
+        return []                      # 盘中却拿到非今日数据 → 宁可空，不误导
+    return [p for p in out if (p.get("time") or "")[:10] == last_day]
+
+
 async def trends(secid: str, ndays: int = 1, ttl: float = 30.0) -> list[dict]:
-    """分时（归一化）。腾讯优先（稳定），push2 trends2 兜底。"""
+    """分时（归一化）。腾讯优先（稳定），push2 trends2 兜底。
+
+    时间戳取自数据源本身（腾讯 node.data.date / push2 行首），不再用"今天"重贴。
+    """
     code = _tx_code(secid)
     if code:
         d = await get_json(_TX_TREND, {"code": code}, ttl=ttl)
         node = ((d or {}).get("data") or {}).get(code) or {}
-        raw = ((node.get("data") or {}).get("data")) or []
-        today = time.strftime("%Y-%m-%d")
+        tdata = node.get("data") or {}
+        raw = tdata.get("data") or []
+        day = str(tdata.get("date") or "")          # "20261015"
+        day_fmt = (f"{day[0:4]}-{day[4:6]}-{day[6:8]}"
+                   if len(day) == 8 else time.strftime("%Y-%m-%d"))
         out = []
         for line in raw:
             p = line.split()
@@ -290,16 +313,17 @@ async def trends(secid: str, ndays: int = 1, ttl: float = 30.0) -> list[dict]:
                 continue
             t = p[0]
             hhmm = f"{t[0:2]}:{t[2:4]}" if len(t) == 4 else t
-            out.append({"time": f"{today} {hhmm}", "price": _numf(p[1]),
+            out.append({"time": f"{day_fmt} {hhmm}", "price": _numf(p[1]),
                         "high": _numf(p[1]), "low": _numf(p[1]),
                         "volume": _numf(p[2]), "amount": _numf(p[3]), "avg": None})
+        out = _trends_trim(out, ndays)
         if out:
             return out
     d = await get_json("https://push2.eastmoney.com/api/qt/stock/trends2/get",
                        {"secid": secid, "fields1": "f1,f2,f3,f4,f5,f6,f7,f8",
                         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58", "iscr": 0,
                         "ndays": ndays, "ut": _UT}, ttl=ttl)
-    return parse_trends(d.get("data") if d else None)
+    return _trends_trim(parse_trends(d.get("data") if d else None), ndays)
 
 
 # 资金流快照累积：push2 fflow 不可用时，用 emdatah5 快照按分钟累积成序列。
@@ -385,9 +409,13 @@ def parse_klines(data: dict | None) -> list[dict]:
 
 
 def parse_trends(data: dict | None) -> list[dict]:
-    """trends2: "time,close,high,low,vol,amount,avg"
+    """trends2 行，兼容 8 列与 7 列两种布局。
 
-    兼容已归一化的分时列表（trends() 直接返回 list 时原样透传）。
+    8 列（当前 push2 fields2=f51..f58）：time,open,close,high,low,vol,amount,avg
+    7 列（旧版）：time,close,high,low,vol,amount,avg
+    旧实现固定按 7 列读、且把 open 当成了 price，导致 push2 兜底时分时价整体错位
+    （价=开盘、量=价、额=量、均价=额）。
+    兼容已归一化的 list（trends() 直接返回时原样透传）。
     """
     if isinstance(data, list):
         return data
@@ -396,14 +424,23 @@ def parse_trends(data: dict | None) -> list[dict]:
     out = []
     for line in data.get("trends") or []:
         p = line.split(",")
-        if len(p) < 4:
+        if len(p) < 5:
             continue
+        i = 1 if len(p) >= 8 else 0          # 8 列时跳过开盘点
+
+        def g(k: int, default=None):
+            j = i + k
+            if j >= len(p) or p[j] in ("", "-"):
+                return default
+            try:
+                return float(p[j])
+            except ValueError:
+                return default
+
         out.append({
-            "time": p[0], "price": float(p[1]),
-            "high": float(p[2]), "low": float(p[3]),
-            "volume": float(p[4]) if len(p) > 4 else 0.0,
-            "amount": float(p[5]) if len(p) > 5 else 0.0,
-            "avg": float(p[6]) if len(p) > 6 else None,
+            "time": p[0], "price": g(1, 0.0),
+            "high": g(2, 0.0), "low": g(3, 0.0),
+            "volume": g(4, 0.0), "amount": g(5, 0.0), "avg": g(6),
         })
     return out
 
