@@ -490,6 +490,145 @@ async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 20.0) -> di
 
 
 # --------------------------------------------------------------------------
+# 期权分时快照累积（与资金流 fflow 同一策略）
+#
+# 期权 secid 形如 10.xxx / 12.xxx：_tx_code 无腾讯映射（不支持期权），push2 分时
+# 又常被代理/反爬打空 -> 期权历来取不到任何分时数据。改用 emdatah5 getZJLXData
+# 快照在交易时段内逐分钟累积一份当日序列（已实测该接口对期权返回最新价/昨收）。
+# 与 fflow 一样，只能累积自此刻起的分钟点，已经过去的分钟无法回补；非交易时段
+# 不累积（否则墙上时钟点落在行情时间轴之外，图上画不出来）。
+# --------------------------------------------------------------------------
+_OPT_HIST: dict[str, list[str]] = {}   # 当日累积
+_OPT_PREV: dict[str, list[str]] = {}   # 最近一个有数据的昨日
+_OPT_DAY: str | None = None
+_OPT_MAX = 240
+_OPT_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "opt_history.jsonl")
+_OPT_LOADED = False
+_OPT_FLUSHED: dict[str, str] = {}      # secid -> 已落盘的最后分钟
+
+
+def _opt_load() -> None:
+    """进程首次使用时从磁盘恢复（幂等）：当日 -> _OPT_HIST，最近一个有数据的
+    昨日 -> _OPT_PREV；磁盘只保留近 7 天的行。"""
+    global _OPT_LOADED, _OPT_DAY
+    if _OPT_LOADED:
+        return
+    _OPT_LOADED = True
+    today = time.strftime("%Y-%m-%d")
+    _OPT_DAY = today
+    if not os.path.exists(_OPT_PATH):
+        return
+
+    def _feed(bucket: dict[str, list[str]], secid: str, fline: str) -> None:
+        hist = bucket.setdefault(secid, [])
+        minute = fline.split(",", 1)[0]
+        if hist and hist[-1].split(",", 1)[0] == minute:
+            hist[-1] = fline
+        else:
+            hist.append(fline)
+            if len(hist) > _OPT_MAX:
+                del hist[:len(hist) - _OPT_MAX]
+
+    try:
+        by_day: dict[str, list[tuple[str, str]]] = {}
+        kept: list[str] = []
+        cutoff = (dt.datetime.now() - dt.timedelta(days=7)).strftime("%Y-%m-%d")
+        with open(_OPT_PATH, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                d = r.get("date")
+                if not d or d < cutoff or d > today:
+                    continue
+                kept.append(line)
+                secid, fline = r.get("secid"), r.get("line")
+                if secid and fline:
+                    by_day.setdefault(d, []).append((secid, fline))
+        with open(_OPT_PATH, "w", encoding="utf-8") as f:
+            for line in kept:
+                f.write(line + "\n")
+        for secid, fline in by_day.get(today, []):
+            _feed(_OPT_HIST, secid, fline)
+            _OPT_FLUSHED[secid] = fline.split(",", 1)[0]
+        prev_days = sorted(d for d in by_day if d < today)
+        if prev_days:
+            for secid, fline in by_day[prev_days[-1]]:
+                _feed(_OPT_PREV, secid, fline)
+    except OSError as exc:
+        log.debug("期权分时历史加载失败: %s", exc)
+
+
+def _opt_persist(secid: str, line: str) -> None:
+    """新分钟定稿时追加落盘；同一分钟内多次调用只落一次。"""
+    minute = line.split(",", 1)[0]
+    if _OPT_FLUSHED.get(secid) == minute:
+        return
+    _OPT_FLUSHED[secid] = minute
+    try:
+        os.makedirs(os.path.dirname(_OPT_PATH), exist_ok=True)
+        with open(_OPT_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(
+                {"date": minute.split(" ", 1)[0], "secid": secid, "line": line},
+                ensure_ascii=False) + "\n")
+    except OSError as exc:
+        log.debug("期权分时落盘失败: %s", exc)
+
+
+async def opt_trends(secid: str, ttl: float = 12.0) -> list[dict]:
+    """合约当日分时：交易时段内用 emdatah5 快照逐分钟累积。
+
+    返回 [{"time": "YYYY-MM-DD HH:MM", "price": ...}]，与 trends() 输出同构，
+    OverlayChart 按 time 末 5 位（HH:MM）对齐。
+    当日累积不足 2 点时（开盘前/刚切换合约），用最近一个有数据的昨日序列兜底，
+    保证界面不空——但那是昨日数据。
+    """
+    global _OPT_DAY, _OPT_HIST, _OPT_PREV
+    _opt_load()
+    today = time.strftime("%Y-%m-%d")
+    if _OPT_DAY != today:
+        if _OPT_HIST:
+            _OPT_PREV = _OPT_HIST
+        _OPT_HIST = {}
+        _OPT_FLUSHED.clear()
+        _OPT_DAY = today
+    hist = _OPT_HIST.setdefault(secid, [])
+    if _now_in_session():
+        q = await get_json(f"{_H5_URL}/getZJLXData",
+                           {"secid": secid, "fields": "f43,f57,f58",
+                            "ut": _H5_UT}, ttl=ttl, referer=_H5_REF)
+        row = (q or {}).get("data") if isinstance(q, dict) else None
+        px = _numf(row.get("f43")) if row else 0.0
+        if row and px > 0:
+            ts = time.strftime("%Y-%m-%d %H:%M")
+            line = f"{ts},{px}"
+            if hist and hist[-1].split(",", 1)[0] == ts:   # 同一分钟 -> 覆盖
+                hist[-1] = line
+            else:
+                hist.append(line)
+                if len(hist) > _OPT_MAX:
+                    del hist[:len(hist) - _OPT_MAX]
+                _opt_persist(secid, line)
+    kept = [l for l in hist if _hm_in_session(l.split(",", 1)[0][-5:])]
+    if len(kept) < 2:
+        kept = [l for l in _OPT_PREV.get(secid, [])
+                if _hm_in_session(l.split(",", 1)[0][-5:])]
+    out: list[dict] = []
+    for l in kept:
+        ts, _, sp = l.partition(",")
+        p = float(sp) if sp else 0.0
+        out.append({"time": ts, "price": p, "high": p, "low": p,
+                    "volume": None, "amount": None, "avg": None})
+    return out
+
+
+# --------------------------------------------------------------------------
 # 解析
 # --------------------------------------------------------------------------
 def parse_klines(data: dict | None) -> list[dict]:

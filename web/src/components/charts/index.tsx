@@ -260,9 +260,10 @@ export function OverlayChart({
       return { min: -m, max: m, scale: false as const };
     };
 
+    // 0% 基准虚线刻意压暗：标的线改灰后，若基准线同为中性灰会与之混淆
     const zeroLine = {
       silent: true, symbol: "none" as const,
-      lineStyle: { color: "#a1a1aa", type: "dashed" as const, width: 1 },
+      lineStyle: { color: "#52525b", type: "dashed" as const, width: 1 },
       label: { show: false }, data: [{ yAxis: 0 }],
     };
     return {
@@ -289,6 +290,12 @@ export function OverlayChart({
           return `${head}<br/>${body}`;
         },
       },
+      // 资金线按 0 分界分段着色（0 以上红=净流入，0 以下绿=净流出）：
+      // 折线默认整条单色，只能借 visualMap 把「红涨绿跌」搬到线段上。
+      visualMap: {
+        show: false, type: "piecewise" as const, seriesIndex: 2, dimension: 1,
+        pieces: [{ gt: 0, color: UP }, { lte: 0, color: DOWN }],
+      },
       xAxis: { ...base.xAxisBase, data: times },
       yAxis: [
         // 0 右：期权涨跌幅 %
@@ -297,7 +304,7 @@ export function OverlayChart({
         // 1 右：标的ETF 涨跌幅 %（自有量纲；默认隐藏标签，避免两列 % 同一水平线互相误读）
         { ...base.yAxisBase, position: "right", ...symRange(etfPct),
           splitLine: { show: false },
-          axisLabel: { show: labelEtf, color: "#fbbf24", formatter: (v: number) => `${v.toFixed(2)}%` } },
+          axisLabel: { show: labelEtf, color: "#a1a1aa", formatter: (v: number) => `${v.toFixed(2)}%` } },
         // 2 右：主力净流入（金额，独立轴）
         { ...base.yAxisBase, position: "right", offset: 60, name: "主力", nameTextStyle: { color: "#7c3aed" },
           splitLine: { show: false }, axisLabel: { show: false } },
@@ -307,10 +314,10 @@ export function OverlayChart({
           lineStyle: { width: 1.6, color: "#60a5fa" }, areaStyle: { color: "rgba(96,165,250,0.08)" },
           ...(optPct ? { markLine: zeroLine } : {}) },
         { name: "标的涨跌幅", type: "line", yAxisIndex: 1, data: etfPct ?? [], showSymbol: false, connectNulls: false,
-          lineStyle: { width: 1.4, color: "#fbbf24" },
+          lineStyle: { width: 1.4, color: "#a1a1aa" },
           ...(!optPct && etfPct ? { markLine: zeroLine } : {}) },
-        { name: "主力净流入", type: "bar", yAxisIndex: 2, data: mains, barWidth: "50%", opacity: 0.25,
-          itemStyle: { color: (p: any) => (p.value >= 0 ? UP : DOWN) } },
+        { name: "主力净流入", type: "line", yAxisIndex: 2, data: mains, showSymbol: false,
+          connectNulls: false, lineStyle: { width: 1.2 } },
       ],
     };
   }, [optTrends, etfTrends, flow, optPrevClose, etfPrevClose]);

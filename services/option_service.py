@@ -288,6 +288,14 @@ async def option_kline(secid: str, klt: int = 1, lmt: int = 240) -> list[dict]:
 
 
 async def option_trends(secid: str, ndays: int = 1) -> list[dict]:
+    """合约分时：优先本地快照累积序列（emdatah5 快照逐分钟累积，见 em.opt_trends）。
+
+    期权 secid(10./12.) 腾讯源无映射、push2 兜底常被限流打空，累积序列是唯一
+    能拿到的数据源；累积为空时再退回归一化的 trends()（对期权通常仍为空）。
+    """
+    acc = await em.opt_trends(secid)
+    if acc:
+        return acc
     return em.parse_trends(await em.trends(secid, ndays=ndays))
 
 
