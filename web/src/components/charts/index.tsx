@@ -36,9 +36,10 @@ const base = {
   },
 };
 
-/** ETF 分时：左轴价（标的/关联指数），右轴主力净流入（标的线/指数柱）。 */
+/** ETF 分时：右轴涨跌幅%（标的ETF 与关联指数共用）+ 右轴主力净流入（标的线/指数柱）。 */
 export function IntradayChart({
   trends, indexTrends = [], indexName = "", flow, indexFlow = [], height = 240, title, id, signals = [],
+  prevClose = null, indexPrevClose = null,
 }: {
   trends: any[];
   indexTrends?: any[];
@@ -49,46 +50,81 @@ export function IntradayChart({
   title?: string;
   id?: string;
   signals?: any[];
+  prevClose?: number | null;
+  indexPrevClose?: number | null;
 }) {
   const option = useMemo(() => {
     const tt = (t: any) => (t || "").slice(-5);
     const times = trends?.map((t) => tt(t.time)) ?? [];
-    const prices = trends?.map((t) => t.price) ?? [];
     const toMin = (hm: string) => Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5));
-    const sigPts = (signals ?? []).map((s: any) => {
-      const hm = (s.ts || "").slice(11, 16);
-      if (!hm || times.length === 0) return null;
-      const target = toMin(hm);
-      let best = 0, bestDiff = 1e9;
-      times.forEach((t, i) => {
-        const d = Math.abs(toMin(t) - target);
-        if (d < bestDiff) { bestDiff = d; best = i; }
+
+    // 昨收 -> 百分比。缺昨收则该条线整条不画（与 OverlayChart 口径一致）。
+    const mapSrc = (arr: any[]) => new Map((arr ?? []).map((t) => [tt(t.time), t.price]));
+    const toPctSeries = (m: Map<any, any>, prev: number | null) => {
+      if (!prev || !(prev > 0)) return null;
+      const out: (number | null)[] = times.map((t) => {
+        const p = m.get(t);
+        return p != null && isFinite(Number(p)) ? ((Number(p) - prev) / prev) * 100 : null;
       });
-      if (bestDiff > 10 || prices[best] == null) return null;
-      const bull = s.dir === "bull";
-      return {
-        coord: [times[best], prices[best]],
-        value: (bull ? "多" : "空") + Math.round(s.score ?? 0),
-        itemStyle: { color: bull ? "#ef4444" : "#16a34a" },
-        symbolRotate: bull ? 0 : 180,
-      };
-    }).filter(Boolean);
-    const idxMap = new Map((indexTrends ?? []).map((t) => [tt(t.time), t.price]));
-    const idxPx = times.map((t) => idxMap.get(t) ?? null);
+      return out.some((v) => v !== null) ? out : null;
+    };
+    const etfPct = toPctSeries(mapSrc(trends), prevClose ?? null);
+    const idxPct = toPctSeries(mapSrc(indexTrends), indexPrevClose ?? null);
+    // 标的ETF 与关联指数共用一根 % 轴：两者涨跌幅天然同量纲（今日实测 -1.21% vs -1.23%），
+    // 同轴才能真实反映相对强弱；若各占一根轴，同一水平线会代表不同百分比，产生隐性误读。
+    // 最小带宽兜底：防横盘把噪声放大成假波动、也防极值为 0 时轴退化。
+    const MIN_SPAN = 0.5;
+    const symRange = (arrs: ((number | null)[] | null)[]) => {
+      const vals: number[] = [];
+      arrs.forEach((a) => (a ?? []).forEach((v) => { if (v !== null && isFinite(v)) vals.push(Math.abs(v)); }));
+      const m = Math.max(MIN_SPAN, ...vals);
+      return { min: -m, max: m, scale: false as const };
+    };
+    const range = symRange([etfPct, idxPct]);
+
+    const zeroLine = {
+      silent: true, symbol: "none" as const,
+      lineStyle: { color: "#a1a1aa", type: "dashed" as const, width: 1 },
+      label: { show: false }, data: [{ yAxis: 0 }],
+    };
+
+    // 变盘信号三角：系列已换成百分比，坐标 y 必须同步换算，否则所有标记垂直错位。
+    const sigSrc: (number | null)[] = etfPct ?? [];
+    const sigPts = etfPct
+      ? (signals ?? []).map((s: any) => {
+        const hm = (s.ts || "").slice(11, 16);
+        if (!hm || times.length === 0) return null;
+        const target = toMin(hm);
+        let best = 0, bestDiff = 1e9;
+        times.forEach((t, i) => {
+          const d = Math.abs(toMin(t) - target);
+          if (d < bestDiff) { bestDiff = d; best = i; }
+        });
+        if (bestDiff > 10 || sigSrc[best] == null) return null;
+        const bull = s.dir === "bull";
+        return {
+          coord: [times[best], sigSrc[best]],
+          value: (bull ? "多" : "空") + Math.round(s.score ?? 0),
+          itemStyle: { color: bull ? "#ef4444" : "#16a34a" },
+          symbolRotate: bull ? 0 : 180,
+        };
+      }).filter(Boolean)
+      : [];
+
     const flowMap = new Map((flow ?? []).map((f) => [tt(f.time), f.main]));
     const mains = times.map((t) => flowMap.get(t) ?? null);
     const iflowMap = new Map((indexFlow ?? []).map((f) => [tt(f.time), f.main]));
     const imains = times.map((t) => iflowMap.get(t) ?? null);
-    const hasIdx = idxPx.some((v) => v !== null);
+    const hasIdx = !!idxPct;
     const hasIdxFlow = imains.some((v) => v !== null);
     const idxLabel = `关联指数${indexName ? " " + indexName : ""}`;
     return {
       ...base,
-      grid: { left: 14, right: 14, top: 24, bottom: 34 },
+      grid: { left: 14, right: 56, top: 24, bottom: 34 },
       legend: {
         top: 0, left: 6, itemWidth: 12, itemHeight: 8, itemGap: 10,
         textStyle: { color: AXIS, fontSize: 10 },
-        data: ["标的ETF", ...(hasIdx ? [idxLabel] : []), "主力净流入", ...(hasIdxFlow ? ["指数主力净流入"] : [])],
+        data: [...(etfPct ? ["标的ETF"] : []), ...(hasIdx ? [idxLabel] : []), "主力净流入", ...(hasIdxFlow ? ["指数主力净流入"] : [])],
       },
       tooltip: {
         ...base.tooltip,
@@ -99,9 +135,9 @@ export function IntradayChart({
             const n = Number(p.value);
             let val = "—";
             if (p.value !== null && p.value !== undefined && isFinite(n)) {
-              if (p.seriesName === "标的ETF") val = n.toFixed(3);
-              else if (String(p.seriesName).startsWith("关联指数")) val = n.toFixed(0);
-              else val = `${Math.round(n / 1e4)}万`;   // 主力净流入：万·整数
+              // 价格系列已是百分比；资金仍是金额（元），保持「万」口径
+              const isFlow = p.seriesName === "主力净流入" || p.seriesName === "指数主力净流入";
+              val = isFlow ? `${Math.round(n / 1e4)}万` : `${n.toFixed(2)}%`;
             }
             return `${p.marker}${p.seriesName} <b>${val}</b>`;
           }).join("<br/>");
@@ -110,32 +146,33 @@ export function IntradayChart({
       },
       xAxis: { ...base.xAxisBase, data: times },
       yAxis: [
-        // 0 左：标的 ETF 价（数值标注隐藏）
-        { ...base.yAxisBase, position: "left", axisLabel: { show: false } },
-        // 1 左：关联指数 点位
-        { ...base.yAxisBase, position: "left", splitLine: { show: false }, axisLabel: { show: false } },
-        // 2 右：标的 ETF 主力净流入（线）
+        // 0 右：涨跌幅 %（标的ETF 与关联指数共用）
+        { ...base.yAxisBase, position: "right", ...range,
+          axisLabel: { color: AXIS, formatter: (v: number) => `${v.toFixed(2)}%` } },
+        // 1 右：标的 ETF 主力净流入（线）
         { ...base.yAxisBase, position: "right", splitLine: { show: false }, axisLabel: { show: false } },
-        // 3 右：关联指数 主力净流入（柱）
+        // 2 右：关联指数 主力净流入（柱）
         { ...base.yAxisBase, position: "right", splitLine: { show: false }, axisLabel: { show: false } },
       ],
       series: [
-        { name: "标的ETF", type: "line", data: prices, showSymbol: false, lineStyle: { width: 1.4, color: "#60a5fa" },
-          areaStyle: { color: "rgba(96,165,250,0.08)" },
+        { name: "标的ETF", type: "line", yAxisIndex: 0, data: etfPct ?? [], showSymbol: false, connectNulls: false,
+          lineStyle: { width: 1.4, color: "#60a5fa" }, areaStyle: { color: "rgba(96,165,250,0.08)" },
+          ...(etfPct ? { markLine: zeroLine } : {}),
           ...(sigPts.length ? { markPoint: {
             symbol: "triangle", symbolSize: 11,
             label: { fontSize: 9, color: "#fff", formatter: "{c}" },
             data: sigPts,
           } } : {}), },
-        { name: idxLabel, type: "line", yAxisIndex: 1, data: idxPx, showSymbol: false,
-          lineStyle: { width: 1.3, color: "#d97706", type: "dashed" } },
-        { name: "主力净流入", type: "line", yAxisIndex: 2, data: mains, showSymbol: false,
+        { name: idxLabel, type: "line", yAxisIndex: 0, data: idxPct ?? [], showSymbol: false, connectNulls: false,
+          lineStyle: { width: 1.3, color: "#d97706", type: "dashed" },
+          ...(!etfPct && idxPct ? { markLine: zeroLine } : {}) },
+        { name: "主力净流入", type: "line", yAxisIndex: 1, data: mains, showSymbol: false,
           lineStyle: { width: 1.3, color: "#7c3aed" } },
-        { name: "指数主力净流入", type: "bar", yAxisIndex: 3, data: imains, barWidth: "55%",
+        { name: "指数主力净流入", type: "bar", yAxisIndex: 2, data: imains, barWidth: "55%",
           itemStyle: { color: (p: any) => (p.value >= 0 ? "rgba(239,68,68,0.5)" : "rgba(34,197,94,0.5)") } },
       ],
     };
-  }, [trends, indexTrends, indexName, flow, indexFlow, signals]);
+  }, [trends, indexTrends, indexName, flow, indexFlow, signals, prevClose, indexPrevClose]);
   return <ReactECharts key={id} option={option} style={{ height }} />;
 }
 

@@ -131,7 +131,7 @@ export default function App() {
                   {!ctxReady ? (
                     <Skeleton className="h-[240px] w-full" />
                   ) : ctx?.trends?.length ? (
-                    <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexFlow={ctx.track?.flow ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} signals={revSignals?.items ?? []} height={230} />
+                    <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexFlow={ctx.track?.flow ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} signals={revSignals?.items ?? []} prevClose={ctx.quote?.prev_close ?? null} indexPrevClose={ctx.track?.quote?.prev_close ?? null} height={230} />
                   ) : (
                     <Skeleton className="h-[240px] w-full" />
                   )}
