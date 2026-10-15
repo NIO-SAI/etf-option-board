@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
-import { IntradayChart, KlineChart } from "@/components/charts";
+import { IntradayChart } from "@/components/charts";
 import { TopBar } from "@/components/TopBar";
 import { BiasBar, CandidateList, EtfList, OptionTQuote, PlanCard, SignalFeed } from "@/components/panels";
 import { ContractDetail, KronosPredict, LlmPanel } from "@/components/detail";
 import { AlertCenter } from "@/components/AlertCenter";
-import { Skeleton, Tabs } from "@/components/ui/misc";
+import { Skeleton } from "@/components/ui/misc";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
@@ -24,7 +24,6 @@ export default function App() {
   const [etfCode, setEtfCode] = useState("510300");
   const [month, setMonth] = useState<number | null>(null);
   const [contractSecid, setContractSecid] = useState<string | null>(null);
-  const [klt, setKlt] = useState("trend");
   const [clock, setClock] = useState(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
 
   useEffect(() => {
@@ -42,11 +41,7 @@ export default function App() {
   const { data: directions } = usePolling(() => api.directions(), 60_000);
   const { data: spark } = usePolling(() => api.etfs_spark(), 120_000, []);
 
-  const kltNum = klt === "trend" ? 1 : Number(klt);
-  const { data: ctx, refresh: refreshCtx } = usePolling(() => api.etf(etfCode, kltNum), 10_000, [etfCode, kltNum]);
-  const { data: kline } = usePolling(
-    () => (klt === "trend" ? Promise.resolve({ bars: [] }) : api.etfKline(etfCode, Number(klt), 240)),
-    10_000, [etfCode, klt]);
+  const { data: ctx, refresh: refreshCtx } = usePolling(() => api.etf(etfCode, 1), 10_000, [etfCode]);
   const { data: chain } = usePolling(() => api.chain(etfCode, month ?? undefined), 15_000, [etfCode, month]);
   const { data: strategy } = usePolling(() => api.strategy(etfCode, 0, 1), 30_000, [etfCode]);
 
@@ -116,11 +111,6 @@ export default function App() {
                     </span>
                   )}
                 </div>
-                <Tabs
-                  tabs={[{ key: "trend", label: "分时" }, { key: "1", label: "1分" }, { key: "3", label: "3分" }, { key: "5", label: "5分" }, { key: "15", label: "15分" }]}
-                  value={klt}
-                  onChange={setKlt}
-                />
               </FrameHeader>
               {ctxReady && (
                 <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-[11px] text-muted-foreground">
@@ -135,14 +125,10 @@ export default function App() {
                 <ErrorBoundary label="标的行情图">
                   {!ctxReady ? (
                     <Skeleton className="h-[240px] w-full" />
-                  ) : klt === "trend" ? (
-                    ctx?.trends?.length
-                      ? <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexFlow={ctx.track?.flow ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} height={230} />
-                      : <Skeleton className="h-[240px] w-full" />
+                  ) : ctx?.trends?.length ? (
+                    <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexFlow={ctx.track?.flow ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} height={230} />
                   ) : (
-                    kline?.bars?.length
-                      ? <KlineChart id="main-chart" bars={kline.bars} height={250} />
-                      : <Skeleton className="h-[240px] w-full" />
+                    <Skeleton className="h-[240px] w-full" />
                   )}
                 </ErrorBoundary>
               </div>
