@@ -51,14 +51,14 @@ async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
             "text": f"近5分钟主力净{'流入' if d5>0 else '流出'} {abs(d5)/1e8:.2f} 亿元。",
         })
 
-    # MACD 背离（冷却 600s）
-    div = (ctx.get("macd") or {}).get("divergence") or {}
+    # MACD 背离（3 分钟K线口径；冷却 600s）
+    div = (ctx.get("macd3") or {}).get("divergence") or {}
     if div.get("type") in ("bullish", "bearish") and alerts.should_alert(etf["code"], "divergence", 600):
         await alerts.publish({
             "etf_code": etf["code"], "etf_name": name, "type": "divergence",
             "level": "warn", "dir": "bull" if div["type"] == "bullish" else "bear",
-            "title": f"{name} 1分钟MACD {'底背离' if div['type']=='bullish' else '顶背离'}",
-            "text": "动能与价格背离，留意反转。",
+            "title": f"{name} 3分钟MACD {'底背离' if div['type']=='bullish' else '顶背离'}",
+            "text": "3分钟K线动能与价格背离，留意反转。",
         })
 
     # 关键时点（针对关联指数较敏感的标的，只推一次/时点）

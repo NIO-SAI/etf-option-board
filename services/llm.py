@@ -103,7 +103,8 @@ def _compact(bundle: dict) -> dict:
         "外围市场": [{"name": e.get("name_cn"), "pct": e.get("pct")}
                   for e in (bundle.get("external") or [])],
         "当前量能": bundle.get("volume"),
-        "当前MACD": bundle.get("macd"),
+        "当前MACD(1分钟)": bundle.get("macd"),
+        "当前MACD(3分钟背离)": bundle.get("macd3"),
     }
 
 

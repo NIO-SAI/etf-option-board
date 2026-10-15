@@ -117,7 +117,7 @@ export default function App() {
                   <MiniKv k="量能" v={`${ctx.volume?.ratio ?? "—"}x`} tone={ctx.volume?.is_surge ? "warn" : undefined} />
                   <MiniKv k="主力5分" v={signedWan(ctx.flow_main_delta5m)} tone={ctx.flow_main_delta5m == null ? undefined : ctx.flow_main_delta5m > 0 ? "up" : "down"} />
                   <MiniKv k="MACD" v={ctx.macd?.cross === "golden" ? "金叉" : ctx.macd?.cross === "dead" ? "死叉" : "—"} />
-                  <MiniKv k="背离" v={ctx.macd?.divergence?.type === "bullish" ? "底背离" : ctx.macd?.divergence?.type === "bearish" ? "顶背离" : "无"} />
+                  <MiniKv k="背离3分" v={ctx.macd3?.divergence?.type === "bullish" ? "底背离" : ctx.macd3?.divergence?.type === "bearish" ? "顶背离" : "无"} />
                   <MiniKv k="关联指数" v={`${ctx.track?.quote?.name ?? ""} ${pct(ctx.track?.quote?.pct)}`} />
                 </div>
               )}

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+# 量能放大「提示」阈值：近5分钟均量 ÷ 近端均量 ≥ 该倍数才提示。
+# 告警（monitor）、信号流（strategy）、国家队护盘评分里的放量计数、前端量能高亮统一用此口径。
+SURGE_RATIO = 3.0
+
 
 def ema(values: list[float], period: int) -> list[float]:
     if not values:
@@ -81,7 +85,7 @@ def volume_stats(vols: list[float]) -> dict:
     peak = max(vols)
     return {
         "ok": True, "ratio": round(ratio, 2),
-        "is_surge": ratio >= 1.8,
+        "is_surge": ratio >= SURGE_RATIO,
         "peak_ratio": round(vols[-1] / peak, 2) if peak else 0,
         "last": vols[-1],
     }
