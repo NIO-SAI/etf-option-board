@@ -171,17 +171,17 @@ export function OverlayChart({
     const mains = times.map((t) => flowMap.get(t) ?? null);
     return {
       ...base,
-      grid: { left: 56, right: 112, top: 30, bottom: 40 },
+      grid: { left: 56, right: 40, top: 30, bottom: 40 },
       legend: { top: 2, textStyle: { color: AXIS }, itemWidth: 12, itemHeight: 8 },
       xAxis: { ...base.xAxisBase, data: times },
       yAxis: [
         { ...base.yAxisBase, position: "left", name: "期权", nameTextStyle: { color: "#60a5fa" },
           axisLabel: { color: "#60a5fa", formatter: (v: number) => v.toFixed(4) } },
         { ...base.yAxisBase, position: "right", name: "标的ETF", nameTextStyle: { color: "#fbbf24" },
-          splitLine: { show: false }, axisLabel: { color: "#fbbf24", formatter: (v: number) => v.toFixed(3) } },
+          splitLine: { show: false }, axisLabel: { show: false } },
         // 主力净流入单独一根轴，避免与标的ETF价共用轴导致价格被压成直线
         { ...base.yAxisBase, position: "right", offset: 60, name: "主力", nameTextStyle: { color: "#7c3aed" },
-          splitLine: { show: false }, axisLabel: { color: "#7c3aed", formatter: (v: number) => Math.round(v / 1e4) + "万" } },
+          splitLine: { show: false }, axisLabel: { show: false } },
       ],
       series: [
         { name: "期权价", type: "line", data: optPx, showSymbol: false, lineStyle: { width: 1.6, color: "#60a5fa" },
