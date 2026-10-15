@@ -65,7 +65,7 @@ EXTERNAL = [
     {"secid": "100.SPX",  "name": "标普500",     "key": "spx"},
     {"secid": "100.DJIA", "name": "道琼斯",      "key": "dji"},
     {"secid": "100.HSI",  "name": "恒生指数",    "key": "hsi"},
-    {"secid": "100.N225", "name": "日经225",     "key": "n225"},
+    {"secid": "100.KS11", "name": "韩国KOSPI",  "key": "kospi"},
     {"secid": "100.UDI",  "name": "美元指数",    "key": "dxy"},
     {"secid": "101.GC00Y", "name": "COMEX黄金",  "key": "gold"},
     {"secid": "102.CL00Y", "name": "NYMEX原油",  "key": "oil"},
