@@ -11,6 +11,7 @@ import { Skeleton, Tabs } from "@/components/ui/misc";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
+import { debugBeacon } from "@/lib/__debug_beacon"; // [DEBUG-7f3a] 临时信标，用完删
 import { clsUpDown, nf, pct, signedWan } from "@/lib/format";
 
 // 当前加载的前端 bundle 哈希（用于判断浏览器是否加载了最新构建）
@@ -31,6 +32,8 @@ export default function App() {
     const t = setInterval(() => setClock(new Date().toLocaleTimeString("zh-CN", { hour12: false })), 1000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => { debugBeacon(); }, []); // [DEBUG-7f3a] 临时信标，用完删
 
   const { data: universe } = usePolling(() => api.universe(), 3600_000);
   const { data: health } = usePolling(() => api.health(), 60_000);
