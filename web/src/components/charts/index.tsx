@@ -36,7 +36,7 @@ const base = {
   },
 };
 
-/** ETF 分时：左轴价（标的/关联指数），右轴主力净流入（标的柱/指数线）。 */
+/** ETF 分时：左轴价（标的/关联指数），右轴主力净流入（标的线/指数柱）。 */
 export function IntradayChart({
   trends, indexTrends = [], indexName = "", flow, indexFlow = [], height = 240, title, id,
 }: {
@@ -94,9 +94,9 @@ export function IntradayChart({
         { ...base.yAxisBase, position: "left", axisLabel: { show: false } },
         // 1 左：关联指数 点位
         { ...base.yAxisBase, position: "left", splitLine: { show: false }, axisLabel: { show: false } },
-        // 2 右：标的 ETF 主力净流入（柱）
+        // 2 右：标的 ETF 主力净流入（线）
         { ...base.yAxisBase, position: "right", splitLine: { show: false }, axisLabel: { show: false } },
-        // 3 右：关联指数 主力净流入（线）
+        // 3 右：关联指数 主力净流入（柱）
         { ...base.yAxisBase, position: "right", splitLine: { show: false }, axisLabel: { show: false } },
       ],
       series: [
@@ -104,10 +104,10 @@ export function IntradayChart({
           areaStyle: { color: "rgba(96,165,250,0.08)" } },
         { name: idxLabel, type: "line", yAxisIndex: 1, data: idxPx, showSymbol: false,
           lineStyle: { width: 1.3, color: "#d97706", type: "dashed" } },
-        { name: "主力净流入", type: "bar", yAxisIndex: 2, data: mains, barWidth: "55%",
+        { name: "主力净流入", type: "line", yAxisIndex: 2, data: mains, showSymbol: false,
+          lineStyle: { width: 1.3, color: "#7c3aed" } },
+        { name: "指数主力净流入", type: "bar", yAxisIndex: 3, data: imains, barWidth: "55%",
           itemStyle: { color: (p: any) => (p.value >= 0 ? "rgba(239,68,68,0.5)" : "rgba(34,197,94,0.5)") } },
-        { name: "指数主力净流入", type: "line", yAxisIndex: 3, data: imains, showSymbol: false,
-          lineStyle: { width: 1.3, color: "#0d9488" } },
       ],
     };
   }, [trends, indexTrends, indexName, flow, indexFlow]);
