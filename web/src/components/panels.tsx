@@ -69,8 +69,18 @@ export function EtfList({
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <div className="flex items-center gap-1.5">
                     <span className={cn("truncate text-xs font-medium", on && "text-primary")}>{e.name}</span>
-                    {dm && <Badge variant={dm.v} size="xs" className="shrink-0">{dm.t}</Badge>}
-                    {sm && <Badge variant={sm.v} size="xs" className="shrink-0">{sm.t}</Badge>}
+                    {dm && (
+                      <Badge variant={dm.v} size="xs" className="shrink-0"
+                        title={`综合方向：多因子合力（标的动量/价格vs均价/关联指数/指数MACD/国家队/外围），阈值 ±15，当前评分 ${directions[e.code]?.score ?? "—"}`}>
+                        {dm.t}
+                      </Badge>
+                    )}
+                    {sm && (
+                      <Badge variant={sm.v} size="xs" className="shrink-0"
+                        title={`变盘信号：转折点引擎（突破近15分钟高低/放量/动量/背离/时点共振），阈值 55，60 分钟内有效；${String(directions[e.code]?.signal?.ts ?? "").slice(11, 16)} 触发 ${directions[e.code]?.signal?.score ?? "—"} 分`}>
+                        {sm.t}
+                      </Badge>
+                    )}
                   </div>
                   <div className="truncate text-[10px] text-muted-foreground tnum">{e.code} · {e.track}</div>
                 </div>
