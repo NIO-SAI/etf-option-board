@@ -288,15 +288,28 @@ async def option_kline(secid: str, klt: int = 1, lmt: int = 240) -> list[dict]:
 
 
 async def option_trends(secid: str, ndays: int = 1) -> list[dict]:
-    """合约分时：优先本地快照累积序列（emdatah5 快照逐分钟累积，见 em.opt_trends）。
+    """合约分时（单日视图）。取数优先级：
 
-    期权 secid(10./12.) 腾讯源无映射、push2 兜底常被限流打空，累积序列是唯一
-    能拿到的数据源；累积为空时再退回归一化的 trends()（对期权通常仍为空）。
+      1) 真实分钟源（em.trends → 腾讯 / 东财 push2 trends2）。先按单日取——em 里的
+         _trends_trim 已保证「盘中却拿到非当日数据则丢弃」，盘中即得当日分钟序列；
+      2) 单日为空（盘前 / 收盘后 / 当日无数据）时，再按两日取并只保留**最近一个有
+         数据的交易日**：这就是"补上前一日历史"，界面不再空；
+      3) 真实源都取不到时，退回本地快照累积 em.opt_trends（emdatah5 逐分钟累积）。
+
+    注意：本机出口是境外 IP 时，东财 push2 整族被反爬（返空），(1)(2) 必然落空、只能
+    走 (3)。让 *.eastmoney.com 直连（绕过境外代理）即可让 (1)(2) 立即生效、无需再改码。
     """
-    acc = await em.opt_trends(secid)
-    if acc:
-        return acc
-    return em.parse_trends(await em.trends(secid, ndays=ndays))
+    real = em.parse_trends(await em.trends(secid, ndays=1))
+    if len(real) >= 2:
+        return real
+    multi = em.parse_trends(await em.trends(secid, ndays=max(ndays, 2)))
+    if len(multi) >= 2:
+        days = [str(t.get("time", ""))[:10] for t in multi if t.get("time")]
+        last_day = max(days) if days else ""
+        same = [t for t in multi if str(t.get("time", ""))[:10] == last_day]
+        if len(same) >= 2:
+            return same
+    return await em.opt_trends(secid)
 
 
 def _aggregate(bars: list[dict], n: int) -> list[dict]:
