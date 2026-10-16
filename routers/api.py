@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import json
 import os
 
@@ -15,6 +16,8 @@ from services import (alerts, deploy as deploy_svc, em, kronos, llm,
 from services.universe import ETFS, EXTERNAL, INDICES, NATIONAL_TEAM_ETFS
 
 router = APIRouter(prefix="/api")
+
+_SIGNAL_FRESH_SEC = 3600   # 变盘信号在左侧列表角标里的时效（秒）；过期自动消失
 
 
 @router.get("/health")
@@ -47,8 +50,29 @@ async def etfs_quotes():
 
 @router.get("/directions")
 async def directions():
-    """9 只标的的实时方向（看多/看空/观望），供左侧列表标签。"""
-    return {"items": await strategy.directions()}
+    """9 只标的的实时综合方向（看多/看空/观望）+ 当日最新变盘信号，供左侧列表标签。
+
+    注意：综合方向（strategy.bias_score 多因子合力，阈值 ±15）与变盘信号（reversal
+    转折点打分，阈值 55）是两套独立引擎，本就会不一致（如「合力看多」而「刚触发看空
+    变盘」）。列表要能同时摆出两者，故这里把当日最新变盘信号一并返回，由前端**另打**
+    一个「变盘·看多/看空」角标——不覆盖综合方向标签。
+    只回新鲜信号（60 分钟内），避免早盘的信号一直挂到收盘。
+    """
+    items = await strategy.directions()
+    now = dt.datetime.now()
+    for code, v in items.items():
+        sig = reversal.recent(code, limit=1)
+        if not sig:
+            continue
+        s = sig[-1]
+        try:
+            ts = dt.datetime.fromisoformat(s["ts"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if (now - ts).total_seconds() > _SIGNAL_FRESH_SEC:
+            continue
+        v["signal"] = {"dir": s.get("dir"), "score": s.get("score"), "ts": s.get("ts")}
+    return {"items": items}
 
 
 @router.get("/etfs/spark")

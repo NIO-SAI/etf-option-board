@@ -14,6 +14,12 @@ const DIR_MAP: Record<string, { v: any; t: string }> = {
   put: { v: "success-light", t: "看空" },
   neutral: { v: "secondary", t: "观望" },
 };
+// 变盘信号角标：来自 reversal 转折点引擎（阈值 55），与综合方向（bias，阈值 ±15）
+// 是两套独立判断，二者可以相左（如「合力看多」而「刚触发看空变盘」），故并列显示、互不覆盖。
+const SIGNAL_MAP: Record<string, { v: any; t: string }> = {
+  bull: { v: "destructive-light", t: "变盘·看多" },
+  bear: { v: "success-light", t: "变盘·看空" },
+};
 
 export function EtfList({
   etfs, quotes, trendsMap, directions = {}, indices = [], selected, onSelect,
@@ -21,7 +27,10 @@ export function EtfList({
   etfs: any[];
   quotes: Record<string, any>;
   trendsMap: Record<string, number[]>;
-  directions?: Record<string, { direction: string; score: number; confidence: number }>;
+  directions?: Record<string, {
+    direction: string; score: number; confidence: number;
+    signal?: { dir: string; score: number; ts: string };
+  }>;
   indices?: any[];
   selected: string;
   onSelect: (c: string) => void;
@@ -46,6 +55,7 @@ export function EtfList({
             const q = quotes[e.code];
             const on = e.code === selected;
             const dm = DIR_MAP[directions[e.code]?.direction] ?? null;
+            const sm = SIGNAL_MAP[directions[e.code]?.signal?.dir] ?? null;
             return (
               <button
                 key={e.code}
@@ -60,6 +70,7 @@ export function EtfList({
                   <div className="flex items-center gap-1.5">
                     <span className={cn("truncate text-xs font-medium", on && "text-primary")}>{e.name}</span>
                     {dm && <Badge variant={dm.v} size="xs" className="shrink-0">{dm.t}</Badge>}
+                    {sm && <Badge variant={sm.v} size="xs" className="shrink-0">{sm.t}</Badge>}
                   </div>
                   <div className="truncate text-[10px] text-muted-foreground tnum">{e.code} · {e.track}</div>
                 </div>
