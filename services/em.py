@@ -42,6 +42,21 @@ _CACHE: dict[str, tuple[float, float, object]] = {}
 # 传输路径记忆：(host|path) -> (mode, ts)；mode: "direct" | "curl"
 _MEMO: dict[str, tuple[str, float]] = {}
 _MEMO_TTL = 300
+# 死主机熔断：push2/push2his 的行情类端点已确认"对普通 GET 一律空回包"（curl、真实
+# Chrome、国内 5G 关闭代理均为 0 字节），但它们在兜底路径上会被反复尝试，每次白等
+# connect 超时（实测 /api/option/trends 因此要 2.8s）。这里按主机记一次失败，60s 内
+# 直接跳过；到期自动重试，上游若恢复即刻生效。
+_PUSH2_DEAD: dict[str, float] = {}
+_PUSH2_DEAD_TTL = 60.0
+
+
+def _push2_dead(host: str) -> bool:
+    return time.time() < _PUSH2_DEAD.get(host, 0.0)
+
+
+def _push2_mark_dead(host: str) -> None:
+    _PUSH2_DEAD[host] = time.time() + _PUSH2_DEAD_TTL
+    log.info("em push2 兜底主机 %s 空回包，%ds 内跳过", host, int(_PUSH2_DEAD_TTL))
 # 东财/腾讯抖动重试：重试会放大请求量（触发反爬），配合"过期缓存兜底"改为 2 轮
 _RETRY_TRIES = 2
 _RETRY_DELAY = 0.3
@@ -271,11 +286,16 @@ async def kline(secid: str, klt: int = 1, lmt: int = 240, fqt: int = 1,
     bars = await _tx_kline(secid, klt, lmt, ttl)
     if bars:
         return bars
+    if _push2_dead("push2his.eastmoney.com"):
+        return []
     d = await get_json("https://push2his.eastmoney.com/api/qt/stock/kline/get",
                        {"secid": secid, "fields1": _fields1(), "fields2": _fields2(),
                         "klt": klt, "fqt": fqt, "end": "20500101", "lmt": lmt, "ut": _UT},
-                       ttl=ttl)
-    return parse_klines(d.get("data") if d else None)
+                       ttl=ttl, tries=1)
+    if d is None:
+        _push2_mark_dead("push2his.eastmoney.com")
+        return []
+    return parse_klines(d.get("data"))
 
 
 def _trends_trim(out: list[dict], ndays: int) -> list[dict]:
@@ -320,11 +340,16 @@ async def trends(secid: str, ndays: int = 1, ttl: float = 30.0) -> list[dict]:
         out = _trends_trim(out, ndays)
         if out:
             return out
+    if _push2_dead("push2.eastmoney.com"):
+        return []
     d = await get_json("https://push2.eastmoney.com/api/qt/stock/trends2/get",
                        {"secid": secid, "fields1": "f1,f2,f3,f4,f5,f6,f7,f8",
                         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58", "iscr": 0,
-                        "ndays": ndays, "ut": _UT}, ttl=ttl)
-    return _trends_trim(parse_trends(d.get("data") if d else None), ndays)
+                        "ndays": ndays, "ut": _UT}, ttl=ttl, tries=1)
+    if d is None:
+        _push2_mark_dead("push2.eastmoney.com")
+        return []
+    return _trends_trim(parse_trends(d.get("data")), ndays)
 
 
 # 资金流快照累积：交易时段内每次调用都用 emdatah5 快照累积一分钟点（内存+磁盘），
@@ -470,11 +495,15 @@ async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 20.0) -> di
                 if len(hist) > _FLOW_MAX:
                     del hist[:len(hist) - _FLOW_MAX]
                 _flow_persist(secid, line)
-    d = await get_json("https://push2.eastmoney.com/api/qt/stock/fflow/kline/get",
-                       {"secid": secid, "klt": klt, "lmt": lmt, "fields1": "f1,f2,f3,f7",
-                        "fields2": "f51,f52,f53,f54,f55,f56", "ut": _UT},
-                       ttl=ttl, tries=1)
-    data = d.get("data") if d else None
+    data = None
+    if not _push2_dead("push2.eastmoney.com"):
+        d = await get_json("https://push2.eastmoney.com/api/qt/stock/fflow/kline/get",
+                           {"secid": secid, "klt": klt, "lmt": lmt, "fields1": "f1,f2,f3,f7",
+                            "fields2": "f51,f52,f53,f54,f55,f56", "ut": _UT},
+                           ttl=ttl, tries=1)
+        if d is None:
+            _push2_mark_dead("push2.eastmoney.com")
+        data = d.get("data") if d else None
     if data and len(data.get("klines") or []) >= 2:
         return {"klines": data["klines"], "day": today}
     # 只回交易时段内的点（清掉任何历史脏点）
