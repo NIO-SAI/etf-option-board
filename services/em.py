@@ -607,7 +607,7 @@ def _opt_persist(secid: str, line: str) -> None:
                 {"date": minute.split(" ", 1)[0], "secid": secid, "line": line},
                 ensure_ascii=False) + "\n")
     except OSError as exc:
-        log.debug("期权分时落盘失败: %s", exc)
+        log.warning("期权分时落盘失败 %s %s: %s", secid, minute, exc)
 
 
 async def opt_trends(secid: str, ttl: float = 12.0) -> list[dict]:
