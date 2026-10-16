@@ -159,7 +159,8 @@ async def _build_plan(etf: dict, ctx: dict, side: str, score: float,
                       hits: list[str]) -> dict:
     """组装开仓建议：方向 / 标的点位 / 优选合约 / IV 提示。"""
     direction = "call" if side == "bull" else "put"
-    cn_dir = "认购" if side == "bull" else "认沽"
+    cn_dir = "看多" if side == "bull" else "看空"       # 方向（观点）词：全站统一「看多/看空/观望」
+    cn_type = "认购" if side == "bull" else "认沽"      # 合约类型：只用于描述合约，勿与方向混用
     q = ctx.get("quote") or {}
     last = q.get("price")
     levels = strategy.plan_levels(ctx, direction)
@@ -179,7 +180,7 @@ async def _build_plan(etf: dict, ctx: dict, side: str, score: float,
             if cl:
                 contract = cl
                 contract_txt = (
-                    f"合约{cl['contract']} Δ{cl['delta']:.2f}："
+                    f"{cn_type}合约{cl['contract']} Δ{cl['delta']:.2f}："
                     f"入场{cl['entry']:.4f} / 止损{cl['stop']:.4f}({cl['stop_pct']:+.0f}%) / "
                     f"目标{cl['target']:.4f}"
                 )

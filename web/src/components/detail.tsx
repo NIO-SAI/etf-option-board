@@ -84,7 +84,7 @@ export function KronosPredict({ secid, klt = 5 }: { secid: string; klt?: number 
     <div>
       <div className="flex items-center gap-2 px-3 pb-1 text-[11px]">
         <Badge variant={s?.bias === "up" ? "destructive-light" : s?.bias === "down" ? "success-light" : "secondary"} size="xs">
-          预测 {s?.bias === "up" ? "偏多" : s?.bias === "down" ? "偏空" : "震荡"} {s?.pred_pct != null ? pct(s.pred_pct) : ""}
+          预测 {s?.bias === "up" ? "看多" : s?.bias === "down" ? "看空" : "观望"} {s?.pred_pct != null ? pct(s.pred_pct) : ""}
         </Badge>
         <span className="text-muted-foreground tnum">未来 {s?.path?.length ?? 0} 根 · 涨占比 {((s?.up_ratio ?? 0) * 100) | 0}% · 上沿 {nf(s?.pred_high, 4)} / 下沿 {nf(s?.pred_low, 4)}</span>
       </div>

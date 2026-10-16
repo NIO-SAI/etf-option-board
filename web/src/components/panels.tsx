@@ -134,7 +134,7 @@ export function BiasBar({ bias }: { bias: any }) {
   const s = Math.max(-100, Math.min(100, bias?.score ?? 0));
   const pos = ((s + 100) / 200) * 100;
   const dir = bias?.direction ?? "neutral";
-  const label = dir === "call" ? "看多（认购）" : dir === "put" ? "看空（认沽）" : "观望（中性）";
+  const label = dir === "call" ? "看多（认购）" : dir === "put" ? "看空（认沽）" : "观望";
   // 统一：看多=红、看空=绿（与其它方向标签一致）
   const variant = dir === "call" ? "destructive-light" : dir === "put" ? "success-light" : "secondary";
   return (
@@ -170,7 +170,7 @@ export function PlanCard({ bundle }: { bundle: any }) {
       <FramePanel dense>
         <FrameHeader><FrameTitle className="text-xs">标的点位（ETF）</FrameTitle></FrameHeader>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1 px-3 pb-3 text-xs sm:grid-cols-3">
-          <Kv k="方向" v={lv.side === "long" ? "偏多" : lv.side === "short" ? "偏空" : "观望"} />
+          <Kv k="方向" v={lv.side === "long" ? "看多" : lv.side === "short" ? "看空" : "观望"} />
           <Kv k="突破入场" v={nf(lv.entry_break, 4)} />
           <Kv k="回踩买点" v={nf(lv.entry_pullback, 4)} />
           <Kv k="止损" v={nf(lv.stop, 4)} />

@@ -91,7 +91,7 @@ export function AlertCenter() {
             <div className="text-sm text-muted-foreground">{popup.text}</div>
             <div className="flex items-center gap-2 text-xs">
               <Badge variant={popup.dir === "bull" ? "destructive-light" : popup.dir === "bear" ? "success-light" : "secondary"} size="sm">
-                {popup.dir === "bull" ? "偏多" : popup.dir === "bear" ? "偏空" : "中性"}
+                {popup.dir === "bull" ? "看多" : popup.dir === "bear" ? "看空" : "观望"}
               </Badge>
               <span className="text-muted-foreground tnum">{popup.etf_name} · {popup.ts?.slice(11)}</span>
             </div>

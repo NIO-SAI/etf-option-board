@@ -146,7 +146,7 @@ def detect_signals(etf_ctx: dict, track: dict, national: dict, ext: list[dict],
 
 
 def bias_score(etf_ctx, track, national, ext, kronos_sum) -> dict:
-    """多因子方向评分 [-100,100]，>0 偏多。"""
+    """多因子方向评分 [-100,100]，>0 看多。"""
     score = 0.0
     detail = {}
     q = etf_ctx.get("quote") or {}
@@ -176,7 +176,7 @@ def bias_score(etf_ctx, track, national, ext, kronos_sum) -> dict:
         score += 10; detail["指数MACD金叉"] = 10
     elif tm.get("cross") == "dead":
         score -= 10; detail["指数MACD死叉"] = -10
-    # 国家队（权重 15，护盘偏多）
+    # 国家队（权重 15，护盘看多）
     nt = national.get("score", 0)
     if nt >= 40:
         v = 15 * min(nt / 100, 1)
