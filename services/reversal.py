@@ -13,7 +13,7 @@
   5m 趋势配合                   +10
   突破/跌破近15分钟高低点        +15
   站上/跌破分时均价              +5
-  量能放大≥2x                   +10（≥3x +15）
+  量能放大≥2x                   +10（≥3x +15；近1分钟 ÷ 日内均量口径）
   主力5分钟同向≥0.5亿            +10（≥1.2亿 +15）
   关联指数同向                  +10
   3m 顶/底背离                  +10
@@ -119,7 +119,7 @@ def _score_side(ctx: dict, track: dict | None, side: str) -> tuple[float, list[s
         if (bull and px > avg) or (not bull and px < avg):
             s += 5
             hits.append("站上均价" if bull else "跌破均价")
-    # 量能
+    # 量能（ratio 为「近1分钟 ÷ 日内均量」口径，见 indicators.volume_stats）
     ratio = (ctx.get("volume") or {}).get("ratio") or 0
     if ratio >= 3.0:
         s += 15

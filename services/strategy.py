@@ -86,7 +86,7 @@ def detect_signals(etf_ctx: dict, track: dict, national: dict, ext: list[dict],
     vs = etf_ctx.get("volume") or {}
     if vs.get("is_surge"):
         sig.append({"type": "volume_surge", "level": "warn", "dir": "neutral",
-                    "text": f"标的量能放大 {vs['ratio']}x（近5分钟 vs 日内均量）"})
+                    "text": f"标的量能放大 {vs['ratio']}x（近1分钟 vs 日内均量）"})
 
     # 主力资金突入
     d5 = etf_ctx.get("flow_main_delta5m") or 0

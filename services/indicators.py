@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-# 量能放大「提示」阈值：近5分钟均量 ÷ 近端均量 ≥ 该倍数才提示。
+# 量能放大「提示」阈值：近1分钟量能 ÷ 日内均量 ≥ 该倍数才提示。
 # 告警（monitor）、信号流（strategy）、国家队护盘评分里的放量计数、前端量能高亮统一用此口径。
-SURGE_RATIO = 3.0
+SURGE_RATIO = 5.0
 
 
 def ema(values: list[float], period: int) -> list[float]:
@@ -74,20 +74,21 @@ def _divergence(closes: list[float], hist: list[float], look: int = 60) -> dict:
 
 
 def volume_stats(vols: list[float]) -> dict:
-    """当日分钟量能 vs 近端均量的放大倍数。"""
+    """近1分钟量能 vs 日内均量的放大倍数（均量只取有成交的分钟）。"""
     if len(vols) < 10:
         return {"ok": False}
-    recent = vols[-5:]
-    base = vols[-60:-5] if len(vols) > 65 else vols[:-5]
+    cur = vols[-1]
+    # 基准均量：当前分钟之前、有成交的分钟（近 60 根）。剔除 0 量分钟很关键——
+    # 停牌/无成交分钟（如 14:58 集合竞价前后）会把均值拉低，导致 ratio 虚高（曾见 45x）。
+    base = [v for v in vols[:-1][-60:] if v > 0]
     avg = sum(base) / len(base) if base else 0
-    cur = sum(recent) / len(recent)
     ratio = (cur / avg) if avg else 0
     peak = max(vols)
     return {
         "ok": True, "ratio": round(ratio, 2),
-        "is_surge": ratio >= SURGE_RATIO,
-        "peak_ratio": round(vols[-1] / peak, 2) if peak else 0,
-        "last": vols[-1],
+        "is_surge": ratio >= SURGE_RATIO and cur > 0,
+        "peak_ratio": round(cur / peak, 2) if peak else 0,
+        "last": cur,
     }
 
 
