@@ -12,11 +12,10 @@ import { BrainCircuit, Loader2 } from "lucide-react";
 
 /* ---------------- 合约详情（分时叠加） ---------------- */
 export function ContractDetail({
-  contract, etfTrends, flow, etfPrevClose = null,
+  contract, etfTrends, etfPrevClose = null,
 }: {
   contract: any;
   etfTrends: any[];
-  flow: any[];
   etfPrevClose?: number | null;
 }) {
   const secid = contract?.secid;
@@ -57,12 +56,12 @@ export function ContractDetail({
       </FramePanel>
       <FramePanel dense>
         <FrameHeader className="flex-row items-center justify-between">
-          <FrameTitle className="text-xs">分时叠加（期权价 + 标的ETF + 主力资金）</FrameTitle>
-          <span className="text-[10px] text-muted-foreground">右轴 涨跌幅%(期权) · 柱 主力净流入</span>
+          <FrameTitle className="text-xs">分时叠加（期权 + 标的ETF）</FrameTitle>
+          <span className="text-[10px] text-muted-foreground">右轴 涨跌幅%(期权) · 灰线 标的ETF涨跌幅</span>
         </FrameHeader>
         <div className="px-1 pb-2">
           <ErrorBoundary label="分时叠加图">
-            <OverlayChart id="overlay" optTrends={t} etfTrends={etfTrends} flow={flow}
+            <OverlayChart id="overlay" optTrends={t} etfTrends={etfTrends}
               optPrevClose={contract?.prev_close ?? null} etfPrevClose={etfPrevClose} height={300} />
           </ErrorBoundary>
         </div>

@@ -222,11 +222,10 @@ export function KlineChart({ bars, height = 260, id }: { bars: any[]; height?: n
  *  左轴已移除，右侧只显示期权 % 一列标签。
  */
 export function OverlayChart({
-  optTrends, etfTrends, flow, height = 300, id, optPrevClose = null, etfPrevClose = null,
+  optTrends, etfTrends, height = 300, id, optPrevClose = null, etfPrevClose = null,
 }: {
   optTrends: any[];
   etfTrends: any[];
-  flow: any[];
   height?: number;
   id?: string;
   optPrevClose?: number | null;
@@ -234,18 +233,10 @@ export function OverlayChart({
 }) {
   const option = useMemo(() => {
     const norm = (t: any) => (t || "").slice(-5);
-    const axisSrc: any[] = optTrends?.length ? optTrends : (etfTrends?.length ? etfTrends : flow) ?? [];
+    const axisSrc: any[] = optTrends?.length ? optTrends : (etfTrends ?? []);
     const times = axisSrc.map((t: any) => norm(t.time));
     const optMap = new Map((optTrends ?? []).map((t) => [norm(t.time), t.price]));
     const etfMap = new Map((etfTrends ?? []).map((t) => [norm(t.time), t.price]));
-    const flowMap = new Map((flow ?? []).map((f) => [norm(f.time), f.main]));
-    const mains = times.map((t) => flowMap.get(t) ?? null);
-    // 资金线要「红涨绿跌」。注意不能靠 visualMap 给线段分色：ECharts 5.6 对 line
-    // 做视觉映射会在 LineView.render→getVisualGradient 处抛 "Cannot read properties
-    // of undefined (reading 'coord')"，整张图会被 ErrorBoundary 吃掉。改为拆成正/负
-    // 两条同名 series；非本方向的点填 0（而非 null），保证穿越 0 轴时线段连续。
-    const flowPos = mains.map((v) => (v == null ? null : (v > 0 ? v : 0)));
-    const flowNeg = mains.map((v) => (v == null ? null : (v <= 0 ? v : 0)));
 
     // 昨收 -> 百分比。缺昨收（未选合约 / 新上市 / quote 未就绪）则整条线不画。
     const toPctSeries = (src: Map<any, any>, prev: number | null) => {
@@ -282,32 +273,17 @@ export function OverlayChart({
       grid: { left: 10, right: 56, top: 30, bottom: 40 },
       legend: {
         top: 2, textStyle: { color: AXIS }, itemWidth: 12, itemHeight: 8,
-        data: [...(optPct ? ["期权涨跌幅"] : []), ...(etfPct ? ["标的涨跌幅"] : []), "主力净流入"],
+        data: [...(optPct ? ["期权涨跌幅"] : []), ...(etfPct ? ["标的涨跌幅"] : [])],
       },
       tooltip: {
         ...base.tooltip,
         formatter: (ps: any) => {
           const arr = Array.isArray(ps) ? ps : [ps];
           const head = arr[0]?.axisValueLabel ?? arr[0]?.name ?? "";
-          // 资金已拆成正/负两条（只为给线段分色），tooltip 只呈现真实方向的那一条
-          const flowReal = arr.find((p: any) => p.seriesName === "主力净流入" && Number(p.value) !== 0);
           const rows: string[] = [];
-          let flowShown = false;
           for (const p of arr) {
-            if (p.seriesName === "主力净流入") {
-              if (flowShown) continue;          // 第二条是同名的反向系列，跳过
-              flowShown = true;
-              const src = flowReal ?? p;
-              const n = Number(src?.value);
-              const val = src && src.value !== null && isFinite(n) ? `${Math.round(n / 1e4)}万` : "—";
-              rows.push(`${p.marker}${p.seriesName} <b>${val}</b>`);
-              continue;
-            }
             const n = Number(p.value);
-            let val = "—";
-            if (p.value !== null && p.value !== undefined && isFinite(n)) {
-              val = `${n.toFixed(2)}%`;   // 价格系列已是百分比
-            }
+            const val = p.value !== null && p.value !== undefined && isFinite(n) ? `${n.toFixed(2)}%` : "—";
             rows.push(`${p.marker}${p.seriesName} <b>${val}</b>`);
           }
           return `${head}<br/>${rows.join("<br/>")}`;
@@ -322,9 +298,6 @@ export function OverlayChart({
         { ...base.yAxisBase, position: "right", ...symRange(etfPct),
           splitLine: { show: false },
           axisLabel: { show: labelEtf, color: "#a1a1aa", formatter: (v: number) => `${v.toFixed(2)}%` } },
-        // 2 右：主力净流入（金额，独立轴）
-        { ...base.yAxisBase, position: "right", offset: 60, name: "主力", nameTextStyle: { color: "#7c3aed" },
-          splitLine: { show: false }, axisLabel: { show: false } },
       ],
       series: [
         { name: "期权涨跌幅", type: "line", data: optPct ?? [], showSymbol: false, connectNulls: false,
@@ -333,14 +306,9 @@ export function OverlayChart({
         { name: "标的涨跌幅", type: "line", yAxisIndex: 1, data: etfPct ?? [], showSymbol: false, connectNulls: false,
           lineStyle: { width: 1.4, color: "#a1a1aa" },
           ...(!optPct && etfPct ? { markLine: zeroLine } : {}) },
-        // 同名拆两条只为让红涨绿跌落到线段上；legend 按 name 聚合，仍只显示一项
-        { name: "主力净流入", type: "line", yAxisIndex: 2, data: flowPos, showSymbol: false,
-          connectNulls: false, lineStyle: { width: 1.2, color: UP } },
-        { name: "主力净流入", type: "line", yAxisIndex: 2, data: flowNeg, showSymbol: false,
-          connectNulls: false, lineStyle: { width: 1.2, color: DOWN } },
       ],
     };
-  }, [optTrends, etfTrends, flow, optPrevClose, etfPrevClose]);
+  }, [optTrends, etfTrends, optPrevClose, etfPrevClose]);
   return <ReactECharts key={id} option={option} style={{ height }} />;
 }
 
