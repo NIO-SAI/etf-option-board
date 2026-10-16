@@ -160,7 +160,12 @@ export function IntradayChart({
           ...(etfPct ? { markLine: zeroLine } : {}),
           ...(sigPts.length ? { markPoint: {
             symbol: "triangle", symbolSize: 11,
-            label: { fontSize: 9, color: "#fff", formatter: "{c}" },
+            label: {
+              fontSize: 10, fontWeight: 700, color: "#18181b",
+              position: "top", distance: 5,
+              backgroundColor: "#ffffff", borderColor: "rgba(0,0,0,0.15)", borderWidth: 1,
+              padding: [1, 3], borderRadius: 3,
+            },
             data: sigPts,
           } } : {}), },
         { name: idxLabel, type: "line", yAxisIndex: 0, data: idxPct ?? [], showSymbol: false, connectNulls: false,

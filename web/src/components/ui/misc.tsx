@@ -1,4 +1,5 @@
 import * as React from "react";
+import ReactDOM from "react-dom";
 import { cn } from "@/lib/utils";
 
 export const Skeleton = ({ className }: { className?: string }) => (
@@ -34,6 +35,77 @@ export function Tabs({
         </button>
       ))}
     </div>
+  );
+}
+
+/** 轻量悬浮提示：portal + fixed 定位，不被滚动容器裁切；children 为触发元素。 */
+export function HoverTip({
+  label, children, className, triggerClassName, side = "bottom",
+}: {
+  label: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+  triggerClassName?: string;
+  side?: "top" | "bottom";
+}) {
+  const ref = React.useRef<HTMLSpanElement>(null);
+  const tipRef = React.useRef<HTMLDivElement>(null);
+  const [pos, setPos] = React.useState<{ x: number; y: number } | null>(null);
+
+  const show = () => {
+    const r = ref.current?.getBoundingClientRect();
+    if (!r) return;
+    setPos({ x: r.left + r.width / 2, y: side === "top" ? r.top : r.bottom });
+  };
+  const hide = React.useCallback(() => setPos(null), []);
+
+  // 挂载后按实际宽度做视口边界修正，避免右侧溢出屏幕
+  React.useLayoutEffect(() => {
+    if (!pos || !tipRef.current) return;
+    const w = tipRef.current.offsetWidth;
+    const x = Math.min(Math.max(pos.x - w / 2, 8), window.innerWidth - w - 8);
+    tipRef.current.style.left = `${x}px`;
+    if (side === "top") tipRef.current.style.bottom = `${window.innerHeight - pos.y + 6}px`;
+    else tipRef.current.style.top = `${pos.y + 6}px`;
+  }, [pos, side]);
+
+  // 滚动/缩放时提示易错位，直接隐藏
+  React.useEffect(() => {
+    if (!pos) return;
+    const onScroll = () => hide();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [pos, hide]);
+
+  return (
+    <>
+      <span
+        ref={ref}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onClick={hide}
+        className={cn("block min-w-0", triggerClassName)}
+      >
+        {children}
+      </span>
+      {pos && label != null && label !== "" && ReactDOM.createPortal(
+        <div
+          ref={tipRef}
+          className={cn(
+            "pointer-events-none fixed z-[120] max-w-[320px] whitespace-pre-line break-words rounded-md border border-border",
+            "bg-popover px-2 py-1 text-[11px] leading-snug text-popover-foreground shadow-lg",
+            className,
+          )}
+        >
+          {label}
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
-import { Dialog } from "@/components/ui/misc";
+import { Dialog, HoverTip } from "@/components/ui/misc";
 import { api } from "@/lib/api";
 import { useAlertStream } from "@/lib/usePolling";
 import { sound } from "@/lib/sound";
@@ -69,13 +69,16 @@ export function AlertCenter() {
             {rows.map((a) => (
               <div key={a.id} className="flex items-start gap-2 px-3 py-1.5">
                 <span className="mt-0.5">{a.level === "critical" ? <AlertTriangle className="size-3 text-destructive" /> : null}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className={`truncate text-xs font-medium ${clsUpDown(a.dir === "bull" ? 1 : a.dir === "bear" ? -1 : 0)}`}>{a.title}</span>
-                    <Badge variant="outline" size="xs">{TYPE_LABEL[a.type] ?? a.type}</Badge>
+                {/* 整行悬浮：完整标题 + 完整正文（列表里标题 truncate、正文 line-clamp-2 会截断） */}
+                <HoverTip label={`${a.title}\n${a.text}`} className="min-w-[240px]">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`truncate text-xs font-medium ${clsUpDown(a.dir === "bull" ? 1 : a.dir === "bear" ? -1 : 0)}`}>{a.title}</span>
+                      <Badge variant="outline" size="xs">{TYPE_LABEL[a.type] ?? a.type}</Badge>
+                    </div>
+                    <div className="line-clamp-2 text-[10px] leading-snug text-muted-foreground">{a.text}</div>
                   </div>
-                  <div className="line-clamp-2 text-[10px] leading-snug text-muted-foreground">{a.text}</div>
-                </div>
+                </HoverTip>
                 <span className="text-[10px] text-muted-foreground tnum">{a.ts?.slice(11)}</span>
               </div>
             ))}
