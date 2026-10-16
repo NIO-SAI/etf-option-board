@@ -30,17 +30,17 @@ export function ContractDetail({
   return (
     <Frame spacing="sm" stacked>
       <FramePanel dense>
-        <FrameHeader className="flex-row items-center justify-between">
+        <FrameHeader className="flex-row flex-wrap items-center justify-between gap-y-1.5">
           {contract ? (
             <>
-              <div className="flex items-center gap-2">
-                <FrameTitle className="text-sm">{contract.name}</FrameTitle>
-                <span className="text-[11px] text-muted-foreground tnum">{contract.code}</span>
-                <Badge variant={contract.type === "call" ? "destructive-light" : "success-light"} size="xs">
+              <div className="flex min-w-0 items-center gap-2">
+                <FrameTitle className="truncate text-sm">{contract.name}</FrameTitle>
+                <span className="shrink-0 text-[11px] text-muted-foreground tnum">{contract.code}</span>
+                <Badge variant={contract.type === "call" ? "destructive-light" : "success-light"} className="shrink-0">
                   {contract.type === "call" ? "认购" : "认沽"}
                 </Badge>
               </div>
-              <div className="flex items-center gap-3 text-xs tnum">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs tnum">
                 <span className="text-base font-semibold">{nf(contract.last, 4)}</span>
                 <span className={clsUpDown(contract.pct)}>{pct(contract.pct)}</span>
                 <span className="text-muted-foreground">IV {nf(contract.iv, 1)}%</span>
@@ -56,9 +56,9 @@ export function ContractDetail({
         </FrameHeader>
       </FramePanel>
       <FramePanel dense>
-        <FrameHeader className="flex-row items-center justify-between">
+        <FrameHeader className="flex-row flex-wrap items-center justify-between gap-y-1">
           <FrameTitle className="text-xs">分时叠加（期权 + 标的ETF + 标的ETF主力净买额）</FrameTitle>
-          <span className="text-[10px] text-muted-foreground">右轴 涨跌幅%(期权) · 灰线 标的ETF涨跌幅 · 柱 标的ETF主力净买额</span>
+          <span className="text-xs text-muted-foreground">右轴 涨跌幅%(期权) · 灰线 标的ETF涨跌幅 · 柱 标的ETF主力净买额</span>
         </FrameHeader>
         <div className="px-1 pb-2">
           <ErrorBoundary label="分时叠加图">
@@ -83,7 +83,7 @@ export function KronosPredict({ secid, klt = 5 }: { secid: string; klt?: number 
   return (
     <div>
       <div className="flex items-center gap-2 px-3 pb-1 text-[11px]">
-        <Badge variant={s?.bias === "up" ? "destructive-light" : s?.bias === "down" ? "success-light" : "secondary"} size="xs">
+        <Badge variant={s?.bias === "up" ? "destructive-light" : s?.bias === "down" ? "success-light" : "outline"}>
           预测 {s?.bias === "up" ? "看多" : s?.bias === "down" ? "看空" : "观望"} {s?.pred_pct != null ? pct(s.pred_pct) : ""}
         </Badge>
         <span className="text-muted-foreground tnum">未来 {s?.path?.length ?? 0} 根 · 涨占比 {((s?.up_ratio ?? 0) * 100) | 0}% · 上沿 {nf(s?.pred_high, 4)} / 下沿 {nf(s?.pred_low, 4)}</span>
@@ -120,7 +120,7 @@ export function LlmPanel({ code }: { code: string }) {
           <FrameTitle className="flex items-center gap-1.5 text-xs">
             <BrainCircuit className="size-3.5 text-primary" /> 大模型决策
           </FrameTitle>
-          <Button size="xs" onClick={run} disabled={loading}>
+          <Button size="sm" onClick={run} disabled={loading}>
             {loading ? <Loader2 className="animate-spin" /> : null}
             {loading ? "分析中…" : "生成决策"}
           </Button>
@@ -131,9 +131,9 @@ export function LlmPanel({ code }: { code: string }) {
           {d && !d.error && (
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-1.5">
-                <Badge variant={variant as any} size="sm">{actionLabel}</Badge>
-                <Badge variant="outline" size="sm">置信度 {d.confidence}</Badge>
-                {d.contract_name && <Badge variant="info-light" size="sm">{d.contract_name} {d.contract_code}</Badge>}
+                <Badge variant={variant as any}>{actionLabel}</Badge>
+                <Badge variant="outline">置信度 {d.confidence}</Badge>
+                {d.contract_name && <Badge variant="info-light">{d.contract_name} {d.contract_code}</Badge>}
               </div>
               {(d.entry || d.stop || d.target) && (
                 <div className="grid grid-cols-3 gap-2 text-center">

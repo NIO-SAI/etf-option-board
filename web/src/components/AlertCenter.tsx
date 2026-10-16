@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
-import { Dialog, HoverTip } from "@/components/ui/misc";
+import { Dialog, EmptyState, HoverTip } from "@/components/ui/misc";
 import { api } from "@/lib/api";
 import { useAlertStream } from "@/lib/usePolling";
 import { sound } from "@/lib/sound";
@@ -64,8 +64,9 @@ export function AlertCenter() {
               <Volume2 className="size-3" /> 声音已开启
             </span>
           </FrameHeader>
-          <div className="max-h-[260px] divide-y divide-border/60 overflow-auto">
-            {rows.length === 0 && <div className="py-5 text-center text-xs text-muted-foreground">暂无告警</div>}
+          {/* 列表自身限高滚动是刻意的：本卡位于随页面滚动的右栏，没有定高父链可依赖 */}
+          <div className="max-h-[260px] min-h-0 divide-y divide-border/60 overflow-auto" role="status" aria-live="polite">
+            {rows.length === 0 && <EmptyState title="暂无告警" hint="量能、资金异动与变盘信号会在此推送" />}
             {rows.map((a) => (
               <div key={a.id} className="flex items-start gap-2 px-3 py-1.5">
                 <span className="mt-0.5">{a.level === "critical" ? <AlertTriangle className="size-3 text-destructive" /> : null}</span>
@@ -74,7 +75,7 @@ export function AlertCenter() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className={`truncate text-xs font-medium ${clsUpDown(a.dir === "bull" ? 1 : a.dir === "bear" ? -1 : 0)}`}>{a.title}</span>
-                      <Badge variant="outline" size="xs">{TYPE_LABEL[a.type] ?? a.type}</Badge>
+                      <Badge variant="outline" className="shrink-0">{TYPE_LABEL[a.type] ?? a.type}</Badge>
                     </div>
                     <div className="line-clamp-2 text-[10px] leading-snug text-muted-foreground">{a.text}</div>
                   </div>
@@ -93,7 +94,7 @@ export function AlertCenter() {
             <div className="text-base font-semibold">{popup.title}</div>
             <div className="text-sm text-muted-foreground">{popup.text}</div>
             <div className="flex items-center gap-2 text-xs">
-              <Badge variant={popup.dir === "bull" ? "destructive-light" : popup.dir === "bear" ? "success-light" : "secondary"} size="sm">
+              <Badge variant={popup.dir === "bull" ? "destructive-light" : popup.dir === "bear" ? "success-light" : "outline"}>
                 {popup.dir === "bull" ? "看多" : popup.dir === "bear" ? "看空" : "观望"}
               </Badge>
               <span className="text-muted-foreground tnum">

@@ -4,10 +4,10 @@ import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/fr
 import { Badge } from "@/components/reui/badge";
 import { IntradayChart } from "@/components/charts";
 import { TopBar } from "@/components/TopBar";
-import { BiasBar, CandidateList, EtfList, OptionTQuote, PlanCard, SignalFeed } from "@/components/panels";
+import { BiasBar, BiasBarSkeleton, CandidateList, CandidateSkeleton, EtfList, OptionTQuote, PlanCard, SignalFeed } from "@/components/panels";
 import { ContractDetail, KronosPredict, LlmPanel } from "@/components/detail";
 import { AlertCenter } from "@/components/AlertCenter";
-import { Skeleton } from "@/components/ui/misc";
+import { EmptyState, Skeleton } from "@/components/ui/misc";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
@@ -100,7 +100,7 @@ export default function App() {
               <FrameHeader className="flex-row items-center justify-between">
                 <div className="flex items-center gap-2">
                   <FrameTitle className="text-sm">{ctxReady ? (ctx!.etf?.name ?? etfCode) : (etfs.find((e: any) => e.code === etfCode)?.name ?? etfCode)}</FrameTitle>
-                  <Badge variant="outline" size="xs">{etfCode}</Badge>
+                  <Badge variant="outline" className="shrink-0">{etfCode}</Badge>
                   {ctxReady && ctx?.quote ? (
                     <>
                       <span className="text-sm font-semibold tnum">{nf(ctx.quote.price, 3)}</span>
@@ -119,7 +119,7 @@ export default function App() {
                   <MiniKv k="主力5分" v={signedWan(ctx.flow_main_delta5m)} tone={ctx.flow_main_delta5m == null ? undefined : ctx.flow_main_delta5m > 0 ? "up" : "down"} />
                   <MiniKv k="主力累计" v={signedWan(ctx.flow_snapshot?.main)} tone={ctx.flow_snapshot?.main == null ? undefined : ctx.flow_snapshot.main > 0 ? "up" : "down"} />
                   {ctx.flow_day && ctx.flow_day < new Date().toLocaleDateString("en-CA") && (
-                    <Badge variant="outline" size="xs" className="text-amber-600 border-amber-300">昨日资金流</Badge>
+                    <Badge variant="warning-light" title="当日资金流序列尚未产生，展示的是最近一个有数据的交易日">昨日资金流</Badge>
                   )}
                   <MiniKv k="MACD" v={ctx.macd?.cross === "golden" ? "金叉" : ctx.macd?.cross === "dead" ? "死叉" : "—"} />
                   <MiniKv k="背离3分" v={ctx.macd3?.divergence?.type === "bullish" ? "底背离" : ctx.macd3?.divergence?.type === "bearish" ? "顶背离" : "无"} />
@@ -166,8 +166,8 @@ export default function App() {
             <FramePanel dense>
               <FrameHeader><FrameTitle className="text-xs">日内方向与信号</FrameTitle></FrameHeader>
               <div className="flex flex-col gap-2 px-3 pb-3">
-                {strategy ? <BiasBar bias={strategy.bias} /> : <Skeleton className="h-16" />}
-                <SignalFeed signals={strategy?.signals ?? []} />
+                {strategy ? <BiasBar bias={strategy.bias} /> : <BiasBarSkeleton />}
+                <SignalFeed signals={strategy?.signals ?? []} loading={!strategy} />
               </div>
             </FramePanel>
           </Frame>
@@ -182,15 +182,21 @@ export default function App() {
             </FramePanel>
           </Frame>
 
-          {strategy && <PlanCard bundle={strategy} />}
+          <PlanCard bundle={strategy} />
 
           <Frame spacing="sm">
             <FramePanel dense>
               <FrameHeader><FrameTitle className="text-xs">优选合约（按日内性价比）</FrameTitle></FrameHeader>
               <div className="px-3 pb-3">
-                {strategy?.candidates?.length ? (
+                {!strategy ? (
+                  <CandidateSkeleton />
+                ) : strategy?.candidates?.length ? (
                   <CandidateList candidates={strategy.candidates} selected={contractSecid ?? undefined} onSelect={onPickContract} />
-                ) : <div className="py-4 text-center text-xs text-muted-foreground">—</div>}
+                ) : strategy?.error ? (
+                  <EmptyState title="策略数据获取失败" hint="接口未返回，稍后自动重试" />
+                ) : (
+                  <EmptyState title="暂无优选合约" hint="期权链未返回可用报价或 Delta" />
+                )}
               </div>
             </FramePanel>
           </Frame>

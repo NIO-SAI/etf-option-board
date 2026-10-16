@@ -109,6 +109,24 @@ export function HoverTip({
   );
 }
 
+/** 数据区的空/错误态：短标题 + 1 句说明（可选 action），不抢焦点、不撑高布局。 */
+export function EmptyState({
+  title, hint, action, className,
+}: {
+  title: string;
+  hint?: string;
+  action?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex flex-col items-center justify-center gap-1 px-4 py-6 text-center", className)}>
+      <div className="text-xs font-medium text-foreground">{title}</div>
+      {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
+      {action && <div className="mt-1">{action}</div>}
+    </div>
+  );
+}
+
 export function Dialog({
   open, onClose, title, children, className,
 }: {
