@@ -96,7 +96,10 @@ export function AlertCenter() {
               <Badge variant={popup.dir === "bull" ? "destructive-light" : popup.dir === "bear" ? "success-light" : "secondary"} size="sm">
                 {popup.dir === "bull" ? "看多" : popup.dir === "bear" ? "看空" : "观望"}
               </Badge>
-              <span className="text-muted-foreground tnum">{popup.etf_name} · {popup.ts?.slice(11)}</span>
+              <span className="text-muted-foreground tnum">
+                {popup.etf_code && <span className="mr-1 font-medium text-foreground">{popup.etf_code}</span>}
+                {popup.etf_name} · {popup.ts?.slice(11)}
+              </span>
             </div>
           </div>
         )}
