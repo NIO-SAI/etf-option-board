@@ -69,8 +69,8 @@ export function AlertCenter() {
             {rows.map((a) => (
               <div key={a.id} className="flex items-start gap-2 px-3 py-1.5">
                 <span className="mt-0.5">{a.level === "critical" ? <AlertTriangle className="size-3 text-destructive" /> : null}</span>
-                {/* 整行悬浮：完整标题 + 完整正文（列表里标题 truncate、正文 line-clamp-2 会截断） */}
-                <HoverTip label={`${a.title}\n${a.text}`} className="min-w-[240px]">
+                {/* 整行悬浮：代码 + 完整标题 + 完整正文（列表里标题 truncate、正文 line-clamp-2 会截断） */}
+                <HoverTip label={`${a.etf_code ? a.etf_code + " " : ""}${a.title}\n${a.text}`} className="min-w-[240px]">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className={`truncate text-xs font-medium ${clsUpDown(a.dir === "bull" ? 1 : a.dir === "bear" ? -1 : 0)}`}>{a.title}</span>

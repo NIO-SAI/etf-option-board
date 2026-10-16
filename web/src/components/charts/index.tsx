@@ -222,10 +222,11 @@ export function KlineChart({ bars, height = 260, id }: { bars: any[]; height?: n
  *  左轴已移除，右侧只显示期权 % 一列标签。
  */
 export function OverlayChart({
-  optTrends, etfTrends, height = 300, id, optPrevClose = null, etfPrevClose = null,
+  optTrends, etfTrends, flow, height = 300, id, optPrevClose = null, etfPrevClose = null,
 }: {
   optTrends: any[];
   etfTrends: any[];
+  flow: any[];
   height?: number;
   id?: string;
   optPrevClose?: number | null;
@@ -233,10 +234,16 @@ export function OverlayChart({
 }) {
   const option = useMemo(() => {
     const norm = (t: any) => (t || "").slice(-5);
-    const axisSrc: any[] = optTrends?.length ? optTrends : (etfTrends ?? []);
+    const axisSrc: any[] = optTrends?.length ? optTrends : (etfTrends?.length ? etfTrends : flow) ?? [];
     const times = axisSrc.map((t: any) => norm(t.time));
     const optMap = new Map((optTrends ?? []).map((t) => [norm(t.time), t.price]));
     const etfMap = new Map((etfTrends ?? []).map((t) => [norm(t.time), t.price]));
+    // 标的ETF 主力净买额（分钟净流入）。用「单条 bar + itemStyle.color 按正负上色」，
+    // 不要拆成红/绿两条同名 line 再互相补 0——那样非本方向的补 0 会在轴上留下一根
+    // 贯穿全图的假水平线（曾据此误读为参考线）。
+    const flowMap = new Map((flow ?? []).map((f) => [norm(f.time), f.main]));
+    const mains = times.map((t) => flowMap.get(t) ?? null);
+    const hasFlow = mains.some((v) => v !== null);
 
     // 昨收 -> 百分比。缺昨收（未选合约 / 新上市 / quote 未就绪）则整条线不画。
     const toPctSeries = (src: Map<any, any>, prev: number | null) => {
@@ -272,8 +279,8 @@ export function OverlayChart({
       ...base,
       grid: { left: 10, right: 56, top: 30, bottom: 40 },
       legend: {
-        top: 2, textStyle: { color: AXIS }, itemWidth: 12, itemHeight: 8,
-        data: [...(optPct ? ["期权涨跌幅"] : []), ...(etfPct ? ["标的涨跌幅"] : [])],
+        top: 2, textStyle: { color: AXIS }, itemWidth: 12, itemHeight: 8, itemGap: 10,
+        data: [...(optPct ? ["期权涨跌幅"] : []), ...(etfPct ? ["标的涨跌幅"] : []), ...(hasFlow ? ["标的ETF主力净买额"] : [])],
       },
       tooltip: {
         ...base.tooltip,
@@ -283,7 +290,10 @@ export function OverlayChart({
           const rows: string[] = [];
           for (const p of arr) {
             const n = Number(p.value);
-            const val = p.value !== null && p.value !== undefined && isFinite(n) ? `${n.toFixed(2)}%` : "—";
+            let val = "—";
+            if (p.value !== null && p.value !== undefined && isFinite(n)) {
+              val = p.seriesName === "标的ETF主力净买额" ? `${Math.round(n / 1e4)}万` : `${n.toFixed(2)}%`;
+            }
             rows.push(`${p.marker}${p.seriesName} <b>${val}</b>`);
           }
           return `${head}<br/>${rows.join("<br/>")}`;
@@ -298,8 +308,17 @@ export function OverlayChart({
         { ...base.yAxisBase, position: "right", ...symRange(etfPct),
           splitLine: { show: false },
           axisLabel: { show: labelEtf, color: "#a1a1aa", formatter: (v: number) => `${v.toFixed(2)}%` } },
+        // 2 右：标的ETF 主力净买额（金额，独立轴；刻度隐藏，柱贴 0 轴长出来）
+        // min/max 强制含 0，否则轴域全为负时柱子会被裁掉
+        { ...base.yAxisBase, position: "right", offset: 60, name: "主力",
+          nameTextStyle: { color: "#7c3aed" }, splitLine: { show: false }, axisLabel: { show: false },
+          min: (v: any) => Math.min(0, v.min), max: (v: any) => Math.max(0, v.max) },
       ],
       series: [
+        // 柱先画、线后画，保证两条涨跌幅线压在柱上面
+        ...(hasFlow ? [{ name: "标的ETF主力净买额", type: "bar" as const, yAxisIndex: 2, data: mains,
+          barWidth: "60%", opacity: 0.35,
+          itemStyle: { color: (p: any) => (p.value >= 0 ? UP : DOWN) } }] : []),
         { name: "期权涨跌幅", type: "line", data: optPct ?? [], showSymbol: false, connectNulls: false,
           lineStyle: { width: 1.6, color: "#60a5fa" }, areaStyle: { color: "rgba(96,165,250,0.08)" },
           ...(optPct ? { markLine: zeroLine } : {}) },
@@ -308,7 +327,7 @@ export function OverlayChart({
           ...(!optPct && etfPct ? { markLine: zeroLine } : {}) },
       ],
     };
-  }, [optTrends, etfTrends, optPrevClose, etfPrevClose]);
+  }, [optTrends, etfTrends, flow, optPrevClose, etfPrevClose]);
   return <ReactECharts key={id} option={option} style={{ height }} />;
 }
 

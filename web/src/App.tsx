@@ -155,7 +155,7 @@ export default function App() {
           </Frame>
 
           <ContractDetail contract={contract} etfTrends={ctxReady ? (ctx?.trends ?? []) : []}
-            etfPrevClose={ctxReady ? (ctx?.quote?.prev_close ?? null) : null} />
+            flow={ctxReady ? flowSeries : []} etfPrevClose={ctxReady ? (ctx?.quote?.prev_close ?? null) : null} />
         </div>
 
         {/* 右：决策栏 */}
