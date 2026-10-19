@@ -603,7 +603,7 @@ function ContractCells({ c, selected, onSelect, align, pick }: {
   // 首选合约：认购用红、认沽用绿，整侧单元格铺底色，与 ATM 的琥珀色区分
   const pickCls = pick === "call" ? "bg-up/10" : pick === "put" ? "bg-down/10" : "";
   const vals = [
-    <TD key="last" className={cn("text-right tnum", pickCls, on && "font-bold")}>{num(c.last)}</TD>,
+    <TD key="last" className={cn("text-right tnum", pickCls, pick && "font-semibold", on && "font-bold")}>{num(c.last)}</TD>,
     <TD key="pct" className={cn("text-right tnum", pickCls, clsUpDown(c.pct))}>{pct(c.pct, 1)}</TD>,
     <TD key="iv" className={cn("text-right tnum text-muted-foreground", pickCls)}>{nf(c.iv, 1)}</TD>,
     <TD key="d" className={cn("text-right tnum text-muted-foreground", pickCls)}>{nf(c.delta, 2)}</TD>,
