@@ -56,9 +56,11 @@ export default function App() {
 
   // 未选合约时，自动选中该标的的优选（近月）合约，避免详情区空白
   useEffect(() => {
-    if (contractSecid || !chain?.ranked) return;
-    const top = chain.ranked.call?.[0] ?? chain.ranked.put?.[0];
-    if (top?.secid) setContractSecid(top.secid);
+    if (contractSecid || !chain) return;
+    // 优先选中「结合趋势」的主推合约，其次回退到旧版排序
+    const secid = chain.best?.recommended?.secid
+      ?? chain.ranked?.call?.[0]?.secid ?? chain.ranked?.put?.[0]?.secid;
+    if (secid) setContractSecid(secid);
   }, [chain, contractSecid]);
 
   const quotes: Record<string, any> = useMemo(() => {

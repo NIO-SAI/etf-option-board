@@ -5,7 +5,7 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
 import { clsUpDown, nf, pct } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { ArrowDownRight, ArrowUpRight, Flame, Minus } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Flame, Minus, Star } from "lucide-react";
 
 /* ---------------- 方向标签 ---------------- */
 // 方向本质是「看多/看空/观望」这一状态：复用 ReUI 已装的 <tone>-light 状态徽标
@@ -479,6 +479,20 @@ export function OptionTQuote({
   if (!chain || chain.error) return <div className="p-4 text-xs text-muted-foreground">加载中…</div>;
   const s = chain.underlying?.price ?? 0;
   const rows: any[] = tq?.rows ?? [];
+  const best = chain.best;
+  const callPick = best?.call;
+  const putPick = best?.put;
+  const pickOf = (c: any): "call" | "put" | undefined => {
+    if (!c) return undefined;
+    if (callPick?.secid === c.secid) return "call";
+    if (putPick?.secid === c.secid) return "put";
+    return undefined;
+  };
+  const pickContract = (c: any) => {
+    if (!c) return;
+    onSelect(c);
+    if (month != null && c.month != null && month !== c.month) onMonth(c.month);
+  };
   // 近月剩余天数（expiry_list 按天数升序，首个即近月）
   const expiryDays = chain.expiry_list?.[0]?.days ?? null;
   // 最接近当前标的价格的那一档行权价（单一行）→ 特殊色标记
@@ -502,6 +516,47 @@ export function OptionTQuote({
           <Tabs tabs={expiries.map((m: number) => ({ key: String(m), label: `${m}月` }))} value={String(month)} onChange={(k) => onMonth(Number(k))} />
         </div>
       </div>
+      {best && (callPick || putPick) && (
+        <div className="mx-1 mb-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-border/60 bg-muted/25 px-2 py-1.5 text-[11px]">
+          <span className="text-muted-foreground">
+            标的趋势{" "}
+            <span className={cn("font-semibold",
+              best.trend?.direction === "call" ? "text-up" : best.trend?.direction === "put" ? "text-down" : "text-foreground")}>
+              {best.trend?.label ?? "—"}
+            </span>
+            {best.trend?.strength != null && (
+              <span className="ml-1 tnum">强度 {Math.round(best.trend.strength * 100)}%</span>
+            )}
+          </span>
+          {callPick && (
+            <button
+              type="button"
+              onClick={() => pickContract(callPick)}
+              title={callPick.reasons?.join(" · ")}
+              className="inline-flex items-center gap-1 rounded border border-up/35 bg-up/10 px-1.5 py-0.5 text-up transition-colors hover:bg-up/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Star className="size-3 shrink-0" aria-hidden />
+              <span className="text-muted-foreground">多头首选</span>
+              <span className="font-semibold">{callPick.name}</span>
+              <span className="rounded bg-up/20 px-1 font-semibold tnum">{callPick.score}</span>
+            </button>
+          )}
+          {putPick && (
+            <button
+              type="button"
+              onClick={() => pickContract(putPick)}
+              title={putPick.reasons?.join(" · ")}
+              className="inline-flex items-center gap-1 rounded border border-down/35 bg-down/10 px-1.5 py-0.5 text-down transition-colors hover:bg-down/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Star className="size-3 shrink-0" aria-hidden />
+              <span className="text-muted-foreground">空头首选</span>
+              <span className="font-semibold">{putPick.name}</span>
+              <span className="rounded bg-down/20 px-1 font-semibold tnum">{putPick.score}</span>
+            </button>
+          )}
+          <span className="ml-auto text-[10px] text-muted-foreground">红=认购首选 · 绿=认沽首选</span>
+        </div>
+      )}
       <div className="max-h-[62vh] overflow-auto">
         <Table>
           <THead>
@@ -522,12 +577,12 @@ export function OptionTQuote({
               const isAtm = row.strike === atmStrike;
               return (
                 <TR key={row.strike} className={cn(isAtm && "bg-warning/15 ring-1 ring-inset ring-warning/40")}>
-                  <ContractCells c={c} selected={selectedSecid} onSelect={onSelect} align="left" />
+                  <ContractCells c={c} selected={selectedSecid} onSelect={onSelect} align="left" pick={pickOf(c)} />
                   <TD className={cn("text-center font-semibold tnum", isAtm && "text-warning-foreground")}>
                     {isAtm && <span className="mr-1 rounded bg-warning/25 px-1 align-middle text-[9px] leading-4">ATM</span>}
                     {row.strike.toFixed(3)}
                   </TD>
-                  <ContractCells c={p} selected={selectedSecid} onSelect={onSelect} align="right" />
+                  <ContractCells c={p} selected={selectedSecid} onSelect={onSelect} align="right" pick={pickOf(p)} />
                 </TR>
               );
             })}
@@ -538,18 +593,24 @@ export function OptionTQuote({
   );
 }
 
-function ContractCells({ c, selected, onSelect, align }: { c: any; selected?: string; onSelect: (c: any) => void; align: "left" | "right" }) {
+function ContractCells({ c, selected, onSelect, align, pick }: {
+  c: any; selected?: string; onSelect: (c: any) => void; align: "left" | "right";
+  pick?: "call" | "put";
+}) {
   if (!c) return <TD colSpan={5} className="text-center text-muted-foreground">—</TD>;
   const on = c.secid === selected;
   const num = (v: any, d = 4) => nf(v, d);
+  // 首选合约：认购用红、认沽用绿，整侧单元格铺底色，与 ATM 的琥珀色区分
+  const pickCls = pick === "call" ? "bg-up/10" : pick === "put" ? "bg-down/10" : "";
   const vals = [
-    <TD key="last" className={cn("text-right tnum", on && "font-bold")}>{num(c.last)}</TD>,
-    <TD key="pct" className={cn("text-right tnum", clsUpDown(c.pct))}>{pct(c.pct, 1)}</TD>,
-    <TD key="iv" className="text-right tnum text-muted-foreground">{nf(c.iv, 1)}</TD>,
-    <TD key="d" className="text-right tnum text-muted-foreground">{nf(c.delta, 2)}</TD>,
+    <TD key="last" className={cn("text-right tnum", pickCls, on && "font-bold")}>{num(c.last)}</TD>,
+    <TD key="pct" className={cn("text-right tnum", pickCls, clsUpDown(c.pct))}>{pct(c.pct, 1)}</TD>,
+    <TD key="iv" className={cn("text-right tnum text-muted-foreground", pickCls)}>{nf(c.iv, 1)}</TD>,
+    <TD key="d" className={cn("text-right tnum text-muted-foreground", pickCls)}>{nf(c.delta, 2)}</TD>,
   ];
   const name = (
-    <TD key="name" className={cn("p-0", align === "right" && "text-right")}>
+    <TD key="name" className={cn("p-0", pickCls, align === "right" && "text-right",
+      pick === "call" && "border-l-2 border-up", pick === "put" && "border-r-2 border-down")}>
       {/* 可点选 → 必须是真按钮，才能键盘 Tab 到、Enter 触发并显示焦点环 */}
       <button
         type="button"
@@ -561,7 +622,15 @@ function ContractCells({ c, selected, onSelect, align }: { c: any; selected?: st
         )}
       >
         {on && <Flame className="size-3 shrink-0 text-warning" aria-hidden />}
-        <span className="truncate">{c.name}</span>
+        {pick && (
+          <span className={cn(
+            "shrink-0 rounded px-1 text-[9px] font-semibold leading-4",
+            pick === "call" ? "bg-up/20 text-up" : "bg-down/20 text-down",
+          )}>
+            首选
+          </span>
+        )}
+        <span className={cn("truncate", pick === "call" && "text-up", pick === "put" && "text-down")}>{c.name}</span>
       </button>
     </TD>
   );

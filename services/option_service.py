@@ -390,6 +390,160 @@ def rank_candidates(chain_data: dict, direction: str = "auto",
     return scored[:top]
 
 
+def _clip(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    return max(lo, min(hi, v))
+
+
+def _expiry_score(days: int) -> float:
+    """日内买方：近月最优；临期 Theta 风险大，远月流动性/弹性差。"""
+    if days <= 2:
+        return 0.25
+    if days <= 30:
+        return 1.0
+    if days <= 60:
+        return 0.75
+    return 0.45
+
+
+def _score_side(contracts: list[dict], side: str, trend: dict) -> dict | None:
+    """对单个方向（call/put）的全部合约打分，返回最优一只。"""
+    pool = [c for c in contracts
+            if c.get("type") == side and (c.get("last") or 0) > 0
+            and c.get("delta") is not None and abs(c["delta"]) >= 0.05]
+    if not pool:
+        return None
+
+    t_dir = (trend or {}).get("direction") or "neutral"
+    t_score = float((trend or {}).get("score") or 0)
+    strength = _clip(abs(t_score) / 100.0)
+    # 趋势越强越略偏虚值（杠杆高）；震荡市回到平值附近（胜率高）
+    target_delta = 0.50 - 0.05 * strength if t_dir == side else 0.50
+
+    amts = [max(c.get("amount") or 0, 0) for c in pool]
+    ois = [max(c.get("oi") or 0, 0) for c in pool]
+    vols = [max(c.get("volume") or 0, 0) for c in pool]
+    max_amt = max(amts) or 1
+    max_oi = max(ois) or 1
+    max_vol = max(vols) or 1
+    ivs = [c["iv"] for c in pool if c.get("iv")]
+    iv_min, iv_max = (min(ivs), max(ivs)) if ivs else (0.0, 1.0)
+    atm_iv_pctl = ((trend or {}).get("atm_iv_pctl20"))
+
+    best = None
+    for c in pool:
+        amount = max(c.get("amount") or 0, 0)
+        oi = max(c.get("oi") or 0, 0)
+        vol = max(c.get("volume") or 0, 0)
+        # 流动性：成交额为主，持仓/成交量为辅；盘后无买卖盘时给中性分
+        liq_raw = (0.55 * (amount / max_amt)
+                   + 0.25 * (oi / max_oi)
+                   + 0.20 * (vol / max_vol))
+        spread = c.get("spread")
+        spread_score = 0.5 if spread is None else 1 - _clip(spread / 8.0)
+        liq = 0.80 * liq_raw + 0.20 * spread_score
+
+        raw_delta = c.get("delta") or 0
+        d = abs(raw_delta)
+        delta_score = _clip(1 - abs(d - target_delta) / 0.30)
+        atm_score = _clip(1 - abs(c.get("moneyness") or 0) / 0.07)
+        iv = c.get("iv")
+        iv_score = (1 - _clip((iv - iv_min) / (iv_max - iv_min))
+                    if iv and iv_max > iv_min else 0.5)
+        # 高 IV 分位整体压一档（买方付贵）
+        if atm_iv_pctl is not None:
+            if atm_iv_pctl >= 75:
+                iv_score *= 0.75
+            elif atm_iv_pctl <= 25:
+                iv_score = min(1.0, iv_score + 0.10)
+
+        last = c.get("last") or 0
+        theta = abs(c.get("theta") or 0)
+        daily_decay = theta / last if last else 0
+        theta_score = _clip(1 - daily_decay / 0.08)
+        prem = abs(c.get("premium_rate") or 0)
+        prem_score = _clip(1 - prem / 20.0)
+        exp_score = _expiry_score(int(c.get("days") or 0))
+
+        if t_dir == "neutral":
+            align = 0.5
+        elif t_dir == side:
+            align = 0.65 + 0.35 * strength
+        else:
+            align = _clip(0.40 - 0.30 * strength, 0.0, 0.40)
+
+        score = (0.27 * liq + 0.20 * delta_score + 0.12 * atm_score
+                 + 0.10 * iv_score + 0.11 * theta_score + 0.06 * prem_score
+                 + 0.08 * align + 0.06 * exp_score)
+
+        # 理由（按最重要维度取 3~5 条）
+        reasons = []
+        if t_dir == side and strength >= 0.15:
+            reasons.append("与当前标的趋势同向")
+        elif t_dir in ("call", "put") and strength >= 0.4:
+            reasons.append("逆当前趋势，仅作反向备选")
+        if liq >= 0.65:
+            amt_txt = f"{amount / 1e8:.2f} 亿" if amount >= 1e8 else f"{amount / 1e4:.0f} 万"
+            reasons.append(f"流动性好（成交额 {amt_txt}）")
+        if spread is not None and spread <= 2 and liq_raw >= 0.4:
+            reasons.append(f"买卖价差 {spread:.2f}% 偏窄")
+        reasons.append(f"Δ{raw_delta:+.2f}，日内弹性/胜率平衡")
+        if abs(c.get("moneyness") or 0) <= 0.02:
+            reasons.append("贴近平值，Gamma 弹性大")
+        elif t_dir == side and strength >= 0.4 and d <= 0.45:
+            reasons.append("顺势轻度虚值，杠杆更高")
+        if iv and iv_max > iv_min and iv_score >= 0.6:
+            reasons.append(f"IV {iv:.1f}%，同侧偏低")
+        if daily_decay <= 0.03:
+            reasons.append(f"剩余 {int(c.get('days') or 0)} 天，Theta 衰减可控")
+        elif daily_decay >= 0.06:
+            reasons.append(f"Theta {daily_decay * 100:.1f}%/日，注意时间损耗")
+        c2 = {k: v for k, v in c.items() if not k.startswith("_")}
+        c2.update({
+            "score": round(score * 100, 1),
+            "trend_aligned": bool(t_dir == side and strength >= 0.15),
+            "target_delta": round(target_delta, 2),
+            "reasons": reasons[:5],
+        })
+        if best is None or c2["score"] > best["score"]:
+            best = c2
+    return best
+
+
+def best_buys(chain_data: dict, trend: dict | None = None) -> dict:
+    """对**全部合约**按日内买方标准打分，多/空各选一只最优，并结合标的趋势给出主推方向。
+
+    日内买方核心：流动性（能进能出）> Delta 弹性（0.35~0.65）> 平值度/Gamma >
+    隐波成本 > Theta 衰减 > 溢价率 > 到期远近 > 是否顺势。
+    两个方向都会给出，逆势方向只作为反向备选并降低评分。
+    """
+    contracts = chain_data.get("contracts") or []
+    trend = dict(trend or {})
+    t_dir = trend.get("direction") or "neutral"
+    t_score = float(trend.get("score") or 0)
+    trend["direction"] = t_dir
+    trend["strength"] = round(_clip(abs(t_score) / 100.0), 2)
+    trend["label"] = {"call": "看多", "put": "看空"}.get(t_dir, "震荡/观望")
+    trend["atm_iv_pctl20"] = (chain_data.get("stats") or {}).get("atm_iv_pctl20")
+
+    call = _score_side(contracts, "call", trend)
+    put = _score_side(contracts, "put", trend)
+    if not call and not put:
+        return {"trend": trend, "call": None, "put": None, "recommended": None}
+
+    # 主推：趋势明确且够强时顺趋势；否则取两方向评分更高者
+    if t_dir in ("call", "put") and trend["strength"] >= 0.15:
+        rec_side = t_dir
+    else:
+        rec_side = "call" if (call and (not put or call["score"] >= put["score"])) else "put"
+    rec = call if rec_side == "call" else put
+    recommended = None
+    if rec:
+        recommended = {"side": rec_side, "code": rec["code"], "secid": rec["secid"],
+                        "name": rec["name"], "score": rec["score"],
+                        "month": rec["month"], "trend_aligned": rec["trend_aligned"]}
+    return {"trend": trend, "call": call, "put": put, "recommended": recommended}
+
+
 def summarize_for_llm(chain_data: dict, direction: str = "auto") -> dict:
     """压缩成给大模型的精简结构。"""
     return {

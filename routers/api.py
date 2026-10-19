@@ -136,6 +136,20 @@ async def option_chain(code: str, month: int | None = None):
         "call": osvc.rank_candidates(ch, "call", 6),
         "put": osvc.rank_candidates(ch, "put", 6),
     }
+    # 结合标的实时趋势（strategy.directions 有 60s 缓存），多/空各选一只首选合约
+    trend = None
+    try:
+        d = (await strategy.directions()).get(code)
+        if d:
+            trend = {"direction": d.get("direction"), "score": d.get("score"),
+                     "confidence": d.get("confidence")}
+    except Exception:  # noqa: BLE001 — 降级到标的涨跌幅，不阻断期权链
+        pass
+    if trend is None:
+        pct = (ch.get("underlying") or {}).get("pct") or 0
+        trend = {"direction": "call" if pct > 0.2 else "put" if pct < -0.2 else "neutral",
+                 "score": round(pct * 20, 1), "confidence": round(min(abs(pct) / 3, 1), 2)}
+    ch["best"] = osvc.best_buys(ch, trend)
     return ch
 
 
