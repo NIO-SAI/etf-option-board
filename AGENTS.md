@@ -19,6 +19,11 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
 - 无测试框架；用 `curl http://127.0.0.1:6799/api/health` 做冒烟。
 - 后端托管 `web/dist`（生产模式）：**改前端后必须 `bash web/build.sh`**，否则页面不变。
   HTML 响应带 `no-store`，页脚有「构建 <bundle-hash>」戳可用于核对已加载的构建。
+- **跨设备 HTTPS 入口（浏览器通知必需）**：Chrome 系统通知（Web Notifications）只在安全上下文
+  可用，`http://100.x.x.x:6799`（Tailscale IP，明文）会被浏览器拒绝。已配
+  `tailscale serve --bg --https=8443 http://127.0.0.1:6799`，跨设备访问用
+  **https://xinxin-mac-mini.tail407c31.ts.net:8443**（Let's Encrypt 有效证书），
+  在告警卡头部点「开启浏览器通知」授权即可。`tailscale serve status` 查看入口。
 - 已装 LaunchAgent `com.etf-option-board` 常驻 `:6799`（崩溃自动拉起）。手动起服务前先确认
   端口未被它占用（`launchctl print gui/$(id -u)/com.etf-option-board`），日志 `/tmp/etf-option-board.log`。
 - 后端代码更新后重启生效：`curl -s -X POST http://127.0.0.1:6799/api/admin/restart`
