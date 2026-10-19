@@ -104,7 +104,7 @@ def _compact(bundle: dict) -> dict:
                   for e in (bundle.get("external") or [])],
         "当前量能": bundle.get("volume"),
         "当前MACD(1分钟)": bundle.get("macd"),
-        "当前MACD(3分钟背离)": bundle.get("macd3"),
+        "当前MACD(15分钟背离)": bundle.get("macd15"),
     }
 
 

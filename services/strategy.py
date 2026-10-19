@@ -102,17 +102,17 @@ def detect_signals(etf_ctx: dict, track: dict, national: dict, ext: list[dict],
                     "dir": "bull" if p3 > 0 else "bear",
                     "text": f"标的3分钟急{'拉' if p3>0 else '跌'} {p3:+.2f}%"})
 
-    # MACD（金叉/死叉看 1 分钟；背离看 3 分钟 K 线）
+    # MACD（金叉/死叉看 1 分钟；背离看 15 分钟 K 线）
     mm = etf_ctx.get("macd") or {}
     if mm.get("cross") == "golden":
         sig.append({"type": "macd", "level": "info", "dir": "bull", "text": "1分钟 MACD 金叉"})
     elif mm.get("cross") == "dead":
         sig.append({"type": "macd", "level": "info", "dir": "bear", "text": "1分钟 MACD 死叉"})
-    md3 = (etf_ctx.get("macd3") or {}).get("divergence") or {}
-    if md3.get("type") == "bearish":
-        sig.append({"type": "divergence", "level": "warn", "dir": "bear", "text": "3分钟 MACD 顶背离，上涨动能不足"})
-    elif md3.get("type") == "bullish":
-        sig.append({"type": "divergence", "level": "warn", "dir": "bull", "text": "3分钟 MACD 底背离，下跌动能衰竭"})
+    md15 = (etf_ctx.get("macd15") or {}).get("divergence") or {}
+    if md15.get("type") == "bearish":
+        sig.append({"type": "divergence", "level": "warn", "dir": "bear", "text": "15分钟 MACD 顶背离，上涨动能不足"})
+    elif md15.get("type") == "bullish":
+        sig.append({"type": "divergence", "level": "warn", "dir": "bull", "text": "15分钟 MACD 底背离，下跌动能衰竭"})
 
     # 关键时点
     kt = near_key_time(_now_hm())
@@ -322,7 +322,7 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
         "external": ext,
         "volume": etf_ctx.get("volume"),
         "macd": etf_ctx.get("macd"),
-        "macd3": etf_ctx.get("macd3"),
+        "macd15": etf_ctx.get("macd15"),
         "flow_main_delta5m": etf_ctx.get("flow_main_delta5m"),
         "ts": dt.datetime.now().isoformat(timespec="seconds"),
     }

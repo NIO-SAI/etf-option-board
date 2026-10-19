@@ -87,9 +87,11 @@ def _snap_num(v):
 
 async def etf_context(code: str, etf_secid: str) -> dict:
     """单只 ETF 的行情 + 分钟K + 分时 + 资金流。"""
-    q, k1, tr, flr, fsnap = await asyncio.gather(
+    q, k1, k5, tr, flr, fsnap = await asyncio.gather(
         quote(etf_secid),
         kline(etf_secid, klt=1, lmt=240),
+        # 5 分钟 K（跨日，供 15 分钟背离监测；15m 由 3 根 5m 聚合，1m×240 不够 MACD 预热）
+        kline(etf_secid, klt=5, lmt=120),
         trends(etf_secid),
         flow_series(etf_secid),
         # 当日累计资金流快照（收盘后分钟序列无数据时，前端仍可用此数字展示）
@@ -98,15 +100,16 @@ async def etf_context(code: str, etf_secid: str) -> dict:
     fl, flow_day = flr
     closes = [b["close"] for b in k1]
     vols = [b["volume"] for b in k1]
-    # 3 分钟 K 线（由 1 分钟本地聚合，不额外请求）——MACD 背离按 3 分钟口径监测
-    closes3 = [b["close"] for b in _agg(k1, 3)]
+    # 15 分钟 K 线（由 5 分钟本地聚合）——MACD 顶/底背离统一按 15 分钟口径监测，
+    # 与变盘点引擎（reversal）一致，过滤掉 3 分钟级别的盘中噪声。
+    closes15 = [b["close"] for b in _agg(k5, 3)]
     flow_tail = fl[-5:] if fl else []
     flow_delta = (flow_tail[-1]["main"] - flow_tail[0]["main"]) if len(flow_tail) >= 2 else None
     return {
         "code": code,  # 供综合方向并入「变盘点」加分（reversal.factor）
         "quote": q, "kline_1m": k1, "trends": tr, "flow": fl, "flow_day": flow_day,
         "macd": macd_state(closes),        # 1 分钟：金叉/死叉
-        "macd3": macd_state(closes3),      # 3 分钟：顶/底背离监测
+        "macd15": macd_state(closes15),    # 15 分钟：顶/底背离监测（全站统一口径）
         "volume": volume_stats(vols),
         "flow_main_delta5m": flow_delta,
         "flow_main_total": fl[-1]["main"] if fl else 0,

@@ -122,7 +122,7 @@ export default function App() {
                     <Badge variant="warning-light" title="当日资金流序列尚未产生，展示的是最近一个有数据的交易日">昨日资金流</Badge>
                   )}
                   <MiniKv k="MACD" v={ctx.macd?.cross === "golden" ? "金叉" : ctx.macd?.cross === "dead" ? "死叉" : "—"} />
-                  <MiniKv k="背离3分" v={ctx.macd3?.divergence?.type === "bullish" ? "底背离" : ctx.macd3?.divergence?.type === "bearish" ? "顶背离" : "无"} />
+                  <MiniKv k="背离15分" v={ctx.macd15?.divergence?.type === "bullish" ? "底背离" : ctx.macd15?.divergence?.type === "bearish" ? "顶背离" : "无"} />
                   <MiniKv k="关联指数" v={`${ctx.track?.quote?.name ?? ""} ${pct(ctx.track?.quote?.pct)}`} />
                 </div>
               )}
