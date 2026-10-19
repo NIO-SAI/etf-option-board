@@ -61,6 +61,12 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
 - 隐波/希腊字母由 `services/bs.py` 自算（Eastmoney 不直接给），到期日 = 到期月第 4 个星期三。
 - 前端组件：REUI（`web/src/components/reui/*`，Tailwind v4 语法）与自研 shadcn 风格
   `web/src/components/ui/*` 混用；图表用 ECharts（`components/charts`）。
+- **分时图时间轴约定（2026-10-19 起）**：轴一律由完整行情分时（`trends`，腾讯）定义；
+  资金流/期权等稀疏序列必须用 `web/src/lib/series.ts` 的 `trimSession` + `alignToAxis`
+  按「最近前值 + 同日校验」对齐。**禁止再用 `HH:MM` 精确相等 join**——东财资金流首点是
+  09:31/13:01、只到 15:00，行情轴有 09:30/13:00 且收盘后常有 15:06–15:30 的盘后点，
+  两者错位会导致柱状图成段空洞。后端 `_trends_trim` / `_flow_clean` 已统一裁掉
+  非连续竞价时段的点。
 - **左侧面板布局约定**：`EtfList` 里「期权标的」列表是唯一的滚动区（`flex-1 overflow-auto`），
   「大盘指数」是**面板固定底栏**（不随列表滚动、矮窗口时内部滚动）——保证 4 个指数行
   始终完整可见。别再把它塞回滚动列表，那正是"看不到某一行"类投诉的根源。

@@ -304,7 +304,12 @@ def _trends_trim(out: list[dict], ndays: int) -> list[dict]:
     典型故障：腾讯/push2 拉取失败 → get_json 回退"上次成功缓存"（可能是上一交易日的
     全天分时）→ 若用墙上时钟重新贴日期，就会把整日旧数据渲染成"今天"，图上出现一条
     延伸到收盘时间的错线。这里以数据源自身日期为准做校验。
+
+    另统一裁掉非连续竞价时段（09:30–11:30 / 13:00–15:00）的点：腾讯分时在收盘后
+    仍返回 15:06–15:30 的盘后成交/残余快照，而资金流只到 15:00；两套轴不一致会让
+    叠加柱状图尾部整段空洞。
     """
+    out = [p for p in (out or []) if _hm_in_session((p.get("time") or "")[-5:])]
     if not out or ndays > 1:
         return out
     last_day = (out[-1].get("time") or "")[:10]
@@ -450,6 +455,25 @@ def _now_in_session(now: dt.datetime | None = None) -> bool:
     return now.weekday() < 5 and _hm_in_session(now.strftime("%H:%M"))
 
 
+def _flow_clean(klines: list[str] | None) -> list[str]:
+    """资金流分钟序列清洗：只留连续竞价时段、去重，口径与分时轴一致。
+
+    push2 收盘后可能带回 15:00 之后的点，盘前还可能整段返回上一交易日；
+    调用方据首/末点日期回填 day，避免把昨日序列标成今日。
+    """
+    out: list[str] = []
+    last_minute = ""
+    for line in klines or []:
+        p = line.split(",")
+        if len(p) < 6 or not _hm_in_session((p[0] or "")[-5:]):
+            continue
+        if p[0] == last_minute:
+            continue
+        last_minute = p[0]
+        out.append(line)
+    return out
+
+
 async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 20.0) -> dict | None:
     """分钟级资金流序列。
 
@@ -504,8 +528,11 @@ async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 20.0) -> di
         if d is None:
             _push2_mark_dead("push2.eastmoney.com")
         data = d.get("data") if d else None
-    if data and len(data.get("klines") or []) >= 2:
-        return {"klines": data["klines"], "day": today}
+    klines = _flow_clean((data or {}).get("klines"))
+    if len(klines) >= 2:
+        # day 取序列自身日期：盘前 push2 常整段返回上一交易日，不能硬贴 today。
+        day = (klines[-1].split(",", 1)[0] or "")[:10] or today
+        return {"klines": klines, "day": day}
     # 只回交易时段内的点（清掉任何历史脏点）
     kept_today = [l for l in hist if _hm_in_session(l.split(",", 1)[0][-5:])]
     if len(kept_today) >= 2:

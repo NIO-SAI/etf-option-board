@@ -1,5 +1,6 @@
 import ReactECharts from "echarts-for-react";
 import { useMemo } from "react";
+import { alignToAxis, minuteOf, sameDayAs, trimSession } from "@/lib/series";
 
 const AXIS = "#71717a";
 const SPLIT = "rgba(0,0,0,0.07)";
@@ -55,11 +56,13 @@ export function IntradayChart({
 }) {
   const option = useMemo(() => {
     const tt = (t: any) => (t || "").slice(-5);
-    const times = trends?.map((t) => tt(t.time)) ?? [];
+    // 轴由完整行情序列定义（腾讯分时），并裁掉盘前/午休/15:00 后的脏点。
+    const axis = trimSession(trends);
+    const times = axis.map((t) => minuteOf(t.time));
     const toMin = (hm: string) => Number(hm.slice(0, 2)) * 60 + Number(hm.slice(3, 5));
 
     // 昨收 -> 百分比。缺昨收则该条线整条不画（与 OverlayChart 口径一致）。
-    const mapSrc = (arr: any[]) => new Map((arr ?? []).map((t) => [tt(t.time), t.price]));
+    const mapSrc = (arr: any[]) => new Map(sameDayAs(axis, arr).map((t) => [tt(t.time), t.price]));
     const toPctSeries = (m: Map<any, any>, prev: number | null) => {
       if (!prev || !(prev > 0)) return null;
       const out: (number | null)[] = times.map((t) => {
@@ -111,10 +114,10 @@ export function IntradayChart({
       }).filter(Boolean)
       : [];
 
-    const flowMap = new Map((flow ?? []).map((f) => [tt(f.time), f.main]));
-    const mains = times.map((t) => flowMap.get(t) ?? null);
-    const iflowMap = new Map((indexFlow ?? []).map((f) => [tt(f.time), f.main]));
-    const imains = times.map((t) => iflowMap.get(t) ?? null);
+    // 资金流与行情的时间戳口径不同（首点 09:31/13:01、只到 15:00），
+    // 一律按「最近前值」对齐，不能再用 HH:MM 精确相等 join。
+    const mains = alignToAxis(axis, flow, (f: any) => f.main);
+    const imains = alignToAxis(axis, indexFlow, (f: any) => f.main);
     const hasIdx = !!idxPct;
     const hasIdxFlow = imains.some((v) => v !== null);
     const idxLabel = `关联指数${indexName ? " " + indexName : ""}`;
@@ -234,15 +237,19 @@ export function OverlayChart({
 }) {
   const option = useMemo(() => {
     const norm = (t: any) => (t || "").slice(-5);
-    const axisSrc: any[] = optTrends?.length ? optTrends : (etfTrends?.length ? etfTrends : flow) ?? [];
-    const times = axisSrc.map((t: any) => norm(t.time));
-    const optMap = new Map((optTrends ?? []).map((t) => [norm(t.time), t.price]));
-    const etfMap = new Map((etfTrends ?? []).map((t) => [norm(t.time), t.price]));
-    // 标的ETF 主力净买额（分钟净流入）。用「单条 bar + itemStyle.color 按正负上色」，
+    // 轴优先用完整的 ETF 行情分时：期权/资金流都是本地累积的稀疏序列，
+    // 让稀疏序列定义轴会把整张图压成残轴；它们只应被对齐到行情轴。
+    const etfAxis = trimSession(etfTrends);
+    const optAxis = trimSession(optTrends);
+    const axis = etfAxis.length ? etfAxis : (optAxis.length ? optAxis : trimSession(flow));
+    const times = axis.map((t: any) => norm(t.time));
+    const optMap = new Map(sameDayAs(axis, optTrends).map((t) => [norm(t.time), t.price]));
+    const etfMap = new Map(sameDayAs(axis, etfTrends).map((t) => [norm(t.time), t.price]));
+    // 标的ETF 主力净买额。用「单条 bar + itemStyle.color 按正负上色」，
     // 不要拆成红/绿两条同名 line 再互相补 0——那样非本方向的补 0 会在轴上留下一根
     // 贯穿全图的假水平线（曾据此误读为参考线）。
-    const flowMap = new Map((flow ?? []).map((f) => [norm(f.time), f.main]));
-    const mains = times.map((t) => flowMap.get(t) ?? null);
+    // 资金流时间口径与行情不同（首点晚 1 分钟、只到 15:00），按最近前值对齐。
+    const mains = alignToAxis(axis, flow, (f: any) => f.main);
     const hasFlow = mains.some((v) => v !== null);
 
     // 昨收 -> 百分比。缺昨收（未选合约 / 新上市 / quote 未就绪）则整条线不画。
