@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
+import { Button } from "@/components/ui/button";
 import { Dialog, EmptyState, HoverTip } from "@/components/ui/misc";
 import { api } from "@/lib/api";
 import { useAlertStream } from "@/lib/usePolling";
+import { notifyPermission, requestNotifyPermission, showNotification } from "@/lib/notify";
 import { sound } from "@/lib/sound";
 import { clsUpDown } from "@/lib/format";
 import { AlertTriangle, BellRing, Volume2 } from "lucide-react";
@@ -18,6 +20,7 @@ const TYPE_LABEL: Record<string, string> = {
 export function AlertCenter() {
   const [items, setItems] = useState<any[]>([]);
   const [popup, setPopup] = useState<any>(null);
+  const [perm, setPerm] = useState(notifyPermission());
   const seen = useRef<Set<number>>(new Set());
 
   useEffect(() => {
@@ -39,12 +42,21 @@ export function AlertCenter() {
     // info（变盘时点）不打扰，只进列表
     if (a.level !== "info") {
       sound.play(a.level);
-      toast(a.title, { description: a.text, duration: 6000 });
+      // 优先 Chrome 浏览器通知；不可用/未授权时降级为页面内 toast
+      const shown = showNotification(a);
+      if (!shown) toast(a.title, { description: a.text, duration: 6000 });
     }
     // 主力资金与变盘开仓弹模态框（后者是可执行的交易信号，优先级最高）
     if (a.type === "main_inflow" || a.type === "reversal") setPopup(a);
   };
   useAlertStream(onAlert);
+
+  const onEnable = async () => {
+    const p = await requestNotifyPermission();
+    setPerm(p);
+    if (p === "granted") toast("浏览器通知已开启", { description: "盘中告警将以 Chrome 系统通知弹出。" });
+    else if (p === "denied") toast("浏览器通知被拒绝", { description: "请在地址栏左侧站点设置里重新允许通知。" });
+  };
 
   // 兜底去重：无论如何渲染层都不出现同一 id 的两行
   const rows = useMemo(() => {
@@ -60,8 +72,19 @@ export function AlertCenter() {
             <FrameTitle className="flex items-center gap-1.5 text-xs">
               <BellRing className="size-3.5 text-warning" /> 实时告警
             </FrameTitle>
-            <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-              <Volume2 className="size-3" /> 声音已开启
+            <span className="flex items-center gap-1.5">
+              <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                <Volume2 className="size-3" /> 声音已开启
+              </span>
+              {perm === "granted" ? (
+                <Badge variant="success-light" title="告警将以 Chrome 系统通知弹出">浏览器通知</Badge>
+              ) : perm === "default" ? (
+                <Button variant="outline" size="xs" onClick={onEnable}>开启浏览器通知</Button>
+              ) : perm === "denied" ? (
+                <Badge variant="warning-light" title="浏览器通知被拒绝，请在地址栏站点设置里重新允许">通知已拒绝</Badge>
+              ) : (
+                <Badge variant="outline" title="当前为非 HTTPS 地址，浏览器通知不可用；跨设备请用 HTTPS 入口">通知不可用</Badge>
+              )}
             </span>
           </FrameHeader>
           {/* 列表自身限高滚动是刻意的：本卡位于随页面滚动的右栏，没有定高父链可依赖 */}
