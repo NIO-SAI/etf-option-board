@@ -24,6 +24,7 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   `tailscale serve --bg --https=8443 http://127.0.0.1:6799`，跨设备访问用
   **https://xinxin-mac-mini.tail407c31.ts.net:8443**（Let's Encrypt 有效证书），
   在告警卡头部点「开启浏览器通知」授权即可。`tailscale serve status` 查看入口。
+  测试通知：`curl -X POST http://127.0.0.1:6799/api/admin/test-alert`（发 3 条【测试】告警走真实 SSE）。
 - 已装 LaunchAgent `com.etf-option-board` 常驻 `:6799`（崩溃自动拉起）。手动起服务前先确认
   端口未被它占用（`launchctl print gui/$(id -u)/com.etf-option-board`），日志 `/tmp/etf-option-board.log`。
 - 后端代码更新后重启生效：`curl -s -X POST http://127.0.0.1:6799/api/admin/restart`

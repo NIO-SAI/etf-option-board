@@ -189,6 +189,31 @@ async def alerts_history(limit: int = 50):
     return {"items": alerts.history(limit)}
 
 
+@router.post("/admin/test-alert")
+async def admin_test_alert():
+    """发 3 条【测试】告警走真实 SSE 通道，用于验证浏览器通知/声音/弹窗。
+
+    会进告警历史与列表（标题带【测试】前缀便于区分）。"""
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    samples = [
+        {"type": "volume_surge", "level": "warn", "dir": "neutral",
+         "etf_code": "510300", "etf_name": "沪深300ETF华泰柏瑞",
+         "title": "【测试】量能放大 5.6x · 510300",
+         "text": "这是一条测试告警：若已授权，应弹出 Chrome 系统通知并提示音。"},
+        {"type": "divergence", "level": "warn", "dir": "bear",
+         "etf_code": "588000", "etf_name": "科创50ETF华夏",
+         "title": "【测试】15分钟MACD 顶背离 · 588000",
+         "text": "第二条测试告警：15 分钟 K 线动能与价格背离（方向看空示例）。"},
+        {"type": "national_team", "level": "critical", "dir": "bull",
+         "etf_code": "510300", "etf_name": "宽基ETF",
+         "title": "【测试】国家队护盘信号增强",
+         "text": "第三条测试告警（critical）：需要手动关闭的常驻通知。"},
+    ]
+    for s in samples:
+        await alerts.publish({**s, "test": True, "ts": now})
+    return {"ok": True, "count": len(samples)}
+
+
 @router.post("/monitor/cycle")
 async def monitor_once():
     await monitor.cycle()
