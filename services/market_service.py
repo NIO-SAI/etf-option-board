@@ -103,6 +103,7 @@ async def etf_context(code: str, etf_secid: str) -> dict:
     flow_tail = fl[-5:] if fl else []
     flow_delta = (flow_tail[-1]["main"] - flow_tail[0]["main"]) if len(flow_tail) >= 2 else None
     return {
+        "code": code,  # 供综合方向并入「变盘点」加分（reversal.factor）
         "quote": q, "kline_1m": k1, "trends": tr, "flow": fl, "flow_day": flow_day,
         "macd": macd_state(closes),        # 1 分钟：金叉/死叉
         "macd3": macd_state(closes3),      # 3 分钟：顶/底背离监测

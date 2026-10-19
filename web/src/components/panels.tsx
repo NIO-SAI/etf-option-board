@@ -45,9 +45,9 @@ function DirBadge({
   );
 }
 
-// 变盘开仓信号：来自 reversal 转折点引擎（阈值 55），与综合方向是两套独立判断，
-// 二者可以相左（如「合力看多」而「刚触发看空变盘」）。同一行只允许 1 枚状态徽标，
-// 故它降级为「内联状态文字」（color.md 的 inline status text 配方）+ 箭头图标。
+// 变盘点：来自 reversal 高周期转折引擎（5m 确认 + 15m 结构转向，阈值 65）。
+// 它是综合方向的加分因子（±15，60 分钟衰减）——方向结论已含变盘信息，此处角标只是
+// 标注其高周期依据。同一行只允许 1 枚状态徽标，故降级为「内联状态文字」+ 箭头图标。
 const SIGNAL_DIR: Record<string, { label: string; Icon: typeof Minus; cls: string }> = {
   bull: { label: "变盘看多", Icon: ArrowUpRight, cls: "text-destructive-foreground dark:text-destructive" },
   bear: { label: "变盘看空", Icon: ArrowDownRight, cls: "text-success-foreground dark:text-success" },
@@ -60,7 +60,7 @@ function SignalMark({ signal }: { signal?: { dir: string; score: number; ts: str
   return (
     <span
       className={cn("inline-flex shrink-0 items-center gap-0.5 text-xs font-medium", s.cls)}
-      title={`变盘信号：转折点引擎（突破近15分钟高低/放量/动量/背离/时点共振），阈值 55，60 分钟内有效；${String(signal!.ts ?? "").slice(11, 16)} 触发 ${signal!.score ?? "—"} 分`}
+      title={`变盘点：5m 确认 + 15m 结构转向（阈值 65），已并入综合方向加分（±15，60 分钟衰减）；${String(signal!.ts ?? "").slice(11, 16)} 触发 ${signal!.score ?? "—"} 分`}
     >
       <Icon className="size-3" aria-hidden />
       {s.label}

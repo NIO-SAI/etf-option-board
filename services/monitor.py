@@ -87,7 +87,7 @@ async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
             "text": f"宽基ETF护盘评分 {nt_score}，短期关注反弹。",
         })
 
-    # 变盘开仓信号（多因子打分≥60；内部含 20 分钟同向冷却 + 15 分钟反向抑制）
+    # 变盘点（5m/15m 高周期，阈值 65，需 15m 结构转向；同向 45 分钟冷却 / 反向 30 分钟抑制）
     try:
         sig = await reversal.check(etf, ctx)
     except Exception as exc:  # noqa: BLE001

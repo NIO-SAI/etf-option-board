@@ -1,25 +1,28 @@
-"""变盘开仓信号引擎：多因子打分，识别日内明确转折点并给出可执行建议。
+"""变盘点引擎（高周期）：以 5 分钟为主、15 分钟确认为辅，识别真正的日内级别转折。
 
-设计依据（CONTEXT.md §7）：
-- 验真突破 = 放量 + 主力净流入 + 突破前高/跌破前低（§7.10）
-- 10:30–11:30、13:00–14:30 变盘概率高；14:45 后不新开仓（§7.6）
-- 买方宜在 IV 偏低时进（§7.3）；先定止损再进场（§7.7）
+定位（2026-10-19 重构）：
+- 变盘点是「趋势方向的加分因子」，参与 strategy.bias_score 综合方向判定，**不再**作为
+  高频独立提醒刷屏。已确认的转折点由 reversal.factor(code) 折算为 ±15 的分值并入方向
+  合力（60 分钟内线性衰减），让「方向结论」自己带上变盘信息。
+- 判定周期从 1m/3m 放大到 **15m（结构转向，核心门槛）+ 5m（确认）**：只有 15 分钟
+  MACD 金叉/死叉（或 15m 背离）才算「变盘」，再叠加 5m 确认、突破近 30 分钟高低、
+  放量、主力资金、指数同向、关键时点等因子打分。噪声因此大幅下降，日内通常仅 1~2 次。
+- 告警阈值 65；同向 45 分钟冷却、反向 30 分钟抑制（防震荡反复打脸）。以信号为准，
+  不设每日次数硬上限——高周期 + 核心门槛已天然稀疏。
 
 打分（多/空各一套，0~100）：
-  1m MACD 金叉/死叉             +25
-  1m 动能转强（柱体3连升/降）    +12
-  3m MACD 确认（金叉/柱体翻正）  +20
-  3m 柱体同向                   +10
-  5m 趋势配合                   +10
-  突破/跌破近15分钟高低点        +15
-  站上/跌破分时均价              +5
-  量能放大≥2x                   +10（≥3x +15；近1分钟 ÷ 日内均量口径）
-  主力5分钟同向≥0.5亿            +10（≥1.2亿 +15）
-  关联指数同向                  +10
-  3m 顶/底背离                  +10
-  关键时点共振（±6分钟）          +5
-55 分触发。过滤：09:40 前 / 14:45 后不触发；同向 20 分钟冷却；
-反向 15 分钟内抑制（防震荡反复打脸）。
+  15m MACD 金叉/死叉（近2根，**核心门槛**）  +30
+  15m 趋势同向（柱体同向且方向一致）           +10
+  5m  MACD 金叉/死叉（近2根，确认）           +20
+  5m  柱体同向                               +10
+  突破/跌破近 6 根 5m 高低（≈30 分钟）          +15
+  站上/跌破分时均价                            +5
+  量能放大（≥3x +15；≥2x +10；近1分钟 ÷ 日内均量）
+  主力5分钟同向（≥1.2亿 +15；≥0.5亿 +10）
+  关联指数同向                                +10
+  15m 顶/底背离                              +10
+  关键时点共振（±6 分钟）                      +5
+核心门槛 = 15m MACD 转向 或 15m 背离；不满足直接判为噪声（不计分、不告警）。
 """
 
 from __future__ import annotations
@@ -28,26 +31,28 @@ import datetime as dt
 import logging
 from collections import deque
 
-from services import alerts, option_service as osvc, strategy
+from services import alerts, em, option_service as osvc, strategy
 from services.indicators import macd, macd_state
 
 log = logging.getLogger("reversal")
 
-THRESHOLD = 55          # 触发阈值（噪音场景实测 <30，明确反转约 57~75）
-TRACK_FETCH_SCORE = 45  # 达到此分才拉关联指数做确认（省请求）
-COOLDOWN_SAME = 1200    # 同标的同方向冷却 20 分钟
-COOLDOWN_OPPO = 900     # 反向抑制 15 分钟（防震荡）
-TIME_START = "09:40"     # 开盘前 10 分钟噪音，不发信号
-TIME_END = "14:45"       # 临近收盘不新开仓
+THRESHOLD = 65          # 触发/入库阈值（高周期 + 核心门槛下已很稀疏）
+TRACK_FETCH_SCORE = 50  # 达到此分才拉关联指数做确认（省请求）
+COOLDOWN_SAME = 2700    # 同标的同方向冷却 45 分钟
+COOLDOWN_OPPO = 1800    # 反向抑制 30 分钟（防震荡）
+TIME_START = "09:40"    # 开盘前 10 分钟噪音，不发信号
+TIME_END = "14:45"      # 临近收盘不新开仓
 
-_signals: dict[str, deque] = {}          # code -> deque[signal记录]
-_last: dict[str, tuple[str, float]] = {}  # code -> (方向, 时间戳)
+REV_WEIGHT = 15.0       # 变盘点并入综合方向的最大分值
+REV_FRESH_SEC = 3600    # 转折点对方向的影响时长（60 分钟线性衰减）
 
+KLT_TREND = 15          # 结构周期
+KLT_CONFIRM = 5         # 确认周期
+TREND_BARS = 90         # 15m 抓取根数（跨日，保证 MACD 预热）
+CONFIRM_BARS = 120      # 5m 抓取根数
 
-def _agg_closes(closes: list[float], n: int) -> list[float]:
-    """按 n 分钟聚合收盘价（取每组最后一根，用于算高周期 MACD）。"""
-    return [seg[-1] for seg in
-            (closes[i:i + n] for i in range(0, len(closes), n)) if seg]
+_signals: dict[str, deque] = {}            # code -> deque[signal记录]（供分时图打标记）
+_state: dict[str, tuple[str, float, float]] = {}  # code -> (方向, 分数, 时间戳)：供方向加分
 
 
 def _recent_cross(closes: list[float], lookback: int) -> str | None:
@@ -64,54 +69,54 @@ def _recent_cross(closes: list[float], lookback: int) -> str | None:
     return None
 
 
-def _score_side(ctx: dict, track: dict | None, side: str) -> tuple[float, list[str]]:
-    """side: 'bull' | 'bear'。返回 (分数, 触发因子描述)。"""
+def _score_side(ctx: dict, bars: list[dict], track: dict | None,
+                side: str) -> tuple[float, list[str], bool]:
+    """side: 'bull' | 'bear'。返回 (分数, 命中因子, 是否满足核心门槛)。"""
     bull = side == "bull"
-    k1 = ctx.get("kline_1m") or []
-    closes = [b["close"] for b in k1]
-    highs = [b["high"] for b in k1]
-    lows = [b["low"] for b in k1]
-    m1 = ctx.get("macd") or {}
-    m3 = ctx.get("macd3") or {}
-    m5 = macd_state(_agg_closes(closes, 5)) if len(closes) >= 60 else {}
+    closes = [b["close"] for b in bars]
+    highs = [b["high"] for b in bars]
+    lows = [b["low"] for b in bars]
+    if len(closes) < 40:
+        return 0.0, [], False
+    c5 = closes                      # bars 即 5 分钟 K（确认周期）
+    c15 = [b["close"] for b in _agg(bars, 3)]  # 3 根 5m ≈ 15 分钟（结构周期）
+    m5 = macd_state(c5)
+    m15 = macd_state(c15)
     s = 0.0
     hits: list[str] = []
 
-    # 1m MACD：近3根内金叉/死叉，或动能转强
-    rc1 = _recent_cross(closes, 3)
-    if (bull and rc1 == "golden") or (not bull and rc1 == "dead"):
-        s += 25
-        hits.append("1m" + ("金叉" if bull else "死叉"))
-    elif m1.get("ok") and ((bull and m1.get("hist_rising")) or
-                             (not bull and m1.get("hist_falling"))):
-        s += 12
-        hits.append("1m动能转强")
-    # 3m 确认：近2根内金叉/死叉，或柱体翻正/翻负
-    closes3 = _agg_closes(closes, 3)
-    rc3 = _recent_cross(closes3, 2)
-    if (bull and rc3 == "golden") or (not bull and rc3 == "dead"):
-        s += 20
-        hits.append("3m确认")
-    elif m3.get("ok") and ((bull and m3.get("hist_rising") and (m3.get("hist") or 0) > 0) or
-                             (not bull and m3.get("hist_falling") and (m3.get("hist") or 0) < 0)):
-        s += 20
-        hits.append("3m柱体翻正" if bull else "3m柱体翻负")
-    elif m3.get("ok") and ((bull and m3.get("hist_rising")) or
-                             (not bull and m3.get("hist_falling"))):
+    # 15m 结构（核心门槛）：近 2 根内金叉/死叉，或 15m 背离
+    rc15 = _recent_cross(c15, 2)
+    div15 = (m15.get("divergence") or {}).get("type")
+    turned15 = (bull and rc15 == "golden") or (not bull and rc15 == "dead")
+    div_ok = (bull and div15 == "bullish") or (not bull and div15 == "bearish")
+    core = turned15 or div_ok
+    if turned15:
+        s += 30
+        hits.append("15m" + ("金叉" if bull else "死叉"))
+    elif m15.get("ok") and ((bull and m15.get("hist_rising") and (m15.get("hist") or 0) > 0) or
+                            (not bull and m15.get("hist_falling") and (m15.get("hist") or 0) < 0)):
         s += 10
-        hits.append("3m柱体同向")
-    # 5m 趋势配合
-    if m5.get("ok") and ((bull and (m5.get("hist_rising") or m5.get("above_zero"))) or
-                           (not bull and (m5.get("hist_falling") or not m5.get("above_zero")))):
+        hits.append("15m趋势同向")
+
+    # 5m 确认：近 2 根内金叉/死叉
+    rc5 = _recent_cross(c5, 2)
+    if (bull and rc5 == "golden") or (not bull and rc5 == "dead"):
+        s += 20
+        hits.append("5m确认")
+    elif m5.get("ok") and ((bull and m5.get("hist_rising")) or
+                           (not bull and m5.get("hist_falling"))):
         s += 10
-        hits.append("5m趋势配合")
-    # 突破/跌破近15分钟高低点
-    if len(closes) >= 16:
-        ref = max(highs[-16:-1]) if bull else min(lows[-16:-1])
+        hits.append("5m柱体同向")
+
+    # 突破/跌破近 6 根 5m 高低（≈30 分钟）
+    if len(closes) >= 7:
+        ref = max(highs[-7:-1]) if bull else min(lows[-7:-1])
         last = closes[-1]
         if (bull and last > ref) or (not bull and last < ref):
             s += 15
-            hits.append(f"突破15分钟{'高' if bull else '低'}{ref:.3f}")
+            hits.append(f"突破30分钟{'高' if bull else '低'}{ref:.3f}")
+
     # 分时均价
     tr = ctx.get("trends") or []
     if tr and tr[-1].get("avg"):
@@ -119,6 +124,7 @@ def _score_side(ctx: dict, track: dict | None, side: str) -> tuple[float, list[s
         if (bull and px > avg) or (not bull and px < avg):
             s += 5
             hits.append("站上均价" if bull else "跌破均价")
+
     # 量能（ratio 为「近1分钟 ÷ 日内均量」口径，见 indicators.volume_stats）
     ratio = (ctx.get("volume") or {}).get("ratio") or 0
     if ratio >= 3.0:
@@ -127,7 +133,8 @@ def _score_side(ctx: dict, track: dict | None, side: str) -> tuple[float, list[s
     elif ratio >= 2.0:
         s += 10
         hits.append(f"放量{ratio:.1f}x")
-    # 主力资金
+
+    # 主力资金（近5分钟净额）
     d5 = ctx.get("flow_main_delta5m") or 0
     if (bull and d5 >= 1.2e8) or (not bull and d5 <= -1.2e8):
         s += 15
@@ -135,6 +142,7 @@ def _score_side(ctx: dict, track: dict | None, side: str) -> tuple[float, list[s
     elif (bull and d5 >= 5e7) or (not bull and d5 <= -5e7):
         s += 10
         hits.append(f"主力{'流入' if bull else '流出'}{abs(d5) / 1e8:.1f}亿")
+
     # 关联指数同向
     if track:
         qp = (track.get("quote") or {}).get("pct")
@@ -143,16 +151,38 @@ def _score_side(ctx: dict, track: dict | None, side: str) -> tuple[float, list[s
                 and (bull and tm != "dead" or not bull and tm != "golden"):
             s += 10
             hits.append(f"指数同向{qp:+.2f}%")
-    # 背离（反转起点加分）
-    div = (m3.get("divergence") or {}).get("type")
-    if (bull and div == "bullish") or (not bull and div == "bearish"):
+
+    # 15m 背离（反转起点加分）
+    if div_ok and not turned15:
         s += 10
-        hits.append("3m底背离" if bull else "3m顶背离")
+        hits.append("15m底背离" if bull else "15m顶背离")
+
     # 关键时点共振
     if strategy.near_key_time(dt.datetime.now().strftime("%H:%M"), window=6):
         s += 5
         hits.append("关键时点共振")
-    return round(s, 1), hits
+
+    return round(s, 1), hits, core
+
+
+def _agg(bars: list[dict], n: int) -> list[dict]:
+    """按 n 根聚合 5m K 线（OHLC 合并），用于合成 15m 结构。"""
+    out = []
+    for i in range(0, len(bars), n):
+        seg = bars[i:i + n]
+        if not seg:
+            continue
+        out.append({
+            "open": seg[0]["open"], "close": seg[-1]["close"],
+            "high": max(b["high"] for b in seg),
+            "low": min(b["low"] for b in seg),
+        })
+    return out
+
+
+async def _trend_bars(secid: str) -> list[dict]:
+    """确认周期（5 分钟）K 线，供打分与聚合出 15m 结构。"""
+    return await em.kline(secid, klt=KLT_CONFIRM, lmt=CONFIRM_BARS, ttl=45.0)
 
 
 async def _build_plan(etf: dict, ctx: dict, side: str, score: float,
@@ -204,16 +234,16 @@ async def _build_plan(etf: dict, ctx: dict, side: str, score: float,
 
 
 async def check(etf: dict, ctx: dict) -> dict | None:
-    """评估变盘信号；达阈值且通过过滤则返回告警 dict，否则 None。"""
+    """评估变盘点；达阈值且通过过滤则返回告警 dict，否则 None。"""
     from services import market_service as ms  # 延迟导入，避免循环
     code, name = etf["code"], etf["name"]
     hm = dt.datetime.now().strftime("%H:%M")
     if not (TIME_START <= hm < TIME_END):
         return None
-    k1 = ctx.get("kline_1m") or []
-    if len(k1) < 40:
+    if len(ctx.get("kline_1m") or []) < 40:
         return None
     # 数据新鲜度：最后一根 1m K 距现在 ≤20 分钟（防用过期缓存误报）
+    k1 = ctx.get("kline_1m") or []
     try:
         last_ts = dt.datetime.strptime(k1[-1]["date"], "%Y-%m-%d %H:%M")
         if (dt.datetime.now() - last_ts).total_seconds() > 1200:
@@ -221,37 +251,42 @@ async def check(etf: dict, ctx: dict) -> dict | None:
     except (ValueError, KeyError):
         pass
 
-    sb, hb = _score_side(ctx, None, "bull")
-    ss, hs = _score_side(ctx, None, "bear")
-    if max(sb, ss) >= TRACK_FETCH_SCORE:
+    bars = await _trend_bars(etf["secid"])
+    if len(bars) < 40:
+        return None
+
+    sb, hb, core_b = _score_side(ctx, bars, None, "bull")
+    ss, hs, core_s = _score_side(ctx, bars, None, "bear")
+    if not (core_b or core_s):
+        return None                              # 高周期未转向 → 纯噪声
+    if max(sb, ss) >= TRACK_FETCH_SCORE:         # 够高才拉关联指数做确认（省请求）
         try:
             track = await ms.track_index_state(etf["track"])
         except Exception:  # noqa: BLE001
             track = None
-        sb, hb = _score_side(ctx, track, "bull")
-        ss, hs = _score_side(ctx, track, "bear")
+        sb, hb, core_b = _score_side(ctx, bars, track, "bull")
+        ss, hs, core_s = _score_side(ctx, bars, track, "bear")
 
     side, score, hits = None, 0.0, []
-    if sb >= THRESHOLD and sb >= ss:
+    if core_b and sb >= THRESHOLD and sb >= ss:
         side, score, hits = "bull", sb, hb
-    elif ss >= THRESHOLD and ss > sb:
+    elif core_s and ss >= THRESHOLD and ss > sb:
         side, score, hits = "bear", ss, hs
     if not side:
         return None
 
     # 冷却 / 反向抑制（防震荡反复打脸）
     now_ts = dt.datetime.now().timestamp()
-    last = _last.get(code)
+    last = _state.get(code)
     if last:
-        ldir, lts = last
+        ldir, _ls, lts = last
         if ldir == side and now_ts - lts < COOLDOWN_SAME:
             return None
         if ldir != side and now_ts - lts < COOLDOWN_OPPO:
-            log.debug("%s 反向信号被抑制", code)
             return None
     if not alerts.should_alert(code, f"reversal_{side}", COOLDOWN_SAME):
         return None
-    _last[code] = (side, now_ts)
+    _state[code] = (side, score, now_ts)
 
     plan = await _build_plan(etf, ctx, side, score, hits)
     now = dt.datetime.now()
@@ -268,11 +303,31 @@ async def check(etf: dict, ctx: dict) -> dict | None:
         "score": score, "price": plan.get("underlying_price"),
         "title": sig["title"],
     })
-    log.info("变盘信号 %s %s %.0f分：%s", code, side, score, "·".join(hits))
+    log.info("变盘点 %s %s %.0f分：%s", code, side, score, "·".join(hits))
     return sig
 
 
+def factor(code: str | None) -> tuple[float, str | None]:
+    """把当日已确认的变盘点折算为综合方向的加分（±REV_WEIGHT，60 分钟内衰减）。
+
+    供 strategy.bias_score 并入方向合力；无有效转折点返回 (0, None)。
+    """
+    if not code:
+        return 0.0, None
+    st = _state.get(code)
+    if not st:
+        return 0.0, None
+    side, score, ts = st
+    age = dt.datetime.now().timestamp() - ts
+    if age > REV_FRESH_SEC:
+        return 0.0, None
+    decay = 1 - age / REV_FRESH_SEC
+    v = REV_WEIGHT * min(1.0, score / 100.0) * decay
+    return (round(v, 1) if side == "bull" else round(-v, 1),
+            "看多" if side == "bull" else "看空")
+
+
 def recent(code: str, limit: int = 10) -> list[dict]:
-    """当日该标的的变盘信号（供分时图打标记）。"""
+    """当日该标的的变盘点（供分时图打标记）。"""
     today = dt.datetime.now().strftime("%Y-%m-%d")
     return [s for s in _signals.get(code, {}) if s.get("day") == today][-limit:]

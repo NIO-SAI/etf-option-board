@@ -146,7 +146,11 @@ def detect_signals(etf_ctx: dict, track: dict, national: dict, ext: list[dict],
 
 
 def bias_score(etf_ctx, track, national, ext, kronos_sum) -> dict:
-    """多因子方向评分 [-100,100]，>0 看多。"""
+    """多因子方向评分 [-100,100]，>0 看多。
+
+    含「变盘点」加分（reversal.factor，±15，60 分钟衰减）：5m/15m 高周期转折点作为
+    条件并入方向合力，而非单独提醒。
+    """
     score = 0.0
     detail = {}
     q = etf_ctx.get("quote") or {}
@@ -193,6 +197,13 @@ def bias_score(etf_ctx, track, national, ext, kronos_sum) -> dict:
     if ext_score:
         v = max(-10, min(10, ext_score * 3))
         score += v; detail["外围市场"] = round(v, 1)
+    # 变盘点（5m/15m 高周期转折，权重 15）：当日已确认转折点并入方向合力，60 分钟内衰减。
+    # 这是「变盘时间点作为条件参与趋势方向分析」的落点——不再单独刷屏，而是加权到方向结论。
+    from services import reversal  # 延迟导入，避免与 reversal→strategy 循环依赖
+    rev_v, rev_label = reversal.factor(etf_ctx.get("code"))
+    if rev_v:
+        score += rev_v
+        detail[f"变盘点·{rev_label}"] = round(rev_v, 1)
 
     score = round(max(-100, min(100, score)), 1)
     direction = "call" if score >= 15 else "put" if score <= -15 else "neutral"
