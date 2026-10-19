@@ -34,6 +34,43 @@ export async function requestNotifyPermission(): Promise<NotifyPermission> {
   }
 }
 
+/**
+ * 首次用户交互（任意点击/触摸）时自动请求通知权限——只做一次。
+ * 浏览器的权限框需要用户手势，自动请求可避免用户找不到「开启浏览器通知」按钮；
+ * 被拒绝后不再纠缠（返回的 once 标记保证只调一次）。
+ */
+let _autoPromptDone = false;
+export function autoPromptPermissionOnce(): void {
+  if (_autoPromptDone || notifyPermission() !== "default") return;
+  const kick = async () => {
+    if (_autoPromptDone) return;
+    _autoPromptDone = true;
+    cleanup();
+    await requestNotifyPermission();
+  };
+  const cleanup = () => {
+    document.removeEventListener("pointerdown", kick, true);
+    document.removeEventListener("keydown", kick, true);
+  };
+  document.addEventListener("pointerdown", kick, true);
+  document.addEventListener("keydown", kick, true);
+}
+
+/** 诊断信标：把来源/安全上下文/通知权限写进一次 /api/health 请求，便于从服务端日志核对。 */
+export function reportNotifyState(tag = "notify"): void {
+  try {
+    const info = {
+      origin: location.origin,
+      secure: typeof window !== "undefined" ? window.isSecureContext : false,
+      perm: notifyPermission(),
+      ua: navigator.userAgent.slice(0, 48),
+    };
+    void fetch(`/api/health?dbg=${tag}:${encodeURIComponent(JSON.stringify(info))}`).catch(() => {});
+  } catch {
+    /* ignore */
+  }
+}
+
 export interface AlertLike {
   id?: number;
   title?: string;

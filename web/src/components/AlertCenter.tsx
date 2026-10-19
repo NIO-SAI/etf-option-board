@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, EmptyState, HoverTip } from "@/components/ui/misc";
 import { api } from "@/lib/api";
 import { useAlertStream } from "@/lib/usePolling";
-import { notifyPermission, requestNotifyPermission, showNotification } from "@/lib/notify";
+import { notifyPermission, requestNotifyPermission, showNotification, autoPromptPermissionOnce, reportNotifyState } from "@/lib/notify";
 import { sound } from "@/lib/sound";
 import { clsUpDown } from "@/lib/format";
 import { AlertTriangle, BellRing, Volume2 } from "lucide-react";
@@ -33,6 +33,17 @@ export function AlertCenter() {
     }).catch(() => {});
   }, []);
 
+  // 通知授权：任意首次点击自动弹权限框（免去找按钮）；并上报诊断信标。
+  useEffect(() => {
+    reportNotifyState("mount");
+    autoPromptPermissionOnce();
+    const t = setInterval(() => {
+      const p = notifyPermission();
+      setPerm((prev) => (prev === p ? prev : p));
+    }, 3000);
+    return () => clearInterval(t);
+  }, []);
+
   const onAlert = (a: any) => {
     if (seen.current.has(a.id)) return;
     seen.current.add(a.id);
@@ -54,6 +65,7 @@ export function AlertCenter() {
   const onEnable = async () => {
     const p = await requestNotifyPermission();
     setPerm(p);
+    reportNotifyState("enable");
     if (p === "granted") toast("浏览器通知已开启", { description: "盘中告警将以 Chrome 系统通知弹出。" });
     else if (p === "denied") toast("浏览器通知被拒绝", { description: "请在地址栏左侧站点设置里重新允许通知。" });
   };
