@@ -133,7 +133,7 @@ export default function App() {
                   {!ctxReady ? (
                     <Skeleton className="h-[240px] w-full" />
                   ) : ctx?.trends?.length ? (
-                    <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexFlow={ctx.track?.flow ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} signals={revSignals?.items ?? []} prevClose={ctx.quote?.prev_close ?? null} indexPrevClose={ctx.track?.quote?.prev_close ?? null} height={230} />
+                    <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexFlow={ctx.track?.flow ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} signals={revSignals?.items ?? []} prevClose={ctx.trends_prev_close ?? ctx.quote?.prev_close ?? null} indexPrevClose={ctx.track?.trends_prev_close ?? ctx.track?.quote?.prev_close ?? null} height={230} />
                   ) : (
                     <Skeleton className="h-[240px] w-full" />
                   )}
@@ -157,7 +157,7 @@ export default function App() {
           </Frame>
 
           <ContractDetail contract={contract} etfTrends={ctxReady ? (ctx?.trends ?? []) : []}
-            flow={ctxReady ? flowSeries : []} etfPrevClose={ctxReady ? (ctx?.quote?.prev_close ?? null) : null} />
+            flow={ctxReady ? flowSeries : []} etfPrevClose={ctxReady ? (ctx?.trends_prev_close ?? ctx?.quote?.prev_close ?? null) : null} />
         </div>
 
         {/* 右：决策栏 */}

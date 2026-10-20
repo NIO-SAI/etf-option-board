@@ -35,6 +35,10 @@ _H5_REF = "https://data.eastmoney.com/"
 _TX_DAY = "https://ifzq.gtimg.cn/appstock/app/fqkline/get"
 _TX_MIN = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
 _TX_TREND = "https://ifzq.gtimg.cn/appstock/app/minute/query"
+# 多日分时：盘前当日只有 09:30 一个占位点时，用它回退到上一完整交易日
+_TX_TREND_DAYS = "https://ifzq.gtimg.cn/appstock/app/day/query"
+# 回退到昨日分时时，记录该日的昨收（day/query 的 prec），供前端算涨跌幅基准
+_TREND_PREV_CLOSE: dict[str, float] = {}
 
 
 _CLIENT: httpx.AsyncClient | None = None
@@ -318,6 +322,27 @@ def _trends_trim(out: list[dict], ndays: int) -> list[dict]:
     return [p for p in out if (p.get("time") or "")[:10] == last_day]
 
 
+def _tx_trend_points(raw: list[str] | None, day_fmt: str) -> list[dict]:
+    """腾讯分时行 "HHMM price volume amount" -> 归一化点（单日/多日接口共用）。"""
+    out = []
+    for line in raw or []:
+        p = line.split()
+        if len(p) < 2:
+            continue
+        t = p[0]
+        hhmm = f"{t[0:2]}:{t[2:4]}" if len(t) == 4 else t
+        out.append({"time": f"{day_fmt} {hhmm}", "price": _numf(p[1]),
+                    "high": _numf(p[1]), "low": _numf(p[1]),
+                    "volume": _numf(p[2]) if len(p) > 2 else None,
+                    "amount": _numf(p[3]) if len(p) > 3 else None, "avg": None})
+    return out
+
+
+def trend_prev_close(secid: str) -> float | None:
+    """分时回退到昨日时，该日的昨收（用于前端涨跌幅基准）。"""
+    return _TREND_PREV_CLOSE.get(secid)
+
+
 async def trends(secid: str, ndays: int = 1, ttl: float = 30.0) -> list[dict]:
     """分时（归一化）。腾讯优先（稳定），push2 trends2 兜底。
 
@@ -332,19 +357,34 @@ async def trends(secid: str, ndays: int = 1, ttl: float = 30.0) -> list[dict]:
         day = str(tdata.get("date") or "")          # "20261015"
         day_fmt = (f"{day[0:4]}-{day[4:6]}-{day[6:8]}"
                    if len(day) == 8 else time.strftime("%Y-%m-%d"))
-        out = []
-        for line in raw:
-            p = line.split()
-            if len(p) < 2:
-                continue
-            t = p[0]
-            hhmm = f"{t[0:2]}:{t[2:4]}" if len(t) == 4 else t
-            out.append({"time": f"{day_fmt} {hhmm}", "price": _numf(p[1]),
-                        "high": _numf(p[1]), "low": _numf(p[1]),
-                        "volume": _numf(p[2]), "amount": _numf(p[3]), "avg": None})
-        out = _trends_trim(out, ndays)
-        if out:
+        out = _trends_trim(_tx_trend_points(raw, day_fmt), ndays)
+        if len(out) >= 2:
+            _TREND_PREV_CLOSE.pop(secid, None)
             return out
+        # 盘前（或开盘首分钟）腾讯单日分时只有今日 09:30 的一个占位点。
+        # 若直接返回，轴只剩 1 点，资金流/期权叠加会被同日校验全部丢弃，
+        # 页面看起来就是「昨日数据不见了」。改为回退最近一个完整交易日。
+        if ndays == 1:
+            d2 = await get_json(_TX_TREND_DAYS, {"code": code}, ttl=ttl)
+            node2 = ((d2 or {}).get("data") or {}).get(code) or {}
+            today = time.strftime("%Y-%m-%d")
+            for item in node2.get("data") or []:
+                raw_day = str(item.get("date") or "")
+                if len(raw_day) != 8:
+                    continue
+                day2 = f"{raw_day[0:4]}-{raw_day[4:6]}-{raw_day[6:8]}"
+                if day2 >= today:      # 今日占位/未来日期不算
+                    continue
+                pts = [p for p in _tx_trend_points(item.get("data"), day2)
+                       if _hm_in_session(p["time"][-5:])]
+                if len(pts) >= 2:
+                    try:
+                        prec = float(item.get("prec"))
+                    except (TypeError, ValueError):
+                        prec = None
+                    if prec and prec > 0:
+                        _TREND_PREV_CLOSE[secid] = prec
+                    return pts
     if _push2_dead("push2.eastmoney.com"):
         return []
     d = await get_json("https://push2.eastmoney.com/api/qt/stock/trends2/get",

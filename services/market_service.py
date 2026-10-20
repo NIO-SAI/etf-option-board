@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from services import em
 from services.indicators import macd_state, pct_change, volume_stats
@@ -105,9 +106,14 @@ async def etf_context(code: str, etf_secid: str) -> dict:
     closes15 = [b["close"] for b in _agg(k5, 3)]
     flow_tail = fl[-5:] if fl else []
     flow_delta = (flow_tail[-1]["main"] - flow_tail[0]["main"]) if len(flow_tail) >= 2 else None
+    tr_day = (tr[-1]["time"] or "")[:10] if tr else None
     return {
         "code": code,  # 供综合方向并入「变盘点」加分（reversal.factor）
-        "quote": q, "kline_1m": k1, "trends": tr, "flow": fl, "flow_day": flow_day,
+        "quote": q, "kline_1m": k1, "trends": tr, "trends_day": tr_day,
+        # 盘前 trends 会回退到上一交易日；涨跌幅基准必须用那一日的昨收，而不是今日的
+        "trends_prev_close": (em.trend_prev_close(etf_secid)
+                              if tr_day and tr_day != time.strftime("%Y-%m-%d") else None),
+        "flow": fl, "flow_day": flow_day,
         "macd": macd_state(closes),        # 1 分钟：金叉/死叉
         "macd15": macd_state(closes15),    # 15 分钟：顶/底背离监测（全站统一口径）
         "volume": volume_stats(vols),
@@ -209,5 +215,8 @@ async def track_index_state(track: str) -> dict:
     fl, flow_day = flr
     k1 = await kline(secid, klt=5, lmt=60)
     closes = [b["close"] for b in k1]
-    return {"secid": secid, "quote": q, "support": sup, "trends": tr, "flow": fl,
-            "flow_day": flow_day, "macd": macd_state(closes)}
+    tr_day = (tr[-1]["time"] or "")[:10] if tr else None
+    return {"secid": secid, "quote": q, "support": sup, "trends": tr, "trends_day": tr_day,
+            "trends_prev_close": (em.trend_prev_close(secid)
+                                  if tr_day and tr_day != time.strftime("%Y-%m-%d") else None),
+            "flow": fl, "flow_day": flow_day, "macd": macd_state(closes)}
