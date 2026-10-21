@@ -3,6 +3,15 @@ export const nf = (v: any, d = 2): string =>
     ? "—"
     : Number(v).toLocaleString("zh-CN", { minimumFractionDigits: d, maximumFractionDigits: d });
 
+/** Gamma 量级随标的价格差异大（0.00x~5+），按数量级自适应小数位。 */
+export const gamma = (v: any): string => {
+  if (v === null || v === undefined || isNaN(Number(v))) return "—";
+  const n = Number(v);
+  const a = Math.abs(n);
+  const d = a >= 1 ? 2 : a >= 0.1 ? 3 : 4;
+  return n.toLocaleString("zh-CN", { minimumFractionDigits: d, maximumFractionDigits: d });
+};
+
 export const pct = (v: any, d = 2): string =>
   v === null || v === undefined || isNaN(Number(v))
     ? "—"

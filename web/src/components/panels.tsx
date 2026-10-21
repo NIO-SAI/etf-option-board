@@ -3,7 +3,7 @@ import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/fr
 import { Sparkline } from "@/components/charts";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
-import { clsUpDown, nf, pct } from "@/lib/format";
+import { clsUpDown, gamma, nf, pct } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { ArrowDownRight, ArrowUpRight, Flame, Minus, Star } from "lucide-react";
 
@@ -447,8 +447,8 @@ export function CandidateList({
           <span className="w-4 shrink-0 text-center text-xs text-muted-foreground tnum" aria-hidden>{i + 1}</span>
           <div className="min-w-0 flex-1">
             <div className="truncate text-xs font-medium">{c.name}</div>
-            <div className="truncate text-xs text-muted-foreground tnum">
-              {c.code} · Δ{c.delta} · IV{c.iv}% · 溢价{c.premium_rate}%
+            <div className="text-xs leading-tight text-muted-foreground tnum">
+              {c.code} ·Δ{nf(c.delta, 2)} ·Γ{gamma(c.gamma)} ·IV{c.iv == null ? "—" : `${c.iv}%`} ·溢价{c.premium_rate == null ? "—" : `${c.premium_rate}%`}
             </div>
           </div>
           <div className="shrink-0 text-right">
@@ -561,14 +561,14 @@ export function OptionTQuote({
         <Table>
           <THead>
             <TR>
-              <TH colSpan={5} className="text-center text-up">认购 Call</TH>
+              <TH colSpan={6} className="text-center text-up">认购 Call</TH>
               <TH className="text-center">行权价</TH>
-              <TH colSpan={5} className="text-center text-down">认沽 Put</TH>
+              <TH colSpan={6} className="text-center text-down">认沽 Put</TH>
             </TR>
             <TR>
-              <TH>名称</TH><TH className="text-right">现价</TH><TH className="text-right">涨跌</TH><TH className="text-right">IV</TH><TH className="text-right">Δ</TH>
+              <TH>名称</TH><TH className="text-right">现价</TH><TH className="text-right">涨跌</TH><TH className="text-right">IV</TH><TH className="text-right">Δ</TH><TH className="text-right" title="Gamma：Delta 对标的价格的变动率，平值附近最大">Γ</TH>
               <TH className="text-center">K</TH>
-              <TH className="text-right">Δ</TH><TH className="text-right">IV</TH><TH className="text-right">涨跌</TH><TH className="text-right">现价</TH><TH>名称</TH>
+              <TH className="text-right" title="Gamma：Delta 对标的价格的变动率，平值附近最大">Γ</TH><TH className="text-right">Δ</TH><TH className="text-right">IV</TH><TH className="text-right">涨跌</TH><TH className="text-right">现价</TH><TH>名称</TH>
             </TR>
           </THead>
           <TBody>
@@ -597,7 +597,7 @@ function ContractCells({ c, selected, onSelect, align, pick }: {
   c: any; selected?: string; onSelect: (c: any) => void; align: "left" | "right";
   pick?: "call" | "put";
 }) {
-  if (!c) return <TD colSpan={5} className="text-center text-muted-foreground">—</TD>;
+  if (!c) return <TD colSpan={6} className="text-center text-muted-foreground">—</TD>;
   const on = c.secid === selected;
   const num = (v: any, d = 4) => nf(v, d);
   // 首选合约：认购用红、认沽用绿，整侧单元格铺底色，与 ATM 的琥珀色区分
@@ -607,6 +607,7 @@ function ContractCells({ c, selected, onSelect, align, pick }: {
     <TD key="pct" className={cn("text-right tnum", pickCls, clsUpDown(c.pct))}>{pct(c.pct, 1)}</TD>,
     <TD key="iv" className={cn("text-right tnum text-muted-foreground", pickCls)}>{nf(c.iv, 1)}</TD>,
     <TD key="d" className={cn("text-right tnum text-muted-foreground", pickCls)}>{nf(c.delta, 2)}</TD>,
+    <TD key="g" className={cn("text-right tnum text-muted-foreground", pickCls)} title="Gamma：Δ 对标的价格的变动率">{gamma(c.gamma)}</TD>,
   ];
   const name = (
     <TD key="name" className={cn("p-0", pickCls, align === "right" && "text-right",
