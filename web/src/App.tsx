@@ -162,7 +162,7 @@ export default function App() {
 
         {/* 右：决策栏 */}
         <div className="flex flex-col gap-3">
-          <AlertCenter />
+          <AlertCenter onSelect={setEtfCode} />
 
           <Frame spacing="sm">
             <FramePanel dense>

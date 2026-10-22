@@ -17,7 +17,7 @@ const TYPE_LABEL: Record<string, string> = {
   opt_spike: "合约异动", reversal: "变盘开仓",
 };
 
-export function AlertCenter() {
+export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void }) {
   const [items, setItems] = useState<any[]>([]);
   const [popup, setPopup] = useState<any>(null);
   const [perm, setPerm] = useState(notifyPermission());
@@ -70,6 +70,16 @@ export function AlertCenter() {
     else if (p === "denied") toast("浏览器通知被拒绝", { description: "请在地址栏左侧站点设置里重新允许通知。" });
   };
 
+  // 切到告警对应标的：关闭弹窗；窄屏（单列）时右栏在下方，顺带滚到行情图
+  const jump = (code?: string) => {
+    if (!code || !onSelect) return;
+    onSelect(code);
+    setPopup(null);
+    if (window.matchMedia("(max-width: 1023px)").matches) {
+      requestAnimationFrame(() => document.getElementById("main-chart")?.scrollIntoView({ behavior: "smooth", block: "center" }));
+    }
+  };
+
   // 兜底去重：无论如何渲染层都不出现同一 id 的两行
   const rows = useMemo(() => {
     const s = new Set<any>();
@@ -103,7 +113,15 @@ export function AlertCenter() {
           <div className="max-h-[260px] min-h-0 divide-y divide-border/60 overflow-auto" role="status" aria-live="polite">
             {rows.length === 0 && <EmptyState title="暂无告警" hint="量能、资金异动与变盘信号会在此推送" />}
             {rows.map((a) => (
-              <div key={a.id} className="flex items-start gap-2 px-3 py-1.5">
+              // 点击整行切到该告警对应的标的（无 etf_code 的全局告警不可点）
+              <button
+                key={a.id}
+                type="button"
+                disabled={!a.etf_code}
+                onClick={() => jump(a.etf_code)}
+                title={a.etf_code ? `点击切换到 ${a.etf_name ?? a.etf_code}（${a.etf_code}）` : undefined}
+                className="flex w-full cursor-pointer items-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-muted/40 disabled:cursor-default disabled:hover:bg-transparent"
+              >
                 <span className="mt-0.5">{a.level === "critical" ? <AlertTriangle className="size-3 text-destructive" /> : null}</span>
                 {/* 整行悬浮：代码 + 完整标题 + 完整正文（列表里标题 truncate、正文 line-clamp-2 会截断） */}
                 <HoverTip label={`${a.etf_code ? a.etf_code + " " : ""}${a.title}\n${a.text}`} className="min-w-[240px]">
@@ -116,7 +134,7 @@ export function AlertCenter() {
                   </div>
                 </HoverTip>
                 <span className="text-[10px] text-muted-foreground tnum">{a.ts?.slice(11)}</span>
-              </div>
+              </button>
             ))}
           </div>
         </FramePanel>
@@ -137,6 +155,11 @@ export function AlertCenter() {
                 {popup.etf_name} · {popup.ts?.slice(11)}
               </span>
             </div>
+            {popup.etf_code && (
+              <div className="flex justify-end">
+                <Button size="xs" onClick={() => jump(popup.etf_code)}>查看该标的</Button>
+              </div>
+            )}
           </div>
         )}
       </Dialog>
