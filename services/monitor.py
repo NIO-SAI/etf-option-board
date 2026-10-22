@@ -32,14 +32,19 @@ async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
         return
     name = etf["name"]
 
-    # 量能骤放（冷却 300s）：近1分钟量能超日内均量 SURGE_RATIO 倍
+    # 量能骤放（冷却 300s）：近1分钟量能超近60分钟均量 5 倍，且需量价配合
+    # （该分钟价格波动 ≥0.15% 或连续两分钟放量），避免把 ETF 申赎/套利篮子的一次性
+    # 大单当成有效放量——这类成交常常量能暴增但价格纹丝不动。
     vs = ctx.get("volume") or {}
-    if vs.get("is_surge") and alerts.should_alert(etf["code"], "volume_surge", 300):
+    if vs.get("confirmed") and alerts.should_alert(etf["code"], "volume_surge", 300):
+        mv = vs.get("move_pct") or 0.0
+        by_price = vs.get("confirmed_by") == "price"
+        confirm_txt = f"该分钟价格 {mv * 100:+.2f}%" if by_price else "连续两分钟放量"
         await alerts.publish({
             "etf_code": etf["code"], "etf_name": name, "type": "volume_surge",
-            "level": "warn", "dir": "neutral",
+            "level": "warn", "dir": ("bull" if mv > 0 else "bear") if by_price else "neutral",
             "title": f"{name} 量能放大 {vs['ratio']}x",
-            "text": f"近1分钟量能为日内均量 {vs['ratio']} 倍（阈值 5 倍），配合价格方向判断有效性。",
+            "text": f"近1分钟量能为近60分钟均量 {vs['ratio']} 倍（阈值 5 倍），{confirm_txt}，量价配合。",
         })
 
     # 主力资金突入（冷却 240s）

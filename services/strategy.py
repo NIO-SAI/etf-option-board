@@ -84,9 +84,12 @@ def detect_signals(etf_ctx: dict, track: dict, national: dict, ext: list[dict],
 
     # 量能异动
     vs = etf_ctx.get("volume") or {}
-    if vs.get("is_surge"):
-        sig.append({"type": "volume_surge", "level": "warn", "dir": "neutral",
-                    "text": f"标的量能放大 {vs['ratio']}x（近1分钟 vs 日内均量）"})
+    if vs.get("confirmed"):
+        mv = vs.get("move_pct") or 0.0
+        by_price = vs.get("confirmed_by") == "price"
+        sig.append({"type": "volume_surge", "level": "warn",
+                    "dir": ("bull" if mv > 0 else "bear") if by_price else "neutral",
+                    "text": f"标的量价配合，量能放大 {vs['ratio']}x（近1分钟 vs 近60分钟均量）"})
 
     # 主力资金突入
     d5 = etf_ctx.get("flow_main_delta5m") or 0

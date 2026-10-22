@@ -116,7 +116,7 @@ async def etf_context(code: str, etf_secid: str) -> dict:
         "flow": fl, "flow_day": flow_day,
         "macd": macd_state(closes),        # 1 分钟：金叉/死叉
         "macd15": macd_state(closes15),    # 15 分钟：顶/底背离监测（全站统一口径）
-        "volume": volume_stats(vols),
+        "volume": volume_stats(vols, closes),
         "flow_main_delta5m": flow_delta,
         "flow_main_total": fl[-1]["main"] if fl else 0,
         "flow_snapshot": {

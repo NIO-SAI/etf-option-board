@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-# 量能放大「提示」阈值：近1分钟量能 ÷ 日内均量 ≥ 该倍数才提示。
-# 告警（monitor）、信号流（strategy）、国家队护盘评分里的放量计数、前端量能高亮统一用此口径。
+# 量能放大「提示」阈值：近1分钟量能 ÷ 近60分钟均量 ≥ 该倍数才提示。
+# 告警（monitor）、信号流（strategy）另需量价配合（见 SURGE_PRICE_MOVE）才推送；
+# 国家队护盘评分里的放量计数、前端量能高亮用原始倍数口径。
 SURGE_RATIO = 5.0
+# 量价配合阈值：放量那一分钟的价格波动绝对值 ≥ 0.15%，
+# 或连续 2 分钟都 ≥ SURGE_RATIO 倍，才算有效放量。
+SURGE_PRICE_MOVE = 0.0015
 
 
 def ema(values: list[float], period: int) -> list[float]:
@@ -73,8 +77,12 @@ def _divergence(closes: list[float], hist: list[float], look: int = 60) -> dict:
     return {"type": "none"}
 
 
-def volume_stats(vols: list[float]) -> dict:
-    """近1分钟量能 vs 日内均量的放大倍数（均量只取有成交的分钟）。"""
+def volume_stats(vols: list[float], closes: list[float] | None = None) -> dict:
+    """近1分钟量能 vs 近60分钟均量的放大倍数（均量只取有成交的分钟）。
+
+    `confirmed` 为量价配合后的有效放量（告警/信号流用它），需传入等长的收盘价序列：
+    该分钟价格波动 ≥ SURGE_PRICE_MOVE，或前一分种同样 ≥ SURGE_RATIO 倍（连续放量）。
+    """
     if len(vols) < 10:
         return {"ok": False}
     cur = vols[-1]
@@ -84,9 +92,33 @@ def volume_stats(vols: list[float]) -> dict:
     avg = sum(base) / len(base) if base else 0
     ratio = (cur / avg) if avg else 0
     peak = max(vols)
+    is_surge = ratio >= SURGE_RATIO and cur > 0
+
+    # 前一分种相对它自己前 60 分钟的倍数（用于「连续两分钟放量」判定）
+    prev_ratio = None
+    if len(vols) >= 11:
+        prev_base = [v for v in vols[:-2][-60:] if v > 0]
+        if prev_base and sum(prev_base) > 0:
+            prev_ratio = vols[-2] / (sum(prev_base) / len(prev_base))
+
+    move_pct = None
+    if closes and len(closes) == len(vols) and closes[-2]:
+        move_pct = (closes[-1] - closes[-2]) / closes[-2]
+
+    confirmed_by = None
+    if is_surge:
+        if move_pct is not None and abs(move_pct) >= SURGE_PRICE_MOVE:
+            confirmed_by = "price"
+        elif prev_ratio is not None and prev_ratio >= SURGE_RATIO:
+            confirmed_by = "streak"
+
     return {
         "ok": True, "ratio": round(ratio, 2),
-        "is_surge": ratio >= SURGE_RATIO and cur > 0,
+        "is_surge": is_surge,
+        "confirmed": confirmed_by is not None,
+        "confirmed_by": confirmed_by,
+        "move_pct": round(move_pct, 5) if move_pct is not None else None,
+        "prev_ratio": round(prev_ratio, 2) if prev_ratio is not None else None,
         "peak_ratio": round(cur / peak, 2) if peak else 0,
         "last": cur,
     }
