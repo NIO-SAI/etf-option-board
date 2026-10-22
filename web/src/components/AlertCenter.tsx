@@ -80,6 +80,13 @@ export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void })
     }
   };
 
+  // 系统通知被点击（Service Worker 回传）时同样切到对应标的
+  useEffect(() => {
+    const onPick = (e: Event) => jump((e as CustomEvent<string>).detail);
+    window.addEventListener("etf:select", onPick);
+    return () => window.removeEventListener("etf:select", onPick);
+  }, [onSelect]);
+
   // 兜底去重：无论如何渲染层都不出现同一 id 的两行
   const rows = useMemo(() => {
     const s = new Set<any>();

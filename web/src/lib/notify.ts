@@ -82,27 +82,97 @@ export interface AlertLike {
   type?: string;
 }
 
-/** 弹一条浏览器通知；不可用或未授权时返回 false（由调用方兜底）。 */
-export function showNotification(a: AlertLike): boolean {
-  if (notifyPermission() !== "granted" || !a.title) return false;
-  try {
-    const n = new Notification(a.title, {
-      body: a.text,
-      tag: a.id != null ? `etf-alert-${a.id}` : undefined,
-      // critical（主力资金 / 变盘）需要用户确认，不自动消失
-      requireInteraction: a.level === "critical",
-      silent: false,
+/** 通知图标：站点 favicon 的 PNG 版（PWA 安装后同时用作应用图标）。 */
+const NOTIFY_ICON = "/icons/icon-192.png";
+
+let _swReg: ServiceWorkerRegistration | null = null;
+
+/**
+ * 注册 Service Worker（仅用于「安装为应用」与通知点击回跳，不做离线缓存）。
+ * SW 点击通知后会 postMessage {type:"etf:select", code}，这里转成 window 事件，
+ * 由 AlertCenter 接手切到对应标的。
+ */
+export function initNotifications(): void {
+  if (!secure() || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+  navigator.serviceWorker
+    .register("/sw.js", { scope: "/" })
+    .then((reg) => {
+      _swReg = reg;
+    })
+    .catch(() => {
+      /* 注册失败则退回 new Notification */
     });
+  navigator.serviceWorker.addEventListener("message", (e: MessageEvent) => {
+    const d = e.data as { type?: string; code?: string } | null;
+    if (d?.type === "etf:select" && d.code) {
+      window.dispatchEvent(new CustomEvent("etf:select", { detail: d.code }));
+    }
+  });
+}
+
+/**
+ * 同一条告警只弹一次。
+ * 多个标签页/多个窗口都在收同一条 SSE，若都弹就成了重复通知；
+ * 用 localStorage 做 30 秒租约，先到者弹、后来者静默（仍显示列表）。
+ */
+function claimAlert(a: AlertLike): boolean {
+  if (a.id == null) return true;
+  try {
+    const key = `etf-notify:${a.id}`;
+    const now = Date.now();
+    const prev = Number(localStorage.getItem(key) || 0);
+    if (prev && now - prev < 30_000) return false;
+    localStorage.setItem(key, String(now));
+  } catch {
+    /* 隐私模式等拿不到 storage 时不做去重 */
+  }
+  return true;
+}
+
+function notifyOptions(a: AlertLike): NotificationOptions {
+  return {
+    body: a.text,
+    icon: NOTIFY_ICON,
+    badge: NOTIFY_ICON,
+    tag: a.id != null ? `etf-alert-${a.id}` : undefined,
+    // critical（主力资金 / 变盘）需要用户确认，不自动消失
+    requireInteraction: a.level === "critical",
+    silent: false,
+    data: { etf_code: a.etf_code, id: a.id },
+  };
+}
+
+function popupFallback(a: AlertLike, opts: NotificationOptions): boolean {
+  try {
+    const n = new Notification(a.title || "", opts);
     n.onclick = () => {
       try {
         window.focus();
       } catch {
         /* ignore */
       }
+      if (a.etf_code) window.dispatchEvent(new CustomEvent("etf:select", { detail: a.etf_code }));
       n.close();
     };
     return true;
   } catch {
     return false;
   }
+}
+
+/**
+ * 弹一条浏览器通知。
+ * 返回 false 表示「未授权/不支持」——调用方走页面内提示；
+ * 返回 true 表示已交给系统（含被其它标签页抢先弹、本次静默的情况）。
+ */
+export function showNotification(a: AlertLike): boolean {
+  if (notifyPermission() !== "granted" || !a.title) return false;
+  if (!claimAlert(a)) return true;
+  const opts = notifyOptions(a);
+  if (_swReg) {
+    // 走 Service Worker：安装为应用后，通知由本应用发出（图标/名称是看板自己的）
+    _swReg.showNotification(a.title, opts).catch(() => popupFallback(a, opts));
+    return true;
+  }
+  return popupFallback(a, opts);
 }

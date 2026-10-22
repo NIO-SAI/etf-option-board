@@ -1,0 +1,16 @@
+{
+  "name": "ETF 期权日内决策看板",
+  "short_name": "ETF 看板",
+  "description": "A 股 9 只宽基 ETF 期权的日内决策看板：行情、期权链、资金流、预测与告警。",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#2563eb",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
