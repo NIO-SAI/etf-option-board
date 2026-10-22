@@ -135,8 +135,11 @@ function notifyOptions(a: AlertLike): NotificationOptions {
     icon: NOTIFY_ICON,
     badge: NOTIFY_ICON,
     tag: a.id != null ? `etf-alert-${a.id}` : undefined,
-    // critical（主力资金 / 变盘）需要用户确认，不自动消失
-    requireInteraction: a.level === "critical",
+    // 注意：macOS Chrome 会把 requireInteraction=true（常驻）的通知投到
+    // "Google Chrome Helper (Alerts)" 分组，普通通知才归在 "Google Chrome" 下。
+    // 为了所有告警都只出现在 Google Chrome 一组，这里统一不要求常驻；
+    // critical 的强提醒仍由页面内弹窗 + 声音兜底。
+    requireInteraction: false,
     silent: false,
     data: { etf_code: a.etf_code, id: a.id },
   };
