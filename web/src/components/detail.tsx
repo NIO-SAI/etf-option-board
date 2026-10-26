@@ -57,8 +57,8 @@ export function ContractDetail({
       </FramePanel>
       <FramePanel dense>
         <FrameHeader className="flex-row flex-wrap items-center justify-between gap-y-1">
-          <FrameTitle className="text-xs">分时叠加（期权 + 标的ETF + 标的ETF主力净买额）</FrameTitle>
-          <span className="text-xs text-muted-foreground">右轴 涨跌幅%(期权) · 灰线 标的ETF涨跌幅 · 柱 标的ETF主力净买额</span>
+          <FrameTitle className="text-xs">分时叠加（合约价格 + 标的ETF价格 + 标的ETF主力净买额）</FrameTitle>
+          <span className="text-xs text-muted-foreground">蓝线 合约价格 · 灰线 标的ETF价格 · 紫线 标的ETF主力净买额（右轴）</span>
         </FrameHeader>
         <div className="px-1 pb-2">
           <ErrorBoundary label="分时叠加图">

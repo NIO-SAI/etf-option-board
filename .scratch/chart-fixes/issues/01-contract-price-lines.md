@@ -47,3 +47,16 @@
 - 不改后端行情/分时取数逻辑
 - 不改主 ETF 分时图（那是另一张图）
 - 不新增 K 线切换
+
+## Comments
+
+### 2026-10-27 实现（agent）
+
+- `web/src/components/charts/index.tsx::OverlayChart` 重写为价格线：合约价（`#2563eb`，1.8px，淡蓝面积）走 yAxis 0，标的ETF价（`#9ca3af`，1.3px）走 yAxis 1，两者各自独立轴；主力净买额仍走 yAxis 2（offset 60，刻度隐藏，min/max 强制含 0）。
+- 涨跌幅不再单独成线，改在 tooltip 里用 `price/prev_close-1` 现算，格式「0.0664 +5.20%」（合约）/「4.179 +0.80%」（标的）。图例改为「合约价格 / 标的ETF价格 / 标的ETF主力净买额」，`web/src/components/detail.tsx` 的副标题同步更新。
+- 合约价轴刻度 `abs>=1 ? 3 位 : 4 位` 小数（实测格式化 `0.0123 → "0.0123"`），避免被压成 0.00。
+- 缺数据处理：价格用 `seriesFromMap` 保留 null + `connectNulls:false`，不补 0；标的无价时该 series 与图例项直接不生成，仅剩合约线/资金线，不报错。
+- 空档补充：期权分时偶尔只回 1 个点（冷门合约/盘前），`showSymbol:false` 会让整条不可见，故点数 ≤2 时露出 3px 数据点。
+- 变盘三角：`OverlayChart` 本身没有信号标记（三角在 `IntradayChart`，即主 ETF 分时图，按范围未改），因此不存在改坐标后的错位问题。
+- 验证：临时把 option 挂到 `window.__overlayOpt` 读取（已删除并重建），确认 legend 3 项、series 类型/轴索引/线宽/颜色、双价格轴、合约轴 4 位小数、flow 轴 min/max 含 0；`bash web/build.sh` 通过。
+- 数据限制：当前（盘前）`/api/option/trends?secid=10.10012455` 只返回 1 个 `2026-10-26 09:30` 点，故合约价格线只落一个点，属上游数据缺失（旧 pct 线同样只有这一点），非渲染问题。

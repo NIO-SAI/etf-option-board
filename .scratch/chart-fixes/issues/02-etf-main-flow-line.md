@@ -32,3 +32,13 @@
 - 不改主 ETF 分时图里的资金流呈现
 - 不改资金流数据口径/取数
 - 不新增资金流子图
+
+## Comments
+
+### 2026-10-27 实现（agent）
+
+- `OverlayChart` 里「标的ETF主力净买额」由 `bar`（60% 宽、35% 透明度、按正负上色）改为 `line`：1.6px、`#7c3aed`、`areaStyle rgba(124,58,237,0.08)`、`showSymbol:false`、`connectNulls:false`。
+- 0 轴虚线保留：该 series 挂 `markLine {yAxis: 0}`（灰 `#52525b` 虚线、静默、无标签），正负靠 0 轴上下位置表达，不再依赖柱色。
+- tooltip 该序列改用 `signedMoney`（万/亿自适应，带正负号），不再固定「万」。
+- 资金线先画、价格线后画，保证两条价格线在上层不被遮挡；yAxis 2 的 min/max 仍强制含 0，轴域全负时不裁线。
+- 验证：读取实际 ECharts option（临时调试钩子，已移除）确认 `type:"line"`、`lineStyle.width=1.6`、`color="#7c3aed"`、`markLine.data=[{yAxis:0}]`、无补 0 假线；`bash web/build.sh` 通过。
