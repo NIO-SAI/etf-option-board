@@ -34,3 +34,14 @@
 
 - 不做可拖拽调整栏宽
 - 不做面板内容自定义排序
+
+## Comments
+
+### 2026-10-27 — 已实现
+
+- `web/src/App.tsx`：新增 `usePersistedFlag`（localStorage key `board.left-collapsed` / `board.right-collapsed`）与 `PanelRail` 收纳条。
+- 布局宽窄由 CSS 变量驱动：`web/src/index.css` 新增 `@media (min-width: 64rem) .board-grid { grid-template-columns: var(--board-left) minmax(0,1fr) var(--board-right) }`，App 内联设置 `--board-left/--board-right`（340px↔3rem、360px↔3rem），主区 `transition-[grid-template-columns] duration-200`。
+- 宽屏：收起为 48px 竖排窄条（图标 + 竖排「标的 / 决策」），展开入口常驻；窄屏（<64rem）：收起为一条横向窄条，内容折叠，控件位置不跳。
+- 控件为原生 `<button>`，`aria-label="收起/展开左侧面板"`、`"收起/展开右侧面板"`。
+- 实测 1440/1024/390+ 宽度：`scrollWidth === innerWidth` 无横向滚动；左栏收起后中栏 692→984px，双收后 1296px；刷新后状态保持。
+- 未改动任何卡片内部内容与数据逻辑；前端已重建。

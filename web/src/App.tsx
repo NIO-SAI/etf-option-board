@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { Loader2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { IntradayChart } from "@/components/charts";
@@ -25,6 +25,8 @@ export default function App() {
   const [month, setMonth] = useState<number | null>(null);
   const [contractSecid, setContractSecid] = useState<string | null>(null);
   const [clock, setClock] = useState(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+  const [leftCollapsed, setLeftCollapsed] = usePersistedFlag("board.left-collapsed");
+  const [rightCollapsed, setRightCollapsed] = usePersistedFlag("board.right-collapsed");
 
   useEffect(() => {
     const t = setInterval(() => setClock(new Date().toLocaleTimeString("zh-CN", { hour12: false })), 1000);
@@ -89,10 +91,32 @@ export default function App() {
         clock={clock}
         onRefresh={() => { refreshCtx(); api.monitorCycle().catch(() => {}); }}
       />
-      <main className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-[340px_minmax(0,1fr)_360px]">
+      <main
+        className="board-grid grid grid-cols-1 gap-3 p-3 transition-[grid-template-columns] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]"
+        style={{ "--board-left": leftCollapsed ? "3rem" : "340px", "--board-right": rightCollapsed ? "3rem" : "360px" } as CSSProperties}
+      >
         {/* 左：标的 */}
-        <div className="lg:sticky lg:top-[52px] lg:h-[calc(100vh-3.25rem)]">
-          <EtfList etfs={etfs} quotes={quotes} trendsMap={trendsMap} directions={directions?.items ?? {}} indices={indices?.items ?? []} selected={etfCode} onSelect={setEtfCode} />
+        <div className="flex min-h-0 flex-col lg:sticky lg:top-[52px] lg:h-[calc(100vh-3.25rem)]">
+          {leftCollapsed ? (
+            <PanelRail side="left" label="标的" onExpand={() => setLeftCollapsed(false)} />
+          ) : (
+            <>
+              <div className="mb-1 flex h-6 items-center justify-end">
+                <button
+                  type="button"
+                  onClick={() => setLeftCollapsed(true)}
+                  aria-label="收起左侧面板"
+                  title="收起左侧面板"
+                  className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <PanelLeftClose className="size-3.5" />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1">
+                <EtfList etfs={etfs} quotes={quotes} trendsMap={trendsMap} directions={directions?.items ?? {}} indices={indices?.items ?? []} selected={etfCode} onSelect={setEtfCode} />
+              </div>
+            </>
+          )}
         </div>
 
         {/* 中：标的行情 + 合约详情 + T报价 */}
@@ -161,7 +185,23 @@ export default function App() {
         </div>
 
         {/* 右：决策栏 */}
-        <div className="flex flex-col gap-3">
+        <div className="flex min-h-0 flex-col">
+          {rightCollapsed ? (
+            <PanelRail side="right" label="决策" onExpand={() => setRightCollapsed(false)} />
+          ) : (
+            <div className="mb-1 flex h-6 items-center justify-start">
+              <button
+                type="button"
+                onClick={() => setRightCollapsed(true)}
+                aria-label="收起右侧面板"
+                title="收起右侧面板"
+                className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <PanelRightClose className="size-3.5" />
+              </button>
+            </div>
+          )}
+          <div className={`flex flex-col gap-3 ${rightCollapsed ? "hidden" : ""}`}>
           <AlertCenter onSelect={setEtfCode} />
 
           <Frame spacing="sm">
@@ -204,12 +244,48 @@ export default function App() {
           </Frame>
 
           <LlmPanel code={etfCode} />
+          </div>
         </div>
       </main>
       <footer className="px-4 py-3 text-center text-[10px] text-muted-foreground">
         数据来源：东方财富 · 期权定价 BS · 预测 Kronos · 决策大模型 — 仅供研究，不构成投资建议
         <span className="ml-2">· 构建 {BUNDLE_ID}</span>
       </footer>
+    </div>
+  );
+}
+
+function usePersistedFlag(key: string) {
+  const [on, setOn] = useState(() => {
+    try {
+      return localStorage.getItem(key) === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, on ? "1" : "0");
+    } catch {
+      /* 隐私模式等场景忽略：仅丢失持久化，不影响交互 */
+    }
+  }, [key, on]);
+  return [on, setOn] as const;
+}
+
+function PanelRail({ side, label, onExpand }: { side: "left" | "right"; label: string; onExpand: () => void }) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-card/40 px-2 py-1.5 lg:h-full lg:w-12 lg:flex-col lg:justify-start lg:gap-3 lg:px-0 lg:py-2">
+      <button
+        type="button"
+        onClick={onExpand}
+        aria-label={`展开${label}面板`}
+        title={`展开${label}面板`}
+        className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {side === "left" ? <PanelLeftOpen className="size-4" /> : <PanelRightOpen className="size-4" />}
+      </button>
+      <span className="text-[10px] text-muted-foreground lg:[writing-mode:vertical-rl]">{label}</span>
     </div>
   );
 }

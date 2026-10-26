@@ -34,3 +34,12 @@
 
 - 不改点击行为，只改光标反馈
 - 不重做按钮/行组件的视觉样式
+
+## Comments
+
+### 2026-10-27 — 已实现
+
+- 在 `web/src/index.css` 的 `@layer base` 统一加规则：`button:not(:disabled)`、`[role="button"]:not([aria-disabled="true"])`、`a[href]`、`summary`、`label[for]` → `cursor: pointer`；`button:disabled` / `[aria-disabled="true"]` → `cursor: default`。
+- 逐点打补丁改为全局兜底，后续新增按钮自动生效；现有 `AlertCenter` 整行已有点击态样式不受影响。
+- 实测 `getComputedStyle(button[aria-label="收起左侧面板"]).cursor === "pointer"`；纯文本区域未改动。
+- 前端已重建（`web/build.sh`）。

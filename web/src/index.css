@@ -126,6 +126,18 @@
   .tnum {
     font-variant-numeric: tabular-nums;
   }
+  /* 可点击元素统一小手；禁用态保持默认箭头，避免“看着能点却没反应” */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href],
+  summary,
+  label[for] {
+    cursor: pointer;
+  }
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: default;
+  }
 }
 
 @keyframes flash-up {
@@ -145,6 +157,13 @@
 [data-slot="frame"] {
   border-width: 0;
   background-color: transparent;
+}
+
+/* 主看板三栏：左右栏宽由 --board-left / --board-right 驱动，支持收起动画 */
+@media (min-width: 64rem) {
+  .board-grid {
+    grid-template-columns: var(--board-left, 340px) minmax(0, 1fr) var(--board-right, 360px);
+  }
 }
 
 /* 细滚动条（unlayered，优先级高于 Tailwind utilities） */
