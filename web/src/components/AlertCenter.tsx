@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 import { useAlertStream } from "@/lib/usePolling";
 import { notifyPermission, requestNotifyPermission, showNotification, autoPromptPermissionOnce, reportNotifyState } from "@/lib/notify";
 import { sound } from "@/lib/sound";
-import { clsUpDown } from "@/lib/format";
+import { clsUpDown, signedMoney } from "@/lib/format";
 import { AlertTriangle, BellRing, Volume2 } from "lucide-react";
 
 const TYPE_LABEL: Record<string, string> = {
@@ -131,13 +131,26 @@ export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void })
               >
                 <span className="mt-0.5">{a.level === "critical" ? <AlertTriangle className="size-3 text-destructive" /> : null}</span>
                 {/* 整行悬浮：代码 + 完整标题 + 完整正文（列表里标题 truncate、正文 line-clamp-2 会截断） */}
-                <HoverTip label={`${a.etf_code ? a.etf_code + " " : ""}${a.title}\n${a.text}`} className="min-w-[240px]">
+                <HoverTip label={`${a.etf_code ? a.etf_code + " " : ""}${a.title}\n${a.text}${
+                  (a.etfs ?? []).map((e: any) => `\n${e.name} ${signedMoney(e.main_inflow)}${e.surge ? " · " + e.surge + "x放量" : ""}`).join("")
+                }`} className="min-w-[240px]">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className={`truncate text-xs font-medium ${clsUpDown(a.dir === "bull" ? 1 : a.dir === "bear" ? -1 : 0)}`}>{a.title}</span>
                       <Badge variant="outline" className="shrink-0">{TYPE_LABEL[a.type] ?? a.type}</Badge>
                     </div>
                     <div className="line-clamp-2 text-[10px] leading-snug text-muted-foreground">{a.text}</div>
+                    {a.etfs?.length ? (
+                      <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] leading-snug text-muted-foreground tnum">
+                        {a.etfs.map((e: any) => (
+                          <span key={e.code} className="whitespace-nowrap">
+                            <span className="text-foreground">{e.name}</span>
+                            <span className={`ml-1 ${clsUpDown(e.main_inflow ?? 0)}`}>{signedMoney(e.main_inflow)}</span>
+                            {e.surge ? <span className="ml-1">· {e.surge}x</span> : null}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 </HoverTip>
                 <span className="text-[10px] text-muted-foreground tnum">{a.ts?.slice(11)}</span>
@@ -153,6 +166,18 @@ export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void })
           <div className="flex flex-col gap-2">
             <div className="text-base font-semibold">{popup.title}</div>
             <div className="text-sm text-muted-foreground">{popup.text}</div>
+            {popup.etfs?.length ? (
+              <div className="flex flex-col gap-0.5 rounded-lg bg-muted/50 px-2 py-1.5 text-xs tnum">
+                {popup.etfs.map((e: any) => (
+                  <div key={e.code} className="flex items-center justify-between gap-3">
+                    <span>{e.name}<span className="ml-1 text-muted-foreground">{e.code}</span></span>
+                    <span className={clsUpDown(e.main_inflow ?? 0)}>
+                      {signedMoney(e.main_inflow)}{e.surge ? ` · ${e.surge}x` : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <div className="flex items-center gap-2 text-xs">
               <Badge variant={popup.dir === "bull" ? "destructive-light" : popup.dir === "bear" ? "success-light" : "outline"}>
                 {popup.dir === "bull" ? "看多" : popup.dir === "bear" ? "看空" : "观望"}

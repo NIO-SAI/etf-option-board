@@ -74,3 +74,14 @@
   1. 告警拼装：消费 `etfs[]`，按市场级去重（`(MARKET, national_team)` 或单轮只发一次），正文写代码+名称+金额+放量。
   2. 前端告警卡片/弹窗：用结构化 `etfs[]` 渲染明细，不再解析字符串。
 - 建议主指标用 `main_5m`（与“护盘”的短时脉冲语义一致），`main_total` 作为次要信息；两者单位不同，展示时必须带单位，避免“3.2”被误读成 3.2 万/3.2 亿。
+
+## Comments
+
+### 2026-10-27 实现（agent）
+
+- 根因确认：国家队告警原本写在 `_check_etf()`（每标的调用）里，`national_team_signal()` 是市场级评分，9 只 ETF 各推一条同文告警；冷却键 `(etf_code, "national_team")` 也是按标的，拦不住。
+- 后端：从 `_check_etf()` 移除该块（`nt_score` 参数一并删掉），新增 `services/monitor.py::_national_team_alert(nt)`，在 `cycle()` 里每轮调用一次；冷却键改为 `"MARKET"` + 600s。标题带共振数量（`3/9 只净流入`），正文列出前 3 名（名称/代码/5 分钟净流入/放量倍数），合计值由 `etfs[]` 求和（不再依赖 `main_5m_sum`）。
+- 结构化字段：告警新增 `etfs: [{code, name, main_inflow(元), main_total(亿), pct, surge(倍数|null), vol_ratio}]`，市场级告警不带 `etf_code`，前端整行不可点，避免误跳到不存在的标的。
+- 前端 `web/src/components/AlertCenter.tsx`：告警行在正文下渲染逐 ETF 明细（红绿着色 + `signedMoney`），HoverTip 同步补明细，弹窗内也渲染明细块。
+- `/api/admin/test-alert` 的第 3 条改为带 `etfs[]` 的市场级样例，便于 UI 回归。
+- 验证：用构造的 `nt` 直接跑 `_national_team_alert`，首条正确生成、600s 内第二次被拦截；浏览器取到该告警并正确渲染两条明细（`沪深300ETF华泰柏瑞 +3.20亿 · 2.1x`），整行 `disabled`。`bash web/build.sh` 通过。

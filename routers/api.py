@@ -219,9 +219,15 @@ async def admin_test_alert():
          "title": "【测试】15分钟MACD 顶背离 · 588000",
          "text": "第二条测试告警：15 分钟 K 线动能与价格背离（方向看空示例）。"},
         {"type": "national_team", "level": "critical", "dir": "bull",
-         "etf_code": "510300", "etf_name": "宽基ETF",
-         "title": "【测试】国家队护盘信号增强",
-         "text": "第三条测试告警（critical）：需要手动关闭的常驻通知。"},
+         "etf_name": "宽基ETF",
+         "title": "【测试】国家队护盘信号增强（2/2 只净流入）",
+         "text": "第三条测试告警（critical）：宽基ETF近5分钟主力合计净流入 4.40亿，护盘评分 72。",
+         "etfs": [
+             {"code": "510300", "name": "沪深300ETF华泰柏瑞", "main_inflow": 320000000,
+              "main_total": 4.1, "pct": 0.82, "surge": 2.1, "vol_ratio": 2.1},
+             {"code": "510050", "name": "上证50ETF华夏", "main_inflow": 120000000,
+              "main_total": 1.2, "pct": 0.41, "surge": None, "vol_ratio": 1.4},
+         ]},
     ]
     for s in samples:
         await alerts.publish({**s, "test": True, "ts": now})

@@ -25,7 +25,7 @@ def status() -> dict:
     return dict(_state)
 
 
-async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
+async def _check_etf(etf: dict, key_hm: str | None) -> None:
     ctx = await ms.etf_context(etf["code"], etf["secid"])
     q = ctx.get("quote") or {}
     if not q:
@@ -83,15 +83,6 @@ async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
                 "text": f"{name} 处于关键时点窗口，关注方向选择与量能。",
             })
 
-    # 国家队（冷却 600s）
-    if nt_score >= 60 and alerts.should_alert(etf["code"], "national_team", 600):
-        await alerts.publish({
-            "etf_code": etf["code"], "etf_name": name, "type": "national_team",
-            "level": "critical", "dir": "bull",
-            "title": "国家队护盘信号增强",
-            "text": f"宽基ETF护盘评分 {nt_score}，短期关注反弹。",
-        })
-
     # 变盘点（5m/15m 高周期，阈值 65，需 15m 结构转向；同向 45 分钟冷却 / 反向 30 分钟抑制）
     try:
         sig = await reversal.check(etf, ctx)
@@ -100,6 +91,50 @@ async def _check_etf(etf: dict, key_hm: str | None, nt_score: float) -> None:
         sig = None
     if sig:
         await alerts.publish(sig)
+
+
+async def _national_team_alert(nt: dict) -> None:
+    """国家队护盘：市场级单条告警（每 600s 最多一次），正文带逐 ETF 资金明细。
+
+    原实现挂在 _check_etf 里按标的循环发出，9 只 ETF 会推 9 条内容完全相同的
+    「国家队护盘信号增强」，既刷屏又看不出是哪些宽基在流入；改为市场级一条，
+    明细放 etfs[]。
+    """
+    score = nt.get("score") or 0
+    if score < 60 or not alerts.should_alert("MARKET", "national_team", 600):
+        return
+    entries = list(nt.get("etfs") or [])
+    pos = [e for e in entries if (e.get("main_5m") or 0) > 0]
+    picked = (pos or entries)[:3]
+
+    def _amt(wan: float) -> str:
+        return f"{wan / 1e4:.2f}亿" if abs(wan) >= 1e4 else f"{wan:.0f}万"
+
+    parts = []
+    for e in picked:
+        seg = f"{e.get('name')}（{e.get('code')}）{'+' if (e.get('main_5m') or 0) >= 0 else ''}{_amt(e.get('main_5m') or 0)}"
+        if e.get("surge") and e.get("vol_ratio"):
+            seg += f"·{e['vol_ratio']}x放量"
+        parts.append(seg)
+    total = sum((e.get("main_5m") or 0) for e in entries)
+    n = len(entries)
+    title = (f"国家队护盘信号增强（{len(pos)}/{n} 只净流入）" if pos
+             else f"国家队护盘信号增强（{n} 只宽基共振）")
+    text = (f"宽基ETF近5分钟主力合计净流入 {_amt(total)}，护盘评分 {score}。"
+            + "；".join(parts) + "。关注指数能否在支撑位企稳。")
+    await alerts.publish({
+        "etf_name": "宽基ETF", "type": "national_team",
+        "level": "critical", "dir": "bull",
+        "title": title, "text": text, "score": score,
+        "etfs": [{
+            "code": e.get("code"), "name": e.get("name"),
+            "main_inflow": round((e.get("main_5m") or 0) * 1e4),   # 元
+            "main_total": e.get("main_total"),                     # 亿元
+            "pct": e.get("pct"),
+            "surge": e.get("vol_ratio") if e.get("surge") else None,
+            "vol_ratio": e.get("vol_ratio"),
+        } for e in picked],
+    })
 
 
 def _in_trading_window(now: dt.datetime) -> bool:
@@ -119,12 +154,13 @@ async def cycle() -> None:
         return
     hm = now.strftime("%H:%M")
     key_hm = strategy.near_key_time(hm, window=2)
+    nt: dict = {}
     try:
         nt = await strategy.national_team_cached()
-        nt_score = nt.get("score", 0)
     except Exception:  # noqa: BLE001
-        nt_score = 0
-    await asyncio.gather(*[_check_etf(e, key_hm, nt_score) for e in ETFS], return_exceptions=True)
+        nt = {}
+    await _national_team_alert(nt)
+    await asyncio.gather(*[_check_etf(e, key_hm) for e in ETFS], return_exceptions=True)
     _state["last_cycle"] = now.isoformat(timespec="seconds")
     _state["cycles"] += 1
 
