@@ -5,6 +5,7 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
 import { clsUpDown, gamma, nf, pct } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { useState } from "react";
 import { ArrowDownRight, ArrowUpRight, Flame, Minus, Star } from "lucide-react";
 
 /* ---------------- 方向标签 ---------------- */
@@ -429,9 +430,47 @@ export function CandidateList({
   selected?: string;
   onSelect: (c: any) => void;
 }) {
+  const [side, setSide] = useState<"all" | "call" | "put">("all");
+  const all = candidates ?? [];
+  const callN = all.filter((c) => c.type === "call").length;
+  const putN = all.filter((c) => c.type === "put").length;
+  const shown = side === "all" ? all : all.filter((c) => c.type === side);
+  const opts: { key: "all" | "call" | "put"; label: string; tone?: string; n: number }[] = [
+    { key: "all", label: "全部", n: all.length },
+    { key: "call", label: "认购", tone: "text-up", n: callN },
+    { key: "put", label: "认沽", tone: "text-down", n: putN },
+  ];
   return (
     <div className="flex flex-col gap-1" role="list">
-      {candidates?.map((c, i) => (
+      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+        <div className="inline-flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
+          {opts.map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              onClick={() => setSide(o.key)}
+              aria-pressed={side === o.key}
+              className={cn(
+                "rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                side === o.key ? "bg-background shadow-xs" : "text-muted-foreground hover:text-foreground",
+                side === o.key && o.tone,
+              )}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <span className="text-[10px] text-muted-foreground tnum">
+          全部 {all.length} · 认购 {callN} · 认沽 {putN}
+        </span>
+      </div>
+      {shown.length === 0 ? (
+        <EmptyState
+          title={side === "all" ? "暂无优选合约" : `当前无${side === "call" ? "认购" : "认沽"}合约`}
+          hint={side === "all" ? "期权链未返回可用报价或 Delta" : "切换到其他档位查看"}
+        />
+      ) : null}
+      {shown.map((c, i) => (
         <button
           key={c.code}
           type="button"

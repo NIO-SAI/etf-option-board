@@ -38,3 +38,15 @@
 
 - 不按行权价/到期日/虚值实值筛选
 - 不记住用户上次筛选
+
+## Comments
+
+### 2026-10-27 实现（agent）
+
+- `web/src/components/panels.tsx::CandidateList` 增加本地 `side` 状态（`all|call|put`，默认 `all`），三段按钮带 `aria-pressed`，计数文案「全部 N · 认购 N · 认沽 N」直接由 `candidates` 计算，不新增请求。
+- 空档位复用 `EmptyState`：「当前无认购/认沽合约」+「切换到其他档位查看」；`all` 为空时沿用原「暂无优选合约」。
+- 选中态与筛选解耦：只改 `shown` 数组，`selected`/`onSelect` 未动，主图不会因筛选被清空。
+- 键盘可操作：原生 `<button>`，沿用全局 `focus-visible:ring`，符合 ux-polish/01 的 pointer 光标规则。
+- 已 `bash web/build.sh` 通过（`index-DL7LqhyM.js`）。
+- 运行时核对受限：当日后端冷启动 `/api/option/chain` 与 `/api/strategy` 在关闭行情时段的失败重试下 >9 分钟未返回（8 页 × 2 传输 × 2 轮），浏览器 6 连接被占满，无法在页面上取到候选列表做点击核对；该冷启动问题即 perf-switch/01 要解决的目标。筛选逻辑本身为纯前端过滤，等首次数据落地后再复验。
+- 已知数据事实：`services/option_service.py::rank_candidates` 会按 `direction` 单边过滤 pool，所以实际列表常是 6/0（全认购或全认沽），与工单示例的 12/12 不同；计数与空态按真实数据展示，不做补齐。
