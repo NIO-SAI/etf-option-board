@@ -72,3 +72,22 @@
 - 不做离线交易/离线告警；告警仍走 SSE 实时流。
 - 不缓存告警列表、指数、外围、标的列表等全局数据。
 - 不做 Service Worker / PWA 离线。
+
+## Comments
+
+**2026-10-27 实现（perf-switch/01）**
+
+- 新增 `web/src/lib/cache.ts`：原生 IndexedDB（库 `etf-board` / 表 `entries`）+ 内存 LRU（40 条）；键 `类型|代码|月份`，值记 `day`；非 `ctx` 类型跨日读到时删除并返回 `null`，`ctx` 照常返回并带上 `day` 供 UI 标「昨日」；容量按 20MB 上限 + 最后访问时间淘汰（首次写入前 `getAll` 建索引）；`data.error` 的响应不写；任何 IDB 异常静默退化内存；`localStorage.board.cache-debug=1` 时只打印一条 put/hit 摘要，默认无输出。
+- `web/src/lib/usePolling.ts`：新增第 4 个参数 `{kind, code, extra}`，**仅首次（含切标的/手动 refresh）**读缓存 → 先 `setData`，随后照旧发请求；成功即覆盖并写缓存、清空 `cacheAt`；返回 `cacheAt:{ts, day}`。之后每轮轮询不再读缓存，避免角标闪动。
+- `web/src/lib/prefetch.ts`：`usePrefetch(current, codes, ready)`；仅北京时间周一至周五 09:15–15:05、页面可见、当前标的四类就绪后 5s 启动；按左栏顺序串行，跳过当前标的与 60s 内已预取者，每只间隔 2.5s，每只依次写 `ctx/chain/plan/sig`；切标的/隐藏/卸载即停（同一时刻只有一个预取请求在途）。
+- `web/src/App.tsx`：四类轮询接入缓存；标题栏加 `CacheTag`（中栏标 `ctx`、T 型报价标 `chain`、日内方向与信号标 `plan`+`sig` 取更旧者、优选合约标 `plan`）；超轮询间隔显示「缓存 HH:MM:SS」，跨日显示「昨日」；新增「缓存合约不在最新链里 → 回退默认优选合约」的兜底 effect。
+- `web/src/components/panels.tsx`：`OptionTQuote` 增加可选 `cacheTag`，渲染在「期权链」标题右侧。
+
+**验证（01:0x 盘前，Chrome 实测）**
+
+- 首次进入后 IDB 落地 4 条（chain 0.17MB / ctx 0.28MB / plan 0.02MB / sig 0MB），刷新后首帧：`plan` 61ms、ETF 名称与 T 型报价 116ms 即出现，同时显示「缓存 01:04:27」，请求返回后角标消失 → 首帧无骨架、SWR 生效。
+- 把 4 条记录 `day` 改为 2026-10-26 后刷新：`ctx` 读取成功（`day=2026-10-26`，UI 走「昨日」分支），`chain` 读取返回 `null` 且该键从 IDB 删除 → 跨日策略符合约定。
+- `cacheWrite('ctx', code, null, {error:'boom'})` 后读为 `null` → 错误响应不入缓存。
+- 预取窗口外（当前 01:0x）不产生任何非当前标的请求（network 面板仅 510300 的 4 类轮询）。
+- 临时 `window.__cache` 调试出口验证后已删除，恢复构建 `fmF8okSr`（随后仅加受控 debug 日志）。
+- 未验证：真实交易时段预取推进、隐私模式禁用 IDB（代码路径为静默回退，需人工在隐私窗口复测）。

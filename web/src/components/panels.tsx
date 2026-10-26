@@ -5,7 +5,7 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
 import { clsUpDown, gamma, nf, pct } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ArrowDownRight, ArrowUpRight, Flame, Minus, Star } from "lucide-react";
 
 /* ---------------- 方向标签 ---------------- */
@@ -505,13 +505,14 @@ export function CandidateList({
 
 /* ---------------- T 型报价 ---------------- */
 export function OptionTQuote({
-  chain, month, onMonth, selectedSecid, onSelect,
+  chain, month, onMonth, selectedSecid, onSelect, cacheTag,
 }: {
   chain: any;
   month: number | null;
   onMonth: (m: number) => void;
   selectedSecid?: string;
   onSelect: (c: any) => void;
+  cacheTag?: ReactNode;
 }) {
   const tq = chain?.t_quote;
   const expiries = chain?.expiries ?? [];
@@ -543,6 +544,7 @@ export function OptionTQuote({
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-1 pb-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-xs font-semibold">{chain.etf?.name} 期权链</span>
+          {cacheTag}
           <span className="shrink-0 text-xs text-muted-foreground tnum">标的 {nf(s, 3)}（{pct(chain.underlying?.pct)}）</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">

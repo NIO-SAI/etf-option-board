@@ -10,8 +10,10 @@ import { AlertCenter } from "@/components/AlertCenter";
 import { EmptyState, Skeleton } from "@/components/ui/misc";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { api } from "@/lib/api";
-import { usePolling } from "@/lib/usePolling";
-import { clsUpDown, nf, pct, signedWan } from "@/lib/format";
+import { usePolling, type CacheMeta } from "@/lib/usePolling";
+import { dayKey } from "@/lib/cache";
+import { usePrefetch } from "@/lib/prefetch";
+import { clsUpDown, hhmmss, nf, pct, signedWan } from "@/lib/format";
 
 // 当前加载的前端 bundle 哈希（用于判断浏览器是否加载了最新构建）
 const BUNDLE_ID = (() => {
@@ -43,10 +45,16 @@ export default function App() {
   const { data: directions } = usePolling(() => api.directions(), 60_000);
   const { data: spark } = usePolling(() => api.etfs_spark(), 120_000, []);
 
-  const { data: ctx, refresh: refreshCtx } = usePolling(() => api.etf(etfCode, 1), 10_000, [etfCode]);
-  const { data: chain } = usePolling(() => api.chain(etfCode, month ?? undefined), 15_000, [etfCode, month]);
-  const { data: strategy } = usePolling(() => api.strategy(etfCode, 0, 1), 30_000, [etfCode]);
-  const { data: revSignals } = usePolling(() => api.reversalSignals(etfCode), 30_000, [etfCode]);
+  // 四类数据都走「先渲染本地缓存 → 同时发真实请求」的 SWR，切标的时首帧即有内容。
+  const { data: ctx, refresh: refreshCtx, cacheAt: ctxCache } = usePolling(
+    () => api.etf(etfCode, 1), 10_000, [etfCode], { kind: "ctx", code: etfCode });
+  const { data: chain, cacheAt: chainCache } = usePolling(
+    () => api.chain(etfCode, month ?? undefined), 15_000, [etfCode, month],
+    { kind: "chain", code: etfCode, extra: month ?? null });
+  const { data: strategy, cacheAt: planCache } = usePolling(
+    () => api.strategy(etfCode, 0, 1), 30_000, [etfCode], { kind: "plan", code: etfCode });
+  const { data: revSignals, cacheAt: sigCache } = usePolling(
+    () => api.reversalSignals(etfCode), 30_000, [etfCode], { kind: "sig", code: etfCode });
 
   // 合约：优先链内按 secid 定位，保持实时刷新
   const contract = useMemo(() => {
@@ -55,6 +63,17 @@ export default function App() {
   }, [chain, contractSecid]);
 
   useEffect(() => { setMonth(null); setContractSecid(null); }, [etfCode]);
+
+  // 缓存里的合约可能已不在最新链里（换了月份/已到期）：链就绪后回退到默认优选合约
+  const chainCode = chain?.etf?.code;
+  useEffect(() => {
+    if (!chainCode || chainCode !== etfCode || !contractSecid) return;
+    const exists = (chain?.contracts ?? []).some((c: any) => c.secid === contractSecid);
+    if (exists) return;
+    const secid = chain?.best?.recommended?.secid
+      ?? chain?.ranked?.call?.[0]?.secid ?? chain?.ranked?.put?.[0]?.secid ?? null;
+    setContractSecid(secid);
+  }, [chainCode, etfCode, chain, contractSecid]);
 
   // 未选合约时，自动选中该标的的优选（近月）合约，避免详情区空白
   useEffect(() => {
@@ -79,6 +98,9 @@ export default function App() {
   const chainReady = !!chain && chain.etf?.code === etfCode;
   // 主力资金序列 <2 点时不成序列，避免渲染成一根孤立柱子
   const flowSeries = (ctx?.flow?.length ?? 0) >= 2 ? ctx!.flow : [];
+
+  // 预取：交易时段 + 可见 + 当前标的四类已就绪后，按左栏顺序串行预热其它标的
+  usePrefetch(etfCode, etfs.map((e: any) => e.code), !!(ctxReady && chainReady && strategy && revSignals));
 
   const onPickContract = (c: any) => setContractSecid(c.secid);
 
@@ -138,6 +160,7 @@ export default function App() {
                     </span>
                   )}
                 </div>
+                <CacheTag meta={ctxCache} interval={10_000} />
               </FrameHeader>
               {ctxReady && (
                 <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-[11px] text-muted-foreground">
@@ -171,6 +194,7 @@ export default function App() {
               {chainReady && !chain.error ? (
                 <OptionTQuote
                   chain={chain}
+                  cacheTag={<CacheTag meta={chainCache} interval={15_000} />}
                   month={month ?? chain.front_month}
                   onMonth={setMonth}
                   selectedSecid={contractSecid ?? undefined}
@@ -206,7 +230,10 @@ export default function App() {
 
           <Frame spacing="sm">
             <FramePanel dense>
-              <FrameHeader><FrameTitle className="text-xs">日内方向与信号</FrameTitle></FrameHeader>
+              <FrameHeader className="flex-row items-center justify-between">
+                <FrameTitle className="text-xs">日内方向与信号</FrameTitle>
+                <CacheTag meta={mergeCache(planCache, sigCache)} interval={30_000} />
+              </FrameHeader>
               <div className="flex flex-col gap-2 px-3 pb-3">
                 {strategy ? <BiasBar bias={strategy.bias} /> : <BiasBarSkeleton />}
                 <SignalFeed signals={strategy?.signals ?? []} loading={!strategy} />
@@ -228,7 +255,10 @@ export default function App() {
 
           <Frame spacing="sm">
             <FramePanel dense>
-              <FrameHeader><FrameTitle className="text-xs">优选合约（按日内性价比）</FrameTitle></FrameHeader>
+              <FrameHeader className="flex-row items-center justify-between">
+                <FrameTitle className="text-xs">优选合约（按日内性价比）</FrameTitle>
+                <CacheTag meta={planCache} interval={30_000} />
+              </FrameHeader>
               <div className="px-3 pb-3">
                 {!strategy ? (
                   <CandidateSkeleton />
@@ -287,6 +317,32 @@ function PanelRail({ side, label, onExpand }: { side: "left" | "right"; label: s
       </button>
       <span className="text-[10px] text-muted-foreground lg:[writing-mode:vertical-rl]">{label}</span>
     </div>
+  );
+}
+
+/** 合并两个缓存元信息：取更旧的一条，任一为昨日则按昨日展示。 */
+function mergeCache(a: CacheMeta | null, b: CacheMeta | null): CacheMeta | null {
+  if (!a) return b;
+  if (!b) return a;
+  if (a.day !== b.day) return a.day < b.day ? a : b;
+  return a.ts <= b.ts ? a : b;
+}
+
+/** 缓存角标：跨日显示「昨日」；否则仅当数据比轮询间隔更旧时显示「缓存 HH:MM:SS」。 */
+function CacheTag({ meta, interval }: { meta: CacheMeta | null; interval: number }) {
+  if (!meta) return null;
+  if (meta.day !== dayKey()) {
+    return (
+      <Badge variant="warning-light" title="展示的是上一交易日缓存的数据，正在获取最新数据">
+        昨日
+      </Badge>
+    );
+  }
+  if (Date.now() - meta.ts <= interval) return null;
+  return (
+    <span className="shrink-0 text-[10px] text-muted-foreground tnum" title="本地缓存数据，正在获取最新数据">
+      缓存 {hhmmss(new Date(meta.ts))}
+    </span>
   );
 }
 
