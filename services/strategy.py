@@ -7,7 +7,7 @@ import datetime as dt
 import logging
 import time
 
-from services import kronos, market_service as ms, option_service as osvc
+from services import index_levels, kronos, market_service as ms, option_service as osvc
 from services.indicators import atr, macd_state, pct_change, support_resistance, volume_stats
 from services.universe import ETF_BY_CODE, ETFS, TRACK_INDEX
 
@@ -36,7 +36,8 @@ async def directions() -> dict:
     now = time.time()
     if _DIR_CACHE and now - _DIR_CACHE[0] < _DIR_TTL:
         return _DIR_CACHE[1]
-    national, ext = await asyncio.gather(national_team_cached(), ms.external_snapshot())
+    national, ext, idx_lv = await asyncio.gather(
+        national_team_cached(), ms.external_snapshot(), index_levels.snapshot())
 
     async def one(etf: dict) -> tuple[str, dict]:
         try:
@@ -44,7 +45,7 @@ async def directions() -> dict:
                 ms.etf_context(etf["code"], etf["secid"]),
                 ms.track_index_state(etf["track"]),
             )
-            b = bias_score(ctx, track, national, ext, None)
+            b = bias_score(ctx, track, national, ext, None, idx_lv)
             return etf["code"], {"direction": b["direction"], "score": b["score"],
                                  "confidence": b["confidence"]}
         except Exception as exc:  # noqa: BLE001
@@ -72,7 +73,7 @@ def near_key_time(now_hm: str, window: int = 6) -> str | None:
 
 
 def detect_signals(etf_ctx: dict, track: dict, national: dict, ext: list[dict],
-                   kronos_sum: dict | None) -> list[dict]:
+                   kronos_sum: dict | None, idx_levels: dict | None = None) -> list[dict]:
     """产出带类型/方向/强度的信号列表。"""
     sig: list[dict] = []
     q = etf_ctx.get("quote") or {}
@@ -133,6 +134,14 @@ def detect_signals(etf_ctx: dict, track: dict, national: dict, ext: list[dict],
         sig.append({"type": "index_support", "level": "info", "dir": "bull",
                     "text": f"关联指数 {track.get('quote',{}).get('name','')} 逼近支撑（距MA20 {sup.get('dist_ma20_pct')}%）"})
 
+    # 上证关键位（≥8 分或突破/跌破才点名具体位；状态型信号，不做时间去重）
+    idx_text = index_levels.factor_text(idx_levels or {})
+    if idx_text:
+        lv = idx_levels or {}
+        direction = "bear" if lv.get("breakdown") or (lv.get("total") or 0) < 0 else "bull"
+        sig.append({"type": "index_levels", "level": "warn", "dir": direction,
+                    "text": idx_text})
+
     # 外围
     for e in ext:
         if e.get("pct") is not None and abs(e["pct"]) >= 1.5:
@@ -148,7 +157,7 @@ def detect_signals(etf_ctx: dict, track: dict, national: dict, ext: list[dict],
     return sig
 
 
-def bias_score(etf_ctx, track, national, ext, kronos_sum) -> dict:
+def bias_score(etf_ctx, track, national, ext, kronos_sum, idx_levels=None) -> dict:
     """多因子方向评分 [-100,100]，>0 看多。
 
     含「变盘点」加分（reversal.factor，±15，60 分钟衰减）：5m/15m 高周期转折点作为
@@ -192,6 +201,11 @@ def bias_score(etf_ctx, track, national, ext, kronos_sum) -> dict:
     if kronos_sum and kronos_sum.get("ok") and kronos_sum.get("pred_pct") is not None:
         v = max(-20, min(20, kronos_sum["pred_pct"] * 20))
         score += v; detail["Kronos预测"] = round(v, 1)
+    # 指数关键位（上证 20 日高低/整百关口/均线排列，内部求和后 clamp ±15）
+    lv_total = (idx_levels or {}).get("total") or 0
+    if lv_total:
+        score += lv_total
+        detail["指数关键位"] = round(lv_total, 1)
     # 外围（权重 10）
     ext_score = 0.0
     for e in ext:
@@ -282,11 +296,12 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
     etf = ETF_BY_CODE.get(etf_code)
     if not etf:
         return {"error": f"未知标的 {etf_code}"}
-    chain, etf_ctx, national, ext = await asyncio.gather(
+    chain, etf_ctx, national, ext, idx_lv = await asyncio.gather(
         osvc.chain(etf_code),
         ms.etf_context(etf_code, etf["secid"]),
         national_team_cached(),
         ms.external_snapshot(),
+        index_levels.snapshot(),
     )
     track = await ms.track_index_state(etf["track"])
 
@@ -299,8 +314,8 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
                                         pred_len=20, frequency=freq)
             kronos_sum = kronos.summarize(pred, bars[-1]["close"])
 
-    signals = detect_signals(etf_ctx, track, national, ext, kronos_sum)
-    bias = bias_score(etf_ctx, track, national, ext, kronos_sum)
+    signals = detect_signals(etf_ctx, track, national, ext, kronos_sum, idx_lv)
+    bias = bias_score(etf_ctx, track, national, ext, kronos_sum, idx_lv)
     plan_dir = bias["direction"] if bias["direction"] != "neutral" else (
         "call" if bias["score"] >= 0 else "put")
     levels = plan_levels(etf_ctx, plan_dir)
@@ -321,6 +336,7 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
         "candidates": [{k: v for k, v in c.items() if not k.startswith("_")} for c in candidates],
         "kronos": kronos_sum,
         "track": {"quote": track.get("quote"), "support": track.get("support"), "macd": track.get("macd")},
+        "index_levels": idx_lv,
         "national_team": national,
         "external": ext,
         "volume": etf_ctx.get("volume"),

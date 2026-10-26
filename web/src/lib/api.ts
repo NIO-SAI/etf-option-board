@@ -10,6 +10,7 @@ export const api = {
   health: () => get("/health"),
   universe: () => get("/universe"),
   indices: () => get("/indices"),
+  indexLevels: () => get("/index/levels"),
   external: () => get("/external"),
   national: () => get("/national"),
   etfs: () => get("/etfs"),

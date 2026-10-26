@@ -10,7 +10,7 @@ import os
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
-from services import (alerts, deploy as deploy_svc, em, kronos, llm,
+from services import (alerts, deploy as deploy_svc, em, index_levels, kronos, llm,
                       market_service as ms, monitor, option_service as osvc,
                       reversal, strategy)
 from services.universe import ETFS, EXTERNAL, INDICES, NATIONAL_TEAM_ETFS
@@ -39,6 +39,17 @@ async def universe():
 @router.get("/indices")
 async def indices():
     return {"items": await ms.indices_snapshot()}
+
+
+@router.get("/index/levels")
+async def index_levels_view():
+    """上证指数关键位（9 只 ETF 共用一份）+ 分时，供指数弹窗。"""
+    snap, tr = await asyncio.gather(
+        index_levels.snapshot(), ms.trends("1.000001"))
+    day = (tr[-1].get("time") or "")[:10] if tr else None
+    return {**snap, "trends": tr, "trends_day": day,
+            "trends_prev_close": (em.trend_prev_close("1.000001")
+                                  if day and day != dt.date.today().isoformat() else None)}
 
 
 @router.get("/etfs")

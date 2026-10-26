@@ -79,3 +79,32 @@
 - 不按沪深300/创业板等关联指数分别计算。
 - 不在 ETF 主图上叠加指数点位或关键位线。
 - 不改期权定价/隐波，不改 15 分方向阈值。
+
+## Comments
+
+**2026-10-27 实现（agent）**
+
+- `services/index_levels.py`（新）：`SECID="1.000001"`，30s 缓存；`evaluate(prev, last, mins)` 为纯计算（日线 20 日窗口排除今日、20 日高低、整百关口、MA5/MA11、1m 3 根突破/跌破），`snapshot()` 只负责取数（`em.kline(klt=101,lmt=45)` + `ms.quote` + 当日 1m 收盘序列）；返回 `levels[]`（`key/name/value/side/dist_pct/contrib`）+ `total`（clamp ±15）+ `breakout/breakdown/note`。
+- `services/strategy.py`：`directions()` / `analyze()` 与既有行情并发取一次 `index_levels.snapshot()`（9 只 ETF 共用同一份，30s 缓存内不重复计算）；`bias_score()` 只在 `total≠0` 时写 `detail["指数关键位"]`；`detect_signals()` 在 `factor_text()` 有输出时追加 `type=index_levels` 状态信号（≥8 分或突破/跌破才点名）；响应体新增 `index_levels`。
+- `routers/api.py`：新增 `GET /api/index/levels`（snapshot + 指数分时 `trends`/`trends_day`/`trends_prev_close`）。
+- `web/src/components/IndexLevelsDialog.tsx`（新）：点左栏「上证指数」行打开；打开即拉 + 每 10s 刷新、关闭即清定时器；6 条 `markLine` 可逐条开关（`aria-pressed`）+ 均价线；因子表（点位/距离/贡献 + 合计）；关闭按钮/Esc/遮罩均可关。
+- `web/src/components/panels.tsx`：仅 `000001` 行改为 `button[aria-haspopup=dialog]`（副标题加「关键位」），其余三个指数行仍是静态行；弹窗挂在左栏 `FramePanel` 内。
+
+**口径裁定（工单未写死的细节）**
+
+- 距离：支撑 `last/level-1`、压力 `level/last-1`，保留 2 位小数（弹窗显示带符号）。
+- 整百：`lower=floor(last/100)*100`、`upper=lower+100`；下方整百 `≤0.5%` 记 +4、上方整百 `≤0.5%` 记 −4。
+- MA5/MA11 的最后一点用现价（盘中口径）；历史不足 10 根不出 MA11；`MA5>MA11` 且价在 MA5 上方 +5，反向 −5，其余 0。
+- 突破/跌破：剔除当前正在形成的当分钟 K 后取最近 3 根 1m 收盘，全部 `≥high20*1.002` / `≤low20*0.998`；与同侧距离分互斥（本函数内只计突破项）。
+- 历史不足 5 日日线：`levels=[]`、`total=0`、`note` 提示，不加分也不报错。
+- **未加 10 分钟去重**：本因子只进「日内方向与信号」状态卡（每轮整体替换，不追加、不推告警），不存在重复刷屏；去重是告警链路的职责，本工单未新增告警类型，故不加状态机。
+
+**验证（01:15–01:23 盘前，Chrome + curl + 构造数据）**
+
+- 构造日线/分时单测（`evaluate`）：0.3% 内支撑 3810 → 低点 +8、整百 +4、MA 空头 −5，合计 7；0.3–0.8%（3830）→ 低点 +4；近压力 3995 → 高点 −8、整百 −4、MA 多头 +5，合计 −7；0.3–0.8%（3975）→ 高点 −4；突破（`mins=[4020,4030,4025]`，high20=4000）→ +10 且合计 19 **clamp 到 +15**；跌破（`[3780,3770,3790]`）→ −10，合计 −15；不足 3 根 1m → 不判突破；4 根日线 → `total=0` + note；把今日日线放进 bars 后窗口仍取到 20 日高点 4000 → 今日未完成日线不参与。
+- `bias_score`：`total=0` 时 detail 不含「指数关键位」；`total=-8` 时为 `-8`。`detect_signals`：+8 → 「上证距 20日低点 0.20%，支撑有效」(bull)；突破 → 「上证指数突破 20 日高点 3967.7…」(bull)；−8 → 「上证距 上方整百 0.07%，压力临近」(bear)；`total=0` 且无突破 → 无信号。
+- 线上接口：`/api/index/levels` 返回 last 3697.52、high20 3967.68、low20 3574.27、int 3600/3700、MA5 3691.32、MA11 3719.52、total −4、242 个分时点（`trends_day=2026-10-26`）。`/api/strategy/510050` 与 `/588000` 的 `index_levels` 值列表与 total 完全一致 → 9 只共用一份。
+- 弹窗：桌面 1440 宽下 860px、图 826×300；移动 500 宽下 480px、无横向滚动、表不溢出；6 个图例按钮、6 行因子表、合计 −4；关掉「20日高点」后 `markLine` 6→5 且 y 轴从 3562–3979 收到 3570–3724（说明关键位线始终在可视范围内），再点恢复 6；Esc/✕/遮罩三种关闭方式都生效，`aria-expanded` 正确回落，关闭后 12s 内 `/api/index/levels` 请求数不再增长；打开时 22s 内恰好 2 次轮询（10s 节奏，修掉了 `onClose` 不稳定导致的 effect 反复重订阅请求风暴）。
+- 异常路径：用 `fetch` 拦截返回 `{error:"模拟失败"}` → 弹窗仍打开、显示错误文案与「暂无分时数据」，页面无「渲染出错」；恢复后重开正常。
+- 回归：构建 `BG1QLeGs`，页面无 console error/warn，缓存角标、8 条工单既有功能未见异常。
+- 未验证：真实盘中触发突破/跌破与 ≥8 分的写法（盘前指数距高低点 3%–7%，只能验证结构与不误报）；左侧「上证指数」行在极窄屏（<380px）下的换行观感（仅测了 500px）。
