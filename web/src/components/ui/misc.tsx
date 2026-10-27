@@ -137,8 +137,10 @@ export function Dialog({
   className?: string;
 }) {
   if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+  // 挂到 body：调用方可能位于 sticky/transform 容器内，那样 fixed 会被限制在
+  // 该层叠上下文里，被同级的后续列盖住（z-50 也救不回来）。
+  return ReactDOM.createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center" role="dialog" aria-modal="true">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
         className={cn(
@@ -155,6 +157,7 @@ export function Dialog({
         </button>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

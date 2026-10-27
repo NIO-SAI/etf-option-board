@@ -302,6 +302,30 @@ async def kline(secid: str, klt: int = 1, lmt: int = 240, fqt: int = 1,
     return parse_klines(d.get("data"))
 
 
+async def day_amounts(secid: str, ndays: int = 5, ttl: float = 120.0) -> list[dict]:
+    """最近 N 个交易日的累计成交额（腾讯 day/query）。
+
+    腾讯日 K（fqkline）只给成交量、amount 恒为 0；day/query 的每行是
+    "HHMM 价格 累计成交量 累计成交额"，取每天最后一笔即得当日成交额。
+    """
+    code = _tx_code(secid)
+    if not code:
+        return []
+    d = await get_json(_TX_TREND_DAYS, {"code": code}, ttl=ttl)
+    node = ((d or {}).get("data") or {}).get(code) or {}
+    out = []
+    for day in (node.get("data") or [])[-max(1, ndays):]:
+        date = str(day.get("date") or "")
+        amt = 0.0
+        for line in day.get("data") or []:
+            p = str(line).split()
+            if len(p) > 3:
+                amt = max(amt, _numf(p[3]))
+        if len(date) == 8 and amt > 0:
+            out.append({"date": f"{date[0:4]}-{date[4:6]}-{date[6:8]}", "amount": amt})
+    return out
+
+
 def _trends_trim(out: list[dict], ndays: int) -> list[dict]:
     """分时清洗：单日视图只保留最后一个交易日；盘中若拿到的是旧日数据则丢弃。
 
