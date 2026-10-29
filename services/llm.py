@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import uuid
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -143,6 +144,14 @@ async def decide(bundle: dict, timeout: int | None = None) -> dict:
         async with httpx.AsyncClient(timeout=timeout or settings.llm_timeout) as c:
             r = await c.post(f"{settings.llm_api_base}/chat/completions", json=body, headers=headers)
         if r.status_code != 200:
+            if r.status_code == 429:
+                # 免费模型额度用尽：把恢复时间直白告诉用户，而不是一串原始 JSON
+                ra = (r.headers.get("retry-after") or "").strip()
+                if ra.isdigit():
+                    mins = max(1, round(int(ra) / 60))
+                    when = (datetime.now() + timedelta(seconds=int(ra))).strftime("%H:%M")
+                    return {"error": f"免费模型额度已用尽，约 {mins} 分钟后（{when}）恢复；续订 OpenCode Go 可立即使用。"}
+                return {"error": "免费模型额度已用尽，请稍后重试或续订 OpenCode Go。"}
             return {"error": f"LLM HTTP {r.status_code}: {r.text[:200]}"}
         msg = r.json()["choices"][0]["message"]
         content = msg.get("content") or msg.get("reasoning_content") or ""

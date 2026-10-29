@@ -31,8 +31,9 @@ class Settings:
     kronos_timeout: int = 180
 
     # LLM 决策（opencode zen / OpenAI 兼容端点）
-    llm_api_base: str = field(default_factory=lambda: os.getenv("LLM_API_BASE", "https://opencode.ai/zen/go/v1"))
-    llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "deepseek-v4.1-flash"))
+    # 免费模型（*-free）走 zen 普通端点；Go 付费模型才走 zen/go。
+    llm_api_base: str = field(default_factory=lambda: os.getenv("LLM_API_BASE", "https://opencode.ai/zen/v1"))
+    llm_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "deepseek-v4.1-flash-free"))
     llm_timeout: int = 120
     llm_auth_json: str = field(default_factory=lambda: os.path.expanduser("~/.local/share/opencode/auth.json"))
     llm_auth_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))

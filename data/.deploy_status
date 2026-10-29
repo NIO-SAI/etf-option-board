@@ -1,1 +1,1 @@
-{"reason": "test deploy", "build_frontend": false, "ok": true, "at": "2026-10-27T23:03:54"}
+{"reason": "LLM 切换到 zen 免费模型端点 + 429 友好提示", "build_frontend": false, "ok": true, "at": "2026-10-29T23:59:38"}

@@ -89,8 +89,11 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
 ## 依赖的外部资产
 
 - Kronos：`/Users/xinxin/workspace/facecat-kronos`（`.venv` + `model/hf-cache`）。缺则预测区显示离线。
-- LLM：`~/.local/share/opencode/auth.json` 的 `opencode-go` key，端点 `https://opencode.ai/zen/go/v1`，
-  **必须带 `x-opencode-session: <uuid>` 头**。模型为推理模型，`max_tokens` 需给足。
+- LLM：`~/.local/share/opencode/auth.json` 的 `opencode-go` key（免费模型也用这个 key），
+  免费模型（`*-free`）端点 `https://opencode.ai/zen/v1`，Go 付费模型才是 `https://opencode.ai/zen/go/v1`；
+  **必须带 `x-opencode-session: <uuid>` 头**。默认模型 `deepseek-v4.1-flash-free`，可用
+  `LLM_API_BASE`/`LLM_MODEL`/`LLM_API_KEY` 覆盖。免费额度用尽时返回 429 + `retry-after`，
+  约 8 小时（每日 00:00 UTC / 北京时间 08:00）恢复。模型为推理模型，`max_tokens` 需给足。
 
 ## 风险/合规
 
