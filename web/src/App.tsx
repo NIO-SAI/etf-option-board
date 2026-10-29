@@ -166,7 +166,7 @@ export default function App() {
                     </span>
                   )}
                 </div>
-                <CacheTag meta={ctxCache} interval={10_000} />
+                <CacheTag meta={ctxCache} />
               </FrameHeader>
               {ctxReady && (
                 <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-[11px] text-muted-foreground">
@@ -200,7 +200,7 @@ export default function App() {
               {chainReady && !chain.error ? (
                 <OptionTQuote
                   chain={chain}
-                  cacheTag={<CacheTag meta={chainCache} interval={15_000} />}
+                  cacheTag={<CacheTag meta={chainCache} />}
                   month={month ?? chain.front_month}
                   onMonth={setMonth}
                   selectedSecid={contractSecid ?? undefined}
@@ -238,7 +238,7 @@ export default function App() {
             <FramePanel dense>
               <FrameHeader className="flex-row items-center justify-between">
                 <FrameTitle className="text-xs">日内方向与信号</FrameTitle>
-                <CacheTag meta={mergeCache(planCache, sigCache)} interval={30_000} />
+                <CacheTag meta={mergeCache(planCache, sigCache)} />
               </FrameHeader>
               <div className="flex flex-col gap-2 px-3 pb-3">
                 {strategy ? <BiasBar bias={strategy.bias} /> : <BiasBarSkeleton />}
@@ -265,7 +265,7 @@ export default function App() {
             <FramePanel dense>
               <FrameHeader className="flex-row items-center justify-between">
                 <FrameTitle className="text-xs">优选合约（按日内性价比）</FrameTitle>
-                <CacheTag meta={planCache} interval={30_000} />
+                <CacheTag meta={planCache} />
               </FrameHeader>
               <div className="px-3 pb-3">
                 {!strategy ? (
@@ -336,21 +336,24 @@ function mergeCache(a: CacheMeta | null, b: CacheMeta | null): CacheMeta | null 
   return a.ts <= b.ts ? a : b;
 }
 
-/** 缓存角标：跨日显示「昨日」；否则仅当数据比轮询间隔更旧时显示「缓存 HH:MM:SS」。 */
-function CacheTag({ meta, interval }: { meta: CacheMeta | null; interval: number }) {
-  if (!meta) return null;
-  if (meta.day !== dayKey()) {
+/** 数据新鲜度角标：每次刷新后都显式标注——缓存 = 红色，实时 = 绿色。 */
+function CacheTag({ meta }: { meta: CacheMeta | null }) {
+  if (!meta) {
     return (
-      <Badge variant="warning-light" title="展示的是上一交易日缓存的数据，正在获取最新数据">
-        昨日
+      <Badge variant="success-light" className="shrink-0" title="当前展示的是本轮刷新取回的实时数据">
+        实时
       </Badge>
     );
   }
-  if (Date.now() - meta.ts <= interval) return null;
+  const stale = meta.day !== dayKey();
   return (
-    <span className="shrink-0 text-[10px] text-muted-foreground tnum" title="本地缓存数据，正在获取最新数据">
-      缓存 {hhmmss(new Date(meta.ts))}
-    </span>
+    <Badge
+      variant="destructive-light"
+      className="shrink-0"
+      title={stale ? "展示的是上一交易日缓存的数据，正在获取最新数据" : "本地缓存数据，正在获取最新数据"}
+    >
+      {stale ? "缓存·昨日" : "缓存"} {hhmmss(new Date(meta.ts))}
+    </Badge>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { cacheRead, cacheWrite, type CacheKind } from "./cache";
+import { cacheRead, cacheWrite, dayKey, type CacheKind } from "./cache";
 
 export type CacheMeta = { ts: number; day: string };
 export type CacheOpt = { kind: CacheKind; code: string; extra?: string | number | null };
@@ -16,6 +16,7 @@ export function usePolling<T>(
   const [error, setError] = useState<string | null>(null);
   const [cacheAt, setCacheAt] = useState<CacheMeta | null>(null);
   const [tick, setTick] = useState(0);
+  const lastOkAt = useRef(0);
   const fnRef = useRef(fn);
   fnRef.current = fn;
   const cacheRef = useRef(cache);
@@ -44,9 +45,16 @@ export function usePolling<T>(
           setError(null);
           setCacheAt(null);
         }
+        lastOkAt.current = Date.now();
         if (c) void cacheWrite(c.kind, c.code, c.extra, d);
       } catch (e: any) {
-        if (alive) setError(String(e?.message || e));
+        if (alive) {
+          setError(String(e?.message || e));
+          // 本轮刷新失败：已有数据仍展示上一次成功结果，标记为缓存并给出它的时间
+          if (lastOkAt.current) {
+            setCacheAt({ ts: lastOkAt.current, day: dayKey(new Date(lastOkAt.current)) });
+          }
+        }
       }
       if (alive) timer = setTimeout(run, intervalMs);
     };
