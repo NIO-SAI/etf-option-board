@@ -110,6 +110,9 @@ export function LlmPanel({ code }: { code: string }) {
     }
   };
   const d = res?.decision;
+  // 后端可能把失败写在顶层（bundle 失败）或 decision 内（LLM 调用失败），两种都要显示，
+  // 否则用户点了「生成决策」只会看到面板毫无变化。
+  const err: string | null = res?.error || d?.error || null;
   // 动作枚举与后端 services/decision.py 的 ACTION_LABELS 同集：多腿价差也算动作
   const actionLabel = ACTION_LABELS[d?.action] ?? "—";
   // 全站约定：看多=红、看空=绿（与 BiasBar / 左侧方向标签一致）
@@ -127,8 +130,19 @@ export function LlmPanel({ code }: { code: string }) {
           </Button>
         </FrameHeader>
         <div className="px-3 pb-3">
-          {!res && <div className="py-3 text-center text-xs text-muted-foreground">点击「生成决策」调用大模型综合分析并给出买卖点</div>}
-          {res?.error && <div className="text-xs text-destructive">{res.error}</div>}
+          {loading && !d && (
+            <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />大模型分析中，通常需要 10–60 秒…
+            </div>
+          )}
+          {!res && !loading && <div className="py-3 text-center text-xs text-muted-foreground">点击「生成决策」调用大模型综合分析并给出买卖点</div>}
+          {err && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5">
+              <div className="text-xs font-medium text-destructive">决策生成失败</div>
+              <div className="mt-0.5 text-[11px] leading-snug break-all text-destructive/90">{err}</div>
+              {res?.ts && <div className="mt-1 text-[10px] text-muted-foreground">响应时间 {res.ts}</div>}
+            </div>
+          )}
           {d && !d.error && (
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-1.5">
