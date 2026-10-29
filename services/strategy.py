@@ -7,7 +7,8 @@ import datetime as dt
 import logging
 import time
 
-from services import index_levels, kronos, market_service as ms, market_turnover, option_service as osvc
+from services import (decision, index_levels, kronos, market_service as ms, market_turnover,
+                      option_service as osvc, user_settings as usv)
 from services.indicators import atr, macd_state, pct_change, support_resistance, volume_stats
 from services.universe import ETF_BY_CODE, ETFS, TRACK_INDEX
 
@@ -278,6 +279,48 @@ def plan_levels(etf_ctx, direction: str) -> dict:
     return {"side": "flat", "note": "方向不明，观望"}
 
 
+def chain_for_month(chain_data: dict, month: int | None) -> dict:
+    """按合约月份过滤链（``osvc.chain()`` 返回全部月份，月份筛选在调用方做）。"""
+    if not month:
+        return chain_data
+    return {**chain_data,
+            "contracts": [c for c in (chain_data.get("contracts") or [])
+                          if c.get("month") == month]}
+
+
+def mid_or_last(contract: dict | None) -> float | None:
+    """合约参考价：能拿到买一卖一时取中值，否则退回最新价。"""
+    if not contract:
+        return None
+    bid, ask, last = contract.get("bid"), contract.get("ask"), contract.get("last")
+    if bid and ask:
+        return round((bid + ask) / 2, 4)
+    return last or None
+
+
+def vertical_short_leg(long_leg: dict | None, chain_data: dict, direction: str) -> dict | None:
+    """垂直价差的对腿：同一到期月、同一方向、更虚值一档。
+
+    看多 -> 卖出更高行权价的认购；看空 -> 卖出更低行权价的认沽。
+    都对腿不可得时返回 None，由调用方降级处理。
+    """
+    if not long_leg or direction not in ("call", "put"):
+        return None
+    side = long_leg.get("type")
+    month = long_leg.get("month")
+    strike = long_leg.get("strike") or 0
+    pool = [c for c in (chain_data.get("contracts") or [])
+            if c.get("type") == side and c.get("month") == month
+            and c.get("strike") and mid_or_last(c) is not None]
+    if direction == "call":
+        further = sorted((c for c in pool if c["strike"] > strike),
+                         key=lambda c: c["strike"])
+    else:
+        further = sorted((c for c in pool if c["strike"] < strike),
+                         key=lambda c: c["strike"], reverse=True)
+    return further[0] if further else None
+
+
 def contract_levels(contract: dict, und_levels: dict, s_now: float) -> dict:
     """把标的点位用 delta 折算为合约买卖点与止盈止损。"""
     if not contract or not und_levels:
@@ -338,7 +381,73 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
     levels = plan_levels(etf_ctx, plan_dir)
 
     s_now = (chain.get("underlying") or {}).get("price") or 0
-    candidates = osvc.rank_candidates(chain, bias["direction"] if bias["direction"] != "neutral" else "auto", top=6)
+
+    # ── 决策层：到期约束 → 策略类型 → 手数上限 → 撜口与限额 ─────────────
+    us = usv.load()
+    today = dt.date.today()
+    calendar_rows = decision.expiry_calendar(today)
+    front_days = calendar_rows[0]["days_left"] if calendar_rows else None
+    next_days = calendar_rows[1]["days_left"] if len(calendar_rows) > 1 else None
+    iv_pct = (chain.get("stats") or {}).get("atm_iv_pctl20")
+
+    strat = decision.select_strategy(bias["direction"], iv_pct,
+                                     days_to_expiry=front_days, next_month_days=next_days)
+
+    # 临期时整体改推次月（ticket 08）：只影响「新开仓」建议
+    target_month = None
+    if strat.get("month") == "next" and len(calendar_rows) > 1:
+        target_month = calendar_rows[1]["month"]
+    work_chain = chain_for_month(chain, target_month)
+    rank_dir = bias["direction"] if bias["direction"] != "neutral" else "auto"
+    candidates = osvc.rank_candidates(work_chain, rank_dir, top=6)
+
+    if strat.get("month") == "next" and not candidates:
+        strat = {**strat, "strategy": decision.STRATEGY_WAIT,
+                 "label": decision.STRATEGY_LABELS[decision.STRATEGY_WAIT],
+                 "no_alternative": True,
+                 "reason": f"{strat['reason']} 次月无可用合约，建议观望。"}
+
+    best = candidates[0] if candidates else None
+    vertical_dir = {"bull_call": "call", "bear_put": "put"}.get(strat.get("vertical_kind"))
+
+    # 垂直价差：找对腿，算行权价宽度与净权利金（正=收到，负=付出）
+    short_leg = vertical_short_leg(best, work_chain, vertical_dir) if vertical_dir else None
+    width = credit = None
+    if short_leg and best:
+        width = round(abs((short_leg.get("strike") or 0) - (best.get("strike") or 0)), 4)
+        long_px, short_px = mid_or_last(best), mid_or_last(short_leg)
+        if long_px and short_px:
+            credit = round(short_px - long_px, 4)
+
+    if strat["strategy"] == decision.STRATEGY_VERTICAL and short_leg is None:
+        # 对腿不可用则退回单腿，保证手数仍可算（不要因缺一条腿而丢掉风控）
+        single = (decision.STRATEGY_SINGLE_CALL if bias["direction"] == "call"
+                  else decision.STRATEGY_SINGLE_PUT)
+        strat = {**strat, "strategy": single, "label": decision.STRATEGY_LABELS[single],
+                 "vertical_kind": None, "degraded_vertical": True,
+                 "reason": f"{strat['reason']} 同月份对腿不可用，退回单腿买入。"}
+
+    # 手数上限：单腿按权利金全额，价差按宽度与净权利金
+    if strat["strategy"] == decision.STRATEGY_VERTICAL:
+        loss_per = decision.max_loss_per_contract("vertical", width=width, net_credit=credit)
+    elif best:
+        loss_per = decision.max_loss_per_contract("single", premium=mid_or_last(best))
+    else:
+        loss_per = None
+    budget = decision.risk_budget(us.get("total_capital"), us.get("risk_pct"))
+    position = decision.max_contracts(budget, loss_per)
+
+    # 撜口与限额（撜口是估算值，见 docs/adr/0001）
+    unit = None
+    if best:
+        unit = {"premium": mid_or_last(best), "delta": best.get("delta"),
+                "price": s_now, "theta": best.get("theta"), "vega": best.get("vega")}
+    exposure = decision.exposure_notional(us.get("tier"), us.get("size"),
+                                         us.get("total_capital"), unit=unit)
+    lim = decision.limits(us.get("risk_pct"), us.get("total_capital"))
+    limit_check = decision.check_limits(exposure, lim,
+                                        per_contract_delta=exposure.get("per_contract_delta"))
+
     plans = [contract_levels(c, levels, s_now) for c in candidates[:3]]
 
     return {
@@ -361,5 +470,26 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
         "macd": etf_ctx.get("macd"),
         "macd15": etf_ctx.get("macd15"),
         "flow_main_delta5m": etf_ctx.get("flow_main_delta5m"),
+        # ── 本次新增的决策层输出 ──
+        "strategy": strat,
+        "expiry": {
+            "today": today.isoformat(),
+            "rows": calendar_rows,
+            "front_days": front_days,
+            "next_days": next_days,
+            "level": decision.near_expiry_level(front_days),
+            "target_month": target_month,
+            "excluded_front": bool(strat.get("excluded_front")),
+        },
+        "position": position,
+        "exposure": exposure,
+        "limits": lim,
+        "limit_check": limit_check,
+        "settings": us,
+        "vertical": ({"short_leg": {"name": short_leg.get("name"),
+                                    "code": short_leg.get("code"),
+                                    "strike": short_leg.get("strike"),
+                                    "month": short_leg.get("month")},
+                      "width": width, "net_credit": credit} if short_leg else None),
         "ts": dt.datetime.now().isoformat(timespec="seconds"),
     }

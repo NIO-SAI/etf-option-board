@@ -4,7 +4,7 @@ import { Sparkline } from "@/components/charts";
 import { IndexLevelsDialog } from "@/components/IndexLevelsDialog";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
-import { clsUpDown, gamma, nf, pct } from "@/lib/format";
+import { clsUpDown, gamma, money, nf, pct, signedMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useState, type ReactNode } from "react";
 import { ArrowDownRight, ArrowUpRight, Flame, Minus, Star } from "lucide-react";
@@ -318,6 +318,7 @@ export function PlanCard({ bundle }: { bundle: any }) {
     : side === "short" ? `跌破 ${nf(lv?.entry_break, 4)} 入场` : null;
   return (
     <Frame spacing="sm" stacked>
+      <DecisionCard bundle={bundle} />
       <FramePanel dense>
         <FrameHeader><FrameTitle>标的点位（ETF）</FrameTitle></FrameHeader>
         {!bundle ? (
@@ -375,6 +376,171 @@ export function PlanCard({ bundle }: { bundle: any }) {
           <Skeleton className="mx-3 mb-3 h-16" />
         ) : (
           <EmptyState title="暂无合约方案" hint="缺少可用 Delta 或昨收，无法折算买卖点" />
+        )}
+      </FramePanel>
+    </Frame>
+  );
+}
+
+/* ---------------- 策略与仓位（决策层：策略类型 / 手数 / 敞口 / 临期） ---------------- */
+/**
+ * 决策卡：策略类型、理由、手数上限、组合 Greeks 敞口与限额、临期约束。
+ *
+ * 字段全部来自后端纯规则层（`services/decision.py`），前端**不重算**任何口径 ——
+ * 一份公式两处实现，迟早会分叉。敞口按 ADR-0001 的定位显式标注为「估算」。
+ */
+export function DecisionCard({ bundle }: { bundle: any }) {
+  const st = bundle?.strategy;
+  const pos = bundle?.position;
+  const exp = bundle?.expiry;
+  const exposure = bundle?.exposure;
+  const lim = bundle?.limits;
+  const chk = bundle?.limit_check;
+  const wait = st?.strategy === "wait";
+  const lvl = exp?.level as string | null | undefined;
+  const expiryTip = exp?.rows?.[0]?.expiry ? `到期日 ${exp.rows[0].expiry}` : undefined;
+  const delta = exposure?.delta_notional;
+  const deltaLimit = chk?.limit ?? lim?.amounts?.delta;
+  const used = chk?.checked && deltaLimit ? Math.abs(Number(delta) || 0) / deltaLimit : null;
+  return (
+    <FramePanel dense>
+      <FrameHeader className="flex-row items-center justify-between">
+        <FrameTitle className="text-xs">策略与仓位</FrameTitle>
+        {st?.month === "next" && (
+          <Badge variant="warning-light" title="当月合约临期，新开仓改用次月">
+            改推次月
+          </Badge>
+        )}
+      </FrameHeader>
+      {!bundle ? (
+        <PlanSkeleton />
+      ) : !st ? (
+        <EmptyState title="决策数据暂不可用" hint="接口未返回，稍后自动重试" />
+      ) : (
+        <div className="flex flex-col gap-2 px-3 pb-3">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge variant={wait ? "outline" : st.vertical_kind ? "info-light" : "secondary"}>
+              {st.label}
+            </Badge>
+            {exp?.excluded_front && (
+              <Badge variant="warning-light" title="当月已临期，不新开当月头寸">当月临期已排除</Badge>
+            )}
+            {st.degraded && (
+              <Badge variant="outline" title="IV 历史样本不足，未能判断权利金贵贱，按中性口径处理">
+                IV样本不足
+              </Badge>
+            )}
+            {lvl === "critical" ? (
+              <Badge variant="destructive-light" title={expiryTip}>距到期 {exp?.front_days} 天</Badge>
+            ) : lvl === "warning" ? (
+              <Badge variant="warning-light" title={expiryTip}>距到期 {exp?.front_days} 天</Badge>
+            ) : null}
+          </div>
+          {st.reason && (
+            <p className="rounded-md bg-muted/40 px-2 py-1.5 text-[11px] leading-snug">{st.reason}</p>
+          )}
+          <div className="grid grid-cols-3 gap-x-3 gap-y-2">
+            <Stat label="手数上限" value={pos?.max_contracts != null ? `${pos.max_contracts} 张` : "—"} />
+            <Stat label="单张最大亏损(元)" value={money(pos?.loss_per_contract)} />
+            <Stat label="单笔风险预算(元)" value={money(pos?.budget)} />
+          </div>
+          {pos?.reason && <div className="text-[11px] text-warning-foreground">{pos.reason}</div>}
+          {pos?.note && <div className="text-[11px] text-warning-foreground">{pos.note}</div>}
+
+          {/* 组合 Greeks 敞口：按档位近似（docs/adr/0001），必须标注为估算 */}
+          <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+            <span>组合敞口·估算</span>
+            {exposure?.tier_label && (
+              <Badge variant="outline" className="text-[10px]">
+                {exposure.tier_label}
+                {exposure.tier !== "flat" && exposure.size_label ? ` · ${exposure.size_label}` : ""}
+                {exposure.contracts != null && exposure.tier !== "flat" ? ` · ${exposure.contracts} 张` : ""}
+              </Badge>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-x-3 gap-y-2">
+            <Stat label="Δ敞口(元)" value={signedMoney(delta)}
+              tone={delta == null ? undefined : delta > 0 ? "up" : delta < 0 ? "down" : undefined} />
+            <Stat label="Δ限额(元)" value={money(deltaLimit)} />
+            <Stat label="限额占用" value={used == null ? "—" : `${(used * 100).toFixed(0)}%`} />
+          </div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+            <Stat label="日Theta(元)" value={money(exposure?.theta_daily)} />
+            <Stat label="Vega/1%(元)" value={money(exposure?.vega_per_pct)} />
+          </div>
+          {chk?.breached ? (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-[11px] leading-snug text-destructive">
+              已超 Δ 限额 {money(chk.over)} 元：{chk.suggestion}
+            </div>
+          ) : chk?.checked ? (
+            <div className="text-[11px] text-muted-foreground">未超限，剩余额度 {money(chk.headroom)} 元</div>
+          ) : (
+            chk?.note ? <div className="text-[11px] text-muted-foreground">{chk.note}</div> : null
+          )}
+          {exposure?.ok === false && exposure?.reason && (
+            <div className="text-[11px] text-muted-foreground">{exposure.reason}</div>
+          )}
+        </div>
+      )}
+    </FramePanel>
+  );
+}
+
+/* ---------------- 合约到期日历 ---------------- */
+export function ExpiryCalendar({ view }: { view: any }) {
+  const rows: any[] = view?.items ?? [];
+  return (
+    <Frame spacing="sm">
+      <FramePanel dense>
+        <FrameHeader className="flex-row items-center justify-between">
+          <FrameTitle className="text-xs">合约到期日历</FrameTitle>
+          <span className="text-[10px] text-muted-foreground">到期月第 4 个星期三</span>
+        </FrameHeader>
+        {!view ? (
+          <Skeleton className="mx-3 mb-3 h-20" />
+        ) : view?.error ? (
+          <EmptyState title="到期日历暂不可用" hint="接口未返回，稍后自动重试" />
+        ) : (
+          <div className="px-2 pb-1">
+            <Table>
+              <THead>
+                <TR>
+                  <TH>合约月</TH><TH>到期日</TH>
+                  <TH className="text-right">剩余</TH><TH className="text-right">状态</TH>
+                </TR>
+              </THead>
+              <TBody>
+                {rows.map((r: any) => (
+                  <TR key={`${r.year}-${r.month}`}>
+                    <TD>
+                      {r.month} 月
+                      {r.is_front && <span className="ml-1 text-[10px] text-muted-foreground">当月</span>}
+                      {r.is_next && <span className="ml-1 text-[10px] text-muted-foreground">下月</span>}
+                    </TD>
+                    <TD className="tnum">{r.expiry}</TD>
+                    <TD className="text-right tnum">
+                      {r.days_left === 0 ? "今日到期" : `${r.days_left} 天`}
+                    </TD>
+                    <TD className="text-right">
+                      {r.level === "critical" ? (
+                        <Badge variant="destructive-light">临期</Badge>
+                      ) : r.level === "warning" ? (
+                        <Badge variant="warning-light">临近</Badge>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TD>
+                  </TR>
+                ))}
+              </TBody>
+            </Table>
+          </div>
+        )}
+        {view?.warning_days != null && (
+          <div className="px-3 pb-2 text-[10px] leading-relaxed text-muted-foreground">
+            距到期 ≤{view.critical_days} 天为临期（不新开当月，改推次月），
+            {view.critical_days + 1}~{view.warning_days} 天为临近（留意 Theta 加速）。
+          </div>
         )}
       </FramePanel>
     </Frame>

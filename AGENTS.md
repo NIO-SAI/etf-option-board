@@ -12,11 +12,14 @@ Vite + Tailwind v4，深色看板，SSE 弹窗+声音告警。
 bash run.sh           # 启动后端 :6799（含监控循环 + Kronos 预热，托管 web/dist）
 bash web/build.sh     # 构建前端到 web/dist
 bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
+/Users/xinxin/.browser-use-env/bin/python3 -m pytest -q   # 单元测试（纯决策函数）
 ```
 
 - **Python 解释器必须用** `/Users/xinxin/.browser-use-env/bin/python3`（含 fastapi/uvicorn/httpx）。
 - 前端 npm 依赖走国内镜像（npmmirror），脚本已设 `npm_config_registry`。
-- 无测试框架；用 `curl http://127.0.0.1:6799/api/health` 做冒烟。
+- **测试**：`/Users/xinxin/.browser-use-env/bin/python3 -m pytest -q`（配置 `pytest.ini`，用例在 `tests/`）。
+  只测**纯决策函数**：不触网、不读系统时钟、不写磁盘。HTTP 层与前端不做自动化测试，
+  仍用 `curl http://127.0.0.1:6799/api/health` 冒烟 + 浏览器核对。
 - 后端托管 `web/dist`（生产模式）：**改前端后必须 `bash web/build.sh`**，否则页面不变。
   HTML 响应带 `no-store`，页脚有「构建 <bundle-hash>」戳可用于核对已加载的构建。
 - **跨设备 HTTPS 入口（浏览器通知必需）**：Chrome 系统通知（Web Notifications）只在安全上下文
@@ -107,3 +110,22 @@ The five canonical triage roles, each label string equal to its name (`needs-tri
 ### Domain docs
 
 Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## 协作约定（记忆）
+
+- **对话语言：中文。** 本仓库相关的回复、工单、注释一律用中文。
+- **项目定位一览**（供新会话快速上手，不必重复调研）：
+  - 是什么：9 只可交易期权宽基 ETF 的日内决策看板 —— 聚合行情/期权链/资金流/指数/外围
+    → 信号引擎打分 → 大模型出可执行方案 → SSE 声音+弹窗告警。
+  - 规模：后端 `services/` 15 个模块约 5.3k 行；前端 `web/src` 约 3.5k 行 TS/TSX。
+  - 文档地图：架构与策略逻辑 → `CONTEXT.md`；部署/命令/数据源策略 → 本文件；
+    标的清单 → `README.md`；工作追踪与 triage 结论 → `.scratch/`；
+    `期权/` 下 4 个独立 agent skill（策略顾问/链数据/策略报告/长期备兑）是仓库资产，
+    不属于看板运行时。
+- **易踩的三个点**：行情主源是 `emdatah5` + 腾讯（K线/分时），`push2` 仅兜底，排查「没数据」
+  别先怪没开盘；改前端必须 `bash web/build.sh`，否则线上不变；用户设置（总资金/单笔风险%）
+  存 `data/settings.json`，靠 `.gitignore` 的 `data/*.json` 规则规避 auto-backup —— **新增长期数据
+  文件一律用 `.json` 后缀**，`data/*.jsonl` 是被 git 跟踪的。
+- **动态状态不写进本文件**（会过期），按需现取：追踪器进度看 `.scratch/<feature>/` 与
+  `.scratch/triage-*.md`；服务健康 `curl http://127.0.0.1:6799/api/health`；
+  最近一次部署结果看 `data/.deploy_status`。

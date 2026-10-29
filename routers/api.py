@@ -10,9 +10,9 @@ import os
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
-from services import (alerts, deploy as deploy_svc, em, index_levels, kronos, llm,
+from services import (alerts, decision, deploy as deploy_svc, em, index_levels, kronos, llm,
                       market_service as ms, monitor, option_service as osvc,
-                      reversal, strategy)
+                      reversal, strategy, user_settings as usv)
 from services.universe import ETFS, EXTERNAL, INDICES, NATIONAL_TEAM_ETFS
 
 router = APIRouter(prefix="/api")
@@ -305,3 +305,35 @@ async def alerts_stream():
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
+
+
+@router.get("/expiry")
+async def expiry_view():
+    """合约到期日历：当月 / 下月 / 随后两个季月的到期日与倒计时、临期级别。
+
+    零新数据源：月份序列与「到期月第 4 个星期三」均由纯决策模块算出。
+    """
+    today = dt.date.today()
+    rows = decision.expiry_calendar(today)
+    for row in rows:
+        row["level"] = decision.near_expiry_level(row["days_left"])
+    return {"today": today.isoformat(), "items": rows,
+            "critical_days": decision.CRITICAL_DAYS,
+            "warning_days": decision.WARNING_DAYS}
+
+
+@router.get("/settings")
+async def settings_view():
+    """用户设置：总资金与单笔风险%（存 data/settings.json，不进 git 历史）。"""
+    return usv.view(usv.load())
+
+
+@router.put("/settings")
+async def settings_update(payload: dict):
+    """写入用户设置。非法输入拒绝并给出原因，不落盘。"""
+    settings, errors = usv.parse(payload)
+    if errors:
+        return {"error": "；".join(errors), "errors": errors}
+    if not usv.save(settings):
+        return {"error": "设置写入失败"}
+    return usv.view(settings)

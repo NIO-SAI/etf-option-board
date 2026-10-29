@@ -110,7 +110,8 @@ export function LlmPanel({ code }: { code: string }) {
     }
   };
   const d = res?.decision;
-  const actionLabel = d?.action === "buy_call" ? "买入认购" : d?.action === "buy_put" ? "买入认沽" : d?.action === "wait" ? "观望" : "—";
+  // 动作枚举与后端 services/decision.py 的 ACTION_LABELS 同集：多腿价差也算动作
+  const actionLabel = ACTION_LABELS[d?.action] ?? "—";
   // 全站约定：看多=红、看空=绿（与 BiasBar / 左侧方向标签一致）
   const variant = d?.direction === "call" ? "destructive-light" : d?.direction === "put" ? "success-light" : "secondary";
   return (
@@ -133,8 +134,21 @@ export function LlmPanel({ code }: { code: string }) {
               <div className="flex flex-wrap items-center gap-1.5">
                 <Badge variant={variant as any}>{actionLabel}</Badge>
                 <Badge variant="outline">置信度 {d.confidence}</Badge>
+                {d.contracts != null && <Badge variant="outline" title="不得超过设置里的手数上限">{d.contracts} 张</Badge>}
                 {d.contract_name && <Badge variant="info-light">{d.contract_name} {d.contract_code}</Badge>}
               </div>
+              {d.legs && (d.legs.long?.code || d.legs.short?.code) && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-md border border-border/60 px-2 py-1">
+                    <div className="text-[10px] text-muted-foreground">多头腿</div>
+                    <div className="truncate text-[11px]">{d.legs.long?.name || d.legs.long?.code || "—"}</div>
+                  </div>
+                  <div className="rounded-md border border-border/60 px-2 py-1">
+                    <div className="text-[10px] text-muted-foreground">空头腿</div>
+                    <div className="truncate text-[11px]">{d.legs.short?.name || d.legs.short?.code || "—"}</div>
+                  </div>
+                </div>
+              )}
               {(d.entry || d.stop || d.target) && (
                 <div className="grid grid-cols-3 gap-2 text-center">
                   <Cell label="入场" value={nf(d.entry, 4)} />
@@ -143,6 +157,20 @@ export function LlmPanel({ code }: { code: string }) {
                 </div>
               )}
               {d.summary && <p className="rounded-md bg-muted/40 px-2 py-1.5 text-xs leading-snug">{d.summary}</p>}
+              {/* 模型输出与规则层冲突时的校正记录（如「规则层观望却给了买单」），
+                  不静默篡改：改了什么、为什么改，都摆在这里 */}
+              {d.adjustments?.length > 0 && (
+                <div className="rounded-md border border-border/60 px-2 py-1.5">
+                  <div className="mb-0.5 text-[10px] font-medium text-warning-foreground">已按规则层校正</div>
+                  <ul className="flex flex-col gap-0.5">
+                    {d.adjustments.map((t: string, i: number) => (
+                      <li key={i} className="flex gap-1 text-[11px] leading-snug">
+                        <span className="text-muted-foreground">•</span>{t}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <Section title="理由" items={d.reasons} />
               <Section title="风险" items={d.risks} tone="warn" />
               {d.hold_window && <div className="text-[11px] text-muted-foreground">建议持有窗口：{d.hold_window}</div>}
@@ -153,6 +181,14 @@ export function LlmPanel({ code }: { code: string }) {
     </Frame>
   );
 }
+
+const ACTION_LABELS: Record<string, string> = {
+  buy_call: "买入认购",
+  buy_put: "买入认沽",
+  bull_call_spread: "牛市看涨价差",
+  bear_put_spread: "熊市看跌价差",
+  wait: "观望",
+};
 
 function Cell({ label, value, tone }: { label: string; value: string; tone?: "up" | "down" }) {
   return (

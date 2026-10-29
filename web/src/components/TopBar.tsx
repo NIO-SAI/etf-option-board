@@ -2,17 +2,18 @@ import { Badge } from "@/components/reui/badge";
 import { Button } from "@/components/ui/button";
 import { clsUpDown, pct } from "@/lib/format";
 import { sound } from "@/lib/sound";
-import { Activity, Bell, BellOff, RefreshCw, ShieldCheck } from "lucide-react";
+import { Activity, Bell, BellOff, RefreshCw, Settings, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 
 export function TopBar({
-  external, national, health, clock, onRefresh,
+  external, national, health, clock, onRefresh, onOpenSettings,
 }: {
   external: any[];
   national: any;
   health: any;
   clock: string;
   onRefresh: () => void;
+  onOpenSettings: () => void;
 }) {
   const [muted, setMuted] = useState(!sound.enabled);
   const nt = national?.score ?? 0;
@@ -49,6 +50,15 @@ export function TopBar({
         )}
         <Button variant="ghost" size="icon" title="刷新数据" aria-label="刷新数据" onClick={onRefresh}>
           <RefreshCw aria-hidden />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          title="设置：总资金与单笔风险%"
+          aria-label="设置"
+          onClick={onOpenSettings}
+        >
+          <Settings aria-hidden />
         </Button>
         <Button
           variant="ghost"

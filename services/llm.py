@@ -11,6 +11,7 @@ import uuid
 import httpx
 
 from config import settings
+from services import decision
 
 log = logging.getLogger("llm")
 
@@ -29,11 +30,20 @@ _SYSTEM = """你是一位资深 A 股 ETF 期权日内交易员，擅长 50ETF/3
 7) 必须给出明确：方向、合约代码、入场价、止损价、止盈价（含百分比），以及不确定性说明。
 8) 若信号冲突或置信度低，明确建议"观望"，不要强行给单。
 
+规则层结论（快照里的「规则层策略」「风险预算与手数上限」字段，由确定性规则算出，**优先级高于你的判断**）：
+- 策略类型：买单腿认购 / 买单腿认沽 / 牛市看涨价差 / 熊市看跌价差 / 观望；
+- 临期约束：当月合约距到期 ≤3 天时不得新开当月头寸，改用次月；
+- 手数上限：「风险预算与手数上限」给出 max_contracts，你的 contracts 不得超过它。
+你的 action 必须与规则层策略类型一致（规则层观望就输出 wait，且不要给合约代码），
+价差策略请用 legs 给出两条腿。若你认为规则层有误，仍按其执行，把你的异议写进 risks。
+
 严格只输出一个 JSON 对象，不要任何解释文字或代码块标记。字段：
 {
   "direction": "call|put|neutral",
-  "action": "buy_call|buy_put|wait",
-  "contract_code": "合约代码或空串",
+  "action": "buy_call|buy_put|bull_call_spread|bear_put_spread|wait",
+  "contracts": 整数（建议张数，不得超过手数上限）或null,
+  "legs": {"long": {"code":"","name":"","strike":数字或null}, "short": {"code":"","name":"","strike":数字或null}} 或 null,
+  "contract_code": "合约代码或空串（价差填多头腿）",
   "contract_name": "合约简称或空串",
   "entry": 数字或null,
   "stop": 数字或null,
@@ -105,6 +115,12 @@ def _compact(bundle: dict) -> dict:
         "当前量能": bundle.get("volume"),
         "当前MACD(1分钟)": bundle.get("macd"),
         "当前MACD(15分钟背离)": bundle.get("macd15"),
+        # ── 规则层结论：模型必须与之对齐（见 decide 中的一致性校验）──
+        "规则层策略": bundle.get("strategy"),
+        "到期日历": bundle.get("expiry"),
+        "风险预算与手数上限": bundle.get("position"),
+        "敞口与限额": {"敞口": bundle.get("exposure"), "限额": bundle.get("limits"),
+                     "超限": bundle.get("limit_check")},
     }
 
 
@@ -133,8 +149,15 @@ async def decide(bundle: dict, timeout: int | None = None) -> dict:
         parsed = _extract_json(content)
         if not parsed:
             return {"error": "LLM 返回无法解析为 JSON", "raw": content[:500]}
-        parsed["_model"] = settings.llm_model
-        return parsed
+        # 与规则层对齐：规则层观望时不得给买单，张数不得超手数上限（改动留痕）
+        aligned = decision.align_llm_decision(parsed, bundle.get("strategy"),
+                                             bundle.get("position"))
+        out = aligned["decision"]
+        if isinstance(out, dict):
+            out["_model"] = settings.llm_model
+            if aligned["adjustments"]:
+                out["adjustments"] = aligned["adjustments"]
+        return out
     except Exception as exc:  # noqa: BLE001
         log.warning("LLM 决策失败: %s", exc)
         return {"error": str(exc)}

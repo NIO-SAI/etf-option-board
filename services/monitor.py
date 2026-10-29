@@ -10,7 +10,8 @@ import datetime as dt
 import logging
 
 from config import settings
-from services import alerts, deploy as deploy_svc, market_service as ms, reversal, strategy
+from services import (alerts, decision, deploy as deploy_svc, market_service as ms,
+                      reversal, strategy, user_settings as usv)
 from services.universe import ETFS
 
 log = logging.getLogger("monitor")
@@ -19,6 +20,45 @@ _state: dict = {"running": False, "last_cycle": None, "cycles": 0, "last_error":
 # 上次关键时点已提醒记录（key 含日期；服务常驻不重启时，跨天自动恢复提醒，
 # 否则 key_time 告警只在进程启动当天生效一次）
 _key_fired: set[str] = set()
+# 临期提醒已发记录（key 含日期与档位）。告警总线默认 90 秒冷却完全挡不住
+# 「9 只标的 × 已临期月份」的重复，必须按日去重。
+_expiry_fired: set[str] = set()
+
+
+async def _expiry_alert(now: dt.datetime) -> None:
+    """合约临期分级提醒（按「到期月 × 档位」每天最多一条）。
+
+    到期日是市场级事实、与标的无关，所以不像其他告警挂在 _check_etf 里按标的循环
+    ——9 只 ETF 会推 9 条同样的话，反倒掩盖真正重要的那条。
+    ≤3 天 critical（弹窗+声音），4~7 天 warn（仅入列表）。
+    """
+    try:
+        tier = (usv.load() or {}).get("tier")
+    except Exception as exc:  # noqa: BLE001 — 读设置失败不该阻断监控
+        log.debug("读取用户档位失败，按默认档位提醒: %s", exc)
+        tier = None
+    today = now.date()
+    for row in decision.expiry_calendar(today):
+        level = decision.near_expiry_level(row["days_left"])
+        if not level:
+            continue
+        key = decision.expiry_alert_key(row["month"], tier, today)
+        if key in _expiry_fired:
+            continue
+        _expiry_fired.add(key)
+        # 顺手清理过期 key，防止常驻进程集合无限增长
+        for k in [k for k in _expiry_fired if not k.startswith(today.isoformat())]:
+            _expiry_fired.discard(k)
+        await alerts.publish({
+            "etf_name": "合约到期", "type": "expiry_near", "dir": "neutral",
+            # 与既有告警的用词保持一致：critical / warn / info
+            "level": "critical" if level == "critical" else "warn",
+            "title": f"{row['month']} 月合约距今 {row['days_left']} 天到期",
+            "text": decision.expiry_alert_text(tier, row["month"], row["days_left"],
+                                               row["expiry"]),
+            "month": row["month"], "days_left": row["days_left"],
+            "expiry": row["expiry"], "tier": tier,
+        })
 
 
 def status() -> dict:
@@ -148,6 +188,8 @@ def _in_trading_window(now: dt.datetime) -> bool:
 
 async def cycle() -> None:
     now = dt.datetime.now()
+    # 临期提醒是日期型信号，不该被交易时段挡住——开盘前就该看到「今天到期」
+    await _expiry_alert(now)
     if not _in_trading_window(now):
         _state["last_cycle"] = now.isoformat(timespec="seconds")
         _state["cycles"] += 1

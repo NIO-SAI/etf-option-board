@@ -4,9 +4,10 @@ import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/fr
 import { Badge } from "@/components/reui/badge";
 import { IntradayChart } from "@/components/charts";
 import { TopBar } from "@/components/TopBar";
-import { BiasBar, BiasBarSkeleton, CandidateList, CandidateSkeleton, EtfList, OptionTQuote, PlanCard, SignalFeed } from "@/components/panels";
+import { BiasBar, BiasBarSkeleton, CandidateList, CandidateSkeleton, EtfList, ExpiryCalendar, OptionTQuote, PlanCard, SignalFeed } from "@/components/panels";
 import { ContractDetail, KronosPredict, LlmPanel } from "@/components/detail";
 import { AlertCenter } from "@/components/AlertCenter";
+import { SettingsDialog } from "@/components/SettingsDialog";
 import { EmptyState, Skeleton } from "@/components/ui/misc";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { api } from "@/lib/api";
@@ -29,6 +30,7 @@ export default function App() {
   const [clock, setClock] = useState(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
   const [leftCollapsed, setLeftCollapsed] = usePersistedFlag("board.left-collapsed");
   const [rightCollapsed, setRightCollapsed] = usePersistedFlag("board.right-collapsed");
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setClock(new Date().toLocaleTimeString("zh-CN", { hour12: false })), 1000);
@@ -44,6 +46,8 @@ export default function App() {
   const { data: etfQuotes } = usePolling(() => api.etfs(), 10_000);
   const { data: directions } = usePolling(() => api.directions(), 60_000);
   const { data: spark } = usePolling(() => api.etfs_spark(), 120_000, []);
+  // 到期日历：一天只变一次，10 分钟轮询足够（换来的是「当月还剩几天」永不陈旧）
+  const { data: expiryView } = usePolling(() => api.expiry(), 600_000);
 
   // 四类数据都走「先渲染本地缓存 → 同时发真实请求」的 SWR，切标的时首帧即有内容。
   const { data: ctx, refresh: refreshCtx, cacheAt: ctxCache } = usePolling(
@@ -112,7 +116,9 @@ export default function App() {
         health={health}
         clock={clock}
         onRefresh={() => { refreshCtx(); api.monitorCycle().catch(() => {}); }}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <main
         className="board-grid grid grid-cols-1 gap-3 p-3 transition-[grid-template-columns] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]"
         style={{ "--board-left": leftCollapsed ? "3rem" : "340px", "--board-right": rightCollapsed ? "3rem" : "360px" } as CSSProperties}
@@ -252,6 +258,8 @@ export default function App() {
           </Frame>
 
           <PlanCard bundle={strategy} />
+
+          <ExpiryCalendar view={expiryView} />
 
           <Frame spacing="sm">
             <FramePanel dense>

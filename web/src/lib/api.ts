@@ -32,6 +32,21 @@ export const api = {
     const r = await fetch(`${BASE}/llm/${code}?klt=${klt}`, { method: "POST" });
     return r.json();
   },
+  expiry: () => get("/expiry"),
+  settings: () => get("/settings"),
+  saveSettings: async (body: {
+    total_capital: number | string | null;
+    risk_pct: number;
+    tier: string;
+    size: string;
+  }) => {
+    const r = await fetch(`${BASE}/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    return r.json();
+  },
   alerts: () => get("/alerts?limit=60"),
   reversalSignals: (code: string) => get(`/reversal/signals?code=${code}`),
   monitorCycle: async () => (await fetch(`${BASE}/monitor/cycle`, { method: "POST" })).json(),
