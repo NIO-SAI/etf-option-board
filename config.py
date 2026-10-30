@@ -37,6 +37,13 @@ class Settings:
     llm_timeout: int = 120
     llm_auth_json: str = field(default_factory=lambda: os.path.expanduser("~/.local/share/opencode/auth.json"))
     llm_auth_key: str = field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))
+    # REST 直连失败（免费额度 429/403）时，回落本机 opencode CLI 客户端通道
+    llm_cli_fallback: bool = field(
+        default_factory=lambda: os.getenv("LLM_CLI_FALLBACK", "1").strip().lower() not in ("0", "false", "no", "off"))
+    llm_cli_bin: str = field(default_factory=lambda: os.getenv("LLM_CLI_BIN", "opencode"))
+    llm_cli_model: str = field(default_factory=lambda: os.getenv("LLM_CLI_MODEL", "opencode/deepseek-v4.1-flash-free"))
+    llm_cli_timeout: int = field(default_factory=lambda: int(os.getenv("LLM_CLI_TIMEOUT", "240")))
+    llm_cli_dir: str = field(default_factory=lambda: os.getenv("LLM_CLI_DIR", "/tmp/etf-llm-cli"))
 
     # 无风险利率（期权定价用，年化）
     risk_free_rate: float = 0.018

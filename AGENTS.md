@@ -94,6 +94,12 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   **必须带 `x-opencode-session: <uuid>` 头**。默认模型 `deepseek-v4.1-flash-free`，可用
   `LLM_API_BASE`/`LLM_MODEL`/`LLM_API_KEY` 覆盖。免费额度用尽时返回 429 + `retry-after`，
   约 8 小时（每日 00:00 UTC / 北京时间 08:00）恢复。模型为推理模型，`max_tokens` 需给足。
+- **免费模型只能走 opencode 客户端通道（2026-10-30 实测）**：免费额度用尽后，同 key 直连 REST
+  （`zen/v1`、`inference/openai/v1`，各种 `x-opencode-*` 头/UA/IPv4/IPv6）一律 429，但
+  `opencode run -m opencode/deepseek-v4.1-flash-free` 仍可跑（17–30s/次）。故 `services/llm.py`
+  在 REST 失败时自动回落 CLI：`opencode run --pure --format json -m <LLM_CLI_MODEL> --dir <LLM_CLI_DIR>`，
+  解析 NDJSON 的 `text` 事件；`LLM_CLI_FALLBACK=0` 关闭，`LLM_CLI_MODEL`/`LLM_CLI_TIMEOUT`(默认 240s)/`LLM_CLI_DIR` 可调。
+  决策结果带 `_via: "cli"|"api"` 便于排查。免费额度无公开查询接口，只能看 429 的 `retry-after`。
 
 ## 风险/合规
 

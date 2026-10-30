@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 import uuid
 from datetime import datetime, timedelta
 
@@ -125,48 +128,112 @@ def _compact(bundle: dict) -> dict:
     }
 
 
+def _http_error_text(r: httpx.Response) -> str:
+    if r.status_code == 429:
+        # 免费模型额度用尽：把恢复时间直白告诉用户，而不是一串原始 JSON
+        ra = (r.headers.get("retry-after") or "").strip()
+        if ra.isdigit():
+            mins = max(1, round(int(ra) / 60))
+            when = (datetime.now() + timedelta(seconds=int(ra))).strftime("%H:%M")
+            return f"免费模型额度已用尽，约 {mins} 分钟后（{when}）恢复；续订 OpenCode Go 可立即使用。"
+        return "免费模型额度已用尽，请稍后重试或续订 OpenCode Go。"
+    if r.status_code in (401, 403):
+        return f"LLM 鉴权失败 HTTP {r.status_code}：{r.text[:160]}"
+    return f"LLM HTTP {r.status_code}: {r.text[:200]}"
+
+
+def _cli_ready() -> bool:
+    return bool(settings.llm_cli_fallback and shutil.which(settings.llm_cli_bin))
+
+
+def _run_cli(prompt: str, timeout: int) -> str:
+    """同步调用本机 opencode CLI（客户端通道），返回助手最终文本。"""
+    exe = shutil.which(settings.llm_cli_bin)
+    if not exe:
+        raise RuntimeError(f"未找到 {settings.llm_cli_bin} CLI")
+    os.makedirs(settings.llm_cli_dir, exist_ok=True)
+    cmd = [exe, "run", "--pure", "--format", "json", "-m", settings.llm_cli_model,
+           "--dir", settings.llm_cli_dir, prompt]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                          cwd=settings.llm_cli_dir)
+    texts: list[str] = []
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:  # noqa: BLE001
+            continue
+        part = ev.get("part") or {}
+        if ev.get("type") == "text" and part.get("text"):
+            texts.append(part["text"])
+    content = "".join(texts).strip()
+    if not content:
+        tail = " ".join((proc.stderr or "").strip().splitlines()[-2:])
+        raise RuntimeError(f"CLI 无输出（exit={proc.returncode}）{tail[:200]}")
+    return content
+
+
+async def _cli_decide(prompt: str, timeout: int) -> str:
+    return await asyncio.to_thread(_run_cli, prompt, timeout)
+
+
 async def decide(bundle: dict, timeout: int | None = None) -> dict:
-    key = _load_key()
-    if not key:
-        return {"error": "未找到 LLM 密钥"}
     payload = _compact(bundle)
     user = ("以下是当前市场快照（JSON）。请给出今日日内期权交易决策，"
             "严格按系统要求输出 JSON：\n" + json.dumps(payload, ensure_ascii=False))
-    body = {
-        "model": settings.llm_model,
-        "messages": [{"role": "system", "content": _SYSTEM},
-                     {"role": "user", "content": user}],
-        "temperature": 0.4,
-        "max_tokens": 3000,
-    }
-    headers = {"Authorization": f"Bearer {key}", "x-opencode-session": uuid.uuid4().hex}
-    try:
-        async with httpx.AsyncClient(timeout=timeout or settings.llm_timeout) as c:
-            r = await c.post(f"{settings.llm_api_base}/chat/completions", json=body, headers=headers)
-        if r.status_code != 200:
-            if r.status_code == 429:
-                # 免费模型额度用尽：把恢复时间直白告诉用户，而不是一串原始 JSON
-                ra = (r.headers.get("retry-after") or "").strip()
-                if ra.isdigit():
-                    mins = max(1, round(int(ra) / 60))
-                    when = (datetime.now() + timedelta(seconds=int(ra))).strftime("%H:%M")
-                    return {"error": f"免费模型额度已用尽，约 {mins} 分钟后（{when}）恢复；续订 OpenCode Go 可立即使用。"}
-                return {"error": "免费模型额度已用尽，请稍后重试或续订 OpenCode Go。"}
-            return {"error": f"LLM HTTP {r.status_code}: {r.text[:200]}"}
-        msg = r.json()["choices"][0]["message"]
-        content = msg.get("content") or msg.get("reasoning_content") or ""
-        parsed = _extract_json(content)
-        if not parsed:
-            return {"error": "LLM 返回无法解析为 JSON", "raw": content[:500]}
-        # 与规则层对齐：规则层观望时不得给买单，张数不得超手数上限（改动留痕）
-        aligned = decision.align_llm_decision(parsed, bundle.get("strategy"),
-                                             bundle.get("position"))
-        out = aligned["decision"]
-        if isinstance(out, dict):
-            out["_model"] = settings.llm_model
-            if aligned["adjustments"]:
-                out["adjustments"] = aligned["adjustments"]
-        return out
-    except Exception as exc:  # noqa: BLE001
-        log.warning("LLM 决策失败: %s", exc)
-        return {"error": str(exc)}
+    content = ""
+    err = ""
+    via = "api"
+    key = _load_key()
+    if not key:
+        err = "未找到 LLM 密钥"
+    else:
+        body = {
+            "model": settings.llm_model,
+            "messages": [{"role": "system", "content": _SYSTEM},
+                         {"role": "user", "content": user}],
+            "temperature": 0.4,
+            "max_tokens": 3000,
+        }
+        headers = {"Authorization": f"Bearer {key}", "x-opencode-session": uuid.uuid4().hex}
+        try:
+            async with httpx.AsyncClient(timeout=timeout or settings.llm_timeout) as c:
+                r = await c.post(f"{settings.llm_api_base}/chat/completions", json=body, headers=headers)
+            if r.status_code == 200:
+                msg = r.json()["choices"][0]["message"]
+                content = msg.get("content") or msg.get("reasoning_content") or ""
+            else:
+                err = _http_error_text(r)
+                log.warning("LLM REST 失败，尝试 CLI 兜底: %s", err)
+        except Exception as exc:  # noqa: BLE001
+            err = f"LLM 请求异常: {exc}"
+            log.warning("LLM REST 异常，尝试 CLI 兜底: %s", exc)
+
+    if not content and _cli_ready():
+        # 免费模型只对 opencode 客户端放行：REST 429/403 时改走本机 CLI 通道
+        try:
+            prompt = _SYSTEM + "\n\n" + user
+            content = await _cli_decide(prompt, settings.llm_cli_timeout)
+            via = "cli"
+        except Exception as exc:  # noqa: BLE001
+            log.warning("LLM CLI 兜底失败: %s", exc)
+            return {"error": f"{err}；CLI 通道也失败：{exc}" if err else f"CLI 通道失败：{exc}"}
+
+    if not content:
+        return {"error": err or "LLM 调用失败"}
+
+    parsed = _extract_json(content)
+    if not parsed:
+        return {"error": "LLM 返回无法解析为 JSON", "raw": content[:500]}
+    # 与规则层对齐：规则层观望时不得给买单，张数不得超手数上限（改动留痕）
+    aligned = decision.align_llm_decision(parsed, bundle.get("strategy"),
+                                         bundle.get("position"))
+    out = aligned["decision"]
+    if isinstance(out, dict):
+        out["_model"] = settings.llm_model
+        out["_via"] = via
+        if aligned["adjustments"]:
+            out["adjustments"] = aligned["adjustments"]
+    return out
