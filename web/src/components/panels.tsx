@@ -7,7 +7,7 @@ import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
 import { clsUpDown, gamma, money, nf, pct, signedMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useState, type ReactNode } from "react";
-import { ArrowDownRight, ArrowUpRight, Flame, Minus, Star } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Flame, Loader2, Minus, Star } from "lucide-react";
 
 /* ---------------- 方向标签 ---------------- */
 // 方向本质是「看多/看空/观望」这一状态：复用 ReUI 已装的 <tone>-light 状态徽标
@@ -686,11 +686,12 @@ export function CandidateList({
 
 /* ---------------- T 型报价 ---------------- */
 export function OptionTQuote({
-  chain, month, onMonth, selectedSecid, onSelect, cacheTag,
+  chain, month, onMonth, selectedSecid, onSelect, cacheTag, loading,
 }: {
   chain: any;
   month: number | null;
   onMonth: (m: number) => void;
+  loading?: boolean;
   selectedSecid?: string;
   onSelect: (c: any) => void;
   cacheTag?: ReactNode;
@@ -721,11 +722,17 @@ export function OptionTQuote({
     ? rows.reduce((best: number, r: any) => (Math.abs(r.strike - s) < Math.abs(best - s) ? r.strike : best), rows[0].strike)
     : null;
   return (
-    <div className="flex flex-col">
+    <div className={cn("flex flex-col transition-opacity duration-200", loading && "pointer-events-none opacity-60")} aria-busy={loading || undefined}>
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-1 pb-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-xs font-semibold">{chain.etf?.name} 期权链</span>
           {cacheTag}
+          {loading && (
+            <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground" role="status">
+              <Loader2 className="size-3 animate-spin" aria-hidden />
+              切换中…
+            </span>
+          )}
           <span className="shrink-0 text-xs text-muted-foreground tnum">标的 {nf(s, 3)}（{pct(chain.underlying?.pct)}）</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">

@@ -17,10 +17,19 @@ export function usePolling<T>(
   const [cacheAt, setCacheAt] = useState<CacheMeta | null>(null);
   const [tick, setTick] = useState(0);
   const lastOkAt = useRef(0);
+  // 手动刷新时把「下一次请求结束」回调排进队列，refresh() 返回的 Promise 在其后 resolve
+  const waiters = useRef<Array<() => void>>([]);
   const fnRef = useRef(fn);
   fnRef.current = fn;
   const cacheRef = useRef(cache);
   cacheRef.current = cache;
+
+  // 仅真正卸载时放行等待中的刷新 promise；deps 变化触发的重建不算
+  useEffect(() => () => {
+    const rs = waiters.current;
+    waiters.current = [];
+    rs.forEach((f) => f());
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -56,7 +65,12 @@ export function usePolling<T>(
           }
         }
       }
-      if (alive) timer = setTimeout(run, intervalMs);
+      if (alive) {
+        const rs = waiters.current;
+        waiters.current = [];
+        rs.forEach((f) => f());
+        timer = setTimeout(run, intervalMs);
+      }
     };
     run();
     return () => {
@@ -66,7 +80,12 @@ export function usePolling<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intervalMs, tick, ...deps]);
 
-  return { data, error, cacheAt, refresh: () => setTick((t) => t + 1) };
+  const refresh = () =>
+    new Promise<void>((resolve) => {
+      waiters.current.push(resolve);
+      setTick((t) => t + 1);
+    });
+  return { data, error, cacheAt, refresh };
 }
 
 /** SSE 订阅告警流。 */

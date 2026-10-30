@@ -31,6 +31,8 @@ export default function App() {
   const [leftCollapsed, setLeftCollapsed] = usePersistedFlag("board.left-collapsed");
   const [rightCollapsed, setRightCollapsed] = usePersistedFlag("board.right-collapsed");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 切换月份后链数据要等一次请求；给用户即时反馈，数据到达即清除
+  const [monthPending, setMonthPending] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setClock(new Date().toLocaleTimeString("zh-CN", { hour12: false })), 1000);
@@ -52,12 +54,12 @@ export default function App() {
   // 四类数据都走「先渲染本地缓存 → 同时发真实请求」的 SWR，切标的时首帧即有内容。
   const { data: ctx, refresh: refreshCtx, cacheAt: ctxCache } = usePolling(
     () => api.etf(etfCode, 1), 10_000, [etfCode], { kind: "ctx", code: etfCode });
-  const { data: chain, cacheAt: chainCache } = usePolling(
+  const { data: chain, refresh: refreshChain, cacheAt: chainCache } = usePolling(
     () => api.chain(etfCode, month ?? undefined), 15_000, [etfCode, month],
     { kind: "chain", code: etfCode, extra: month ?? null });
-  const { data: strategy, cacheAt: planCache } = usePolling(
+  const { data: strategy, refresh: refreshStrategy, cacheAt: planCache } = usePolling(
     () => api.strategy(etfCode, 0, 1), 30_000, [etfCode], { kind: "plan", code: etfCode });
-  const { data: revSignals, cacheAt: sigCache } = usePolling(
+  const { data: revSignals, refresh: refreshSig, cacheAt: sigCache } = usePolling(
     () => api.reversalSignals(etfCode), 30_000, [etfCode], { kind: "sig", code: etfCode });
 
   // 合约：优先链内按 secid 定位，保持实时刷新
@@ -106,7 +108,28 @@ export default function App() {
   // 预取：交易时段 + 可见 + 当前标的四类已就绪后，按左栏顺序串行预热其它标的
   usePrefetch(etfCode, etfs.map((e: any) => e.code), !!(ctxReady && chainReady && strategy && revSignals));
 
-  const onPickContract = (c: any) => setContractSecid(c.secid);
+  // 切月份：立刻给「切换中」反馈，等真实网络请求回来再撤；最短展示 450ms，避免秒回时看不到反馈
+  const onMonth = async (m: number) => {
+    if (m === (month ?? chain?.front_month)) return;
+    setMonth(m);
+    setMonthPending(true);
+    const t0 = Date.now();
+    try {
+      await refreshChain();
+    } catch {
+      /* 失败也会在轮询里重试，这里只负责收起加载态 */
+    } finally {
+      const left = 450 - (Date.now() - t0);
+      if (left > 0) await new Promise((r) => setTimeout(r, left));
+      setMonthPending(false);
+    }
+  };
+
+  // 点选合约（含右侧优选列表）：若该合约不在当前展示月份，顺带切月，否则详情区找不到合约会显示空白
+  const onPickContract = (c: any) => {
+    setContractSecid(c.secid);
+    if (c.month != null && c.month !== (month ?? chain?.front_month)) void onMonth(c.month);
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -166,7 +189,7 @@ export default function App() {
                     </span>
                   )}
                 </div>
-                <CacheTag meta={ctxCache} />
+                <CacheTag meta={ctxCache} onRefresh={refreshCtx} />
               </FrameHeader>
               {ctxReady && (
                 <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-[11px] text-muted-foreground">
@@ -200,9 +223,10 @@ export default function App() {
               {chainReady && !chain.error ? (
                 <OptionTQuote
                   chain={chain}
-                  cacheTag={<CacheTag meta={chainCache} />}
+                  cacheTag={<CacheTag meta={chainCache} onRefresh={refreshChain} />}
                   month={month ?? chain.front_month}
-                  onMonth={setMonth}
+                  onMonth={onMonth}
+                  loading={monthPending}
                   selectedSecid={contractSecid ?? undefined}
                   onSelect={onPickContract}
                 />
@@ -238,7 +262,7 @@ export default function App() {
             <FramePanel dense>
               <FrameHeader className="flex-row items-center justify-between">
                 <FrameTitle className="text-xs">日内方向与信号</FrameTitle>
-                <CacheTag meta={mergeCache(planCache, sigCache)} />
+                <CacheTag meta={mergeCache(planCache, sigCache)} onRefresh={() => Promise.all([refreshStrategy(), refreshSig()]).then(() => {})} />
               </FrameHeader>
               <div className="flex flex-col gap-2 px-3 pb-3">
                 {strategy ? <BiasBar bias={strategy.bias} /> : <BiasBarSkeleton />}
@@ -265,7 +289,7 @@ export default function App() {
             <FramePanel dense>
               <FrameHeader className="flex-row items-center justify-between">
                 <FrameTitle className="text-xs">优选合约（按日内性价比）</FrameTitle>
-                <CacheTag meta={planCache} />
+                <CacheTag meta={planCache} onRefresh={refreshStrategy} />
               </FrameHeader>
               <div className="px-3 pb-3">
                 {!strategy ? (
@@ -337,23 +361,48 @@ function mergeCache(a: CacheMeta | null, b: CacheMeta | null): CacheMeta | null 
 }
 
 /** 数据新鲜度角标：每次刷新后都显式标注——缓存 = 红色，实时 = 绿色。 */
-function CacheTag({ meta }: { meta: CacheMeta | null }) {
-  if (!meta) {
-    return (
-      <Badge variant="success-light" className="shrink-0" title="当前展示的是本轮刷新取回的实时数据">
-        实时
-      </Badge>
-    );
-  }
-  const stale = meta.day !== dayKey();
-  return (
+function CacheTag({ meta, onRefresh }: { meta: CacheMeta | null; onRefresh?: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const stale = !!meta && meta.day !== dayKey();
+  const pending = busy;
+  const badge = pending ? (
+    <Badge variant="destructive-light" className="shrink-0" title="正在重新获取实时数据">
+      <Loader2 className="size-3 animate-spin" aria-hidden />
+      刷新中
+    </Badge>
+  ) : meta ? (
     <Badge
       variant="destructive-light"
       className="shrink-0"
-      title={stale ? "展示的是上一交易日缓存的数据，正在获取最新数据" : "本地缓存数据，正在获取最新数据"}
+      title={stale ? "展示的是上一交易日缓存的数据，点击立即刷新" : "本地缓存数据，点击立即刷新"}
     >
       {stale ? "缓存·昨日" : "缓存"} {hhmmss(new Date(meta.ts))}
     </Badge>
+  ) : (
+    <Badge variant="success-light" className="shrink-0" title="当前展示的是本轮刷新取回的实时数据">
+      实时
+    </Badge>
+  );
+
+  if (!onRefresh) return badge;
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        if (busy) return;
+        setBusy(true);
+        try {
+          await onRefresh();
+        } finally {
+          setBusy(false);
+        }
+      }}
+      disabled={pending}
+      aria-label={pending ? "正在刷新，等待实时数据" : "点击立即获取实时数据"}
+      className="shrink-0 rounded-md transition-colors hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait"
+    >
+      {badge}
+    </button>
   );
 }
 
