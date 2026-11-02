@@ -7,7 +7,7 @@ import logging
 import time
 
 from services import em
-from services.indicators import macd_state, pct_change, volume_stats
+from services.indicators import macd_state, pct_change, support_resistance, volume_stats
 from services.universe import (EXTERNAL, INDICES, NATIONAL_TEAM_ETFS, TRACK_INDEX)
 
 log = logging.getLogger("market")
@@ -107,9 +107,14 @@ async def etf_context(code: str, etf_secid: str) -> dict:
     flow_tail = fl[-5:] if fl else []
     flow_delta = (flow_tail[-1]["main"] - flow_tail[0]["main"]) if len(flow_tail) >= 2 else None
     tr_day = (tr[-1]["time"] or "")[:10] if tr else None
+    # 日内枢轴支撑/压力（供分时图横线）：只用 1 分钟 K，纯本地计算不额外发请求
+    sr = (support_resistance(closes, [b["high"] for b in k1], [b["low"] for b in k1])
+          if len(k1) >= 10 else {})
     return {
         "code": code,  # 供综合方向并入「变盘点」加分（reversal.factor）
         "quote": q, "kline_1m": k1, "trends": tr, "trends_day": tr_day,
+        "support": sr.get("support") or [],
+        "resistance": sr.get("resistance") or [],
         # 盘前 trends 会回退到上一交易日；涨跌幅基准必须用那一日的昨收，而不是今日的
         "trends_prev_close": (em.trend_prev_close(etf_secid)
                               if tr_day and tr_day != time.strftime("%Y-%m-%d") else None),

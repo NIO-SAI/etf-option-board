@@ -43,6 +43,61 @@ def fourth_wednesday(year: int, month: int) -> dt.date:
     return dt.date(year, month, wed[3])
 
 
+def third_friday(year: int, month: int) -> dt.date:
+    """股指期权到期日 = 到期月第 3 个星期五（与 ETF 的第四星期三不同）。"""
+    cal = calendar.monthcalendar(year, month)
+    fri = [w[calendar.FRIDAY] for w in cal if w[calendar.FRIDAY] != 0]
+    return dt.date(year, month, fri[2])
+
+
+# 股指期权合约代码：品种 + YYMM + C/P + 行权价，如 MO2611-C-7000
+_INDEX_CODE_RE = re.compile(r"^(?P<prod>[A-Z]{2})(?P<ym>\d{4})-([CP])-(?P<strike>\d+(?:\.\d+)?)$")
+# 股指期权简称：中证1000购26年11月7000（与 ETF 的「购11月」不同，年份在前）
+_INDEX_NAME_RE = re.compile(
+    r"^(?P<prefix>.+?)(?P<cp>购|沽)(?P<yy>\d{2})年(?P<mon>\d{1,2})月(?P<strike>\d+(?:\.\d+)?)$")
+
+
+def contract_meta(row: dict, meta: dict | None = None) -> dict | None:
+    """合约静态信息：month / strike / is_call / expiry。
+
+    股指期权的代码（MO2611-C-7000）比简称更可靠，优先按代码解析，简称兜底；
+    ETF 期权的代码是纯数字，只能走简称，且行权价要用 f161 的原始字段
+    （简称里的「1050」是 1.050，除权调整后两者可能不一致）。
+    """
+    meta = meta or {}
+    code = (row.get("f12") or "").strip()
+    name = row.get("f14") or ""
+    today = dt.date.today()
+
+    def _expiry(month: int) -> dt.date:
+        if meta.get("kind") == "index":
+            # 股指期权的月份是 YYMM（2611 = 2026-11），要补世纪
+            return third_friday(2000 + month // 100, month % 100)
+        return expiry_date(month, today)
+
+    if meta.get("kind") == "index":
+        m = _INDEX_CODE_RE.match(code)
+        if m:
+            ym = m["ym"]
+            month = int(ym)
+            return {"month": month, "strike": float(m["strike"]),
+                    "is_call": m.group(3) == "C", "expiry": _expiry(month)}
+        m = _INDEX_NAME_RE.match(name)
+        if m:
+            month = int(m["yy"]) * 100 + int(m["mon"])
+            return {"month": month, "strike": float(m["strike"]),
+                    "is_call": m["cp"] == "购", "expiry": _expiry(month)}
+        return None
+
+    p = parse_name(name)
+    if not p:
+        return None
+    strike = em.num(row.get("f161")) or p["strike"]
+    month = p["month"]
+    return {"month": month, "strike": strike, "is_call": p["is_call"],
+            "expiry": _expiry(month)}
+
+
 def expiry_date(month: int, today: dt.date | None = None) -> dt.date:
     today = today or dt.date.today()
     year = today.year
@@ -128,7 +183,11 @@ def _enrich(row: dict, s: float, today: dt.date) -> dict:
 async def _raw_chain(etf: dict) -> list[dict]:
     # 期权列表按行权价归并后是全量列表（612/468 条），单标的链取其前缀
     fields = OPT_LIST_FIELDS
-    rows = await em.clist_all(f"m:{etf['opt_market']}", fields, pz=100, ttl=45.0)
+    # clist 在本机已被接口级封禁（每页空回包各等 1.5s，整链 12s 且只回 1~2 页 → 链不完整）。
+    # 先走「落盘合约清单 + ulist 批量」（0.5s 覆盖全量）；清单为空时才退回 clist 翻页。
+    rows = await em.option_chain_from_universe(etf["opt_market"], fields)
+    if len(rows) < 20:
+        rows = await em.clist_all(f"m:{etf['opt_market']}", fields, pz=100, ttl=45.0)
     prefix = etf["prefix"]
     out = []
     for r in rows:
@@ -298,7 +357,14 @@ async def option_trends(secid: str, ndays: int = 1) -> list[dict]:
 
     注意：本机出口是境外 IP 时，东财 push2 整族被反爬（返空），(1)(2) 必然落空、只能
     走 (3)。让 *.eastmoney.com 直连（绕过境外代理）即可让 (1)(2) 立即生效、无需再改码。
+
+    **2026-11 实测：push2 的 stock/trends2 已被接口级封禁（两族都空回包），探测一次要
+    6s 超时、两层就是 12s——切合约时图表十几秒不动，用户会以为「价格线没变化」。
+    本地 clist 累积已是分钟级完整曲线，所以先看累积，够用就直接返回。**
     """
+    local = await em.opt_trends(secid)
+    if len(local) >= 2:
+        return local
     real = em.parse_trends(await em.trends(secid, ndays=1))
     if len(real) >= 2:
         return real
@@ -331,70 +397,132 @@ def _aggregate(bars: list[dict], n: int) -> list[dict]:
 
 # --------------------------------------------------------------------------
 # 日内合约优选
+#
+# 口径（2026-11 重建）：短期买方视角，八个维度加权，全部 0~1 归一后 × 100。
+#   liq .26   流动性——用**绝对锚点**对数映射（成交额/持仓/成交量），不跟池内最大值比，
+#             否则冷清标的全是"池里最大"也能拿满分，分数跨天/跨标的不可比；
+#   ev  .18   期望收益——标的点位结构（突破/止损/止盈）按 Δ 折算到合约后的 ROI；
+#   delta .14 Delta 弹性——越接近目标 Δ 越好（默认 0.50，顺强趋势略偏虚值）；
+#   theta .12 时间损耗——按"每日衰减 ÷ 权利金"惩罚，自校准可收紧；
+#   atm .08   平值度——贴近平值 Gamma 弹性大；
+#   iv  .08   隐波便宜度——买方付隐波，越便宜越好（旧口径是反的）；
+#   prem .04  溢价率——到期要涨/跌多少才覆盖权利金；
+#   align .06 方向一致性——逆势只作反向备选并降分；
+#   dte .04   剩余天数——临期/远月都扣分。
 # --------------------------------------------------------------------------
-def rank_candidates(chain_data: dict, direction: str = "auto",
-                    top: int = 6) -> list[dict]:
-    """按日内交易性价比为合约打分。
+SCORE_WEIGHTS = {"liq": 0.26, "ev": 0.18, "delta": 0.14, "theta": 0.12,
+                 "atm": 0.08, "iv": 0.08, "prem": 0.04, "align": 0.06,
+                 "dte": 0.04}
 
-    评分维度（专业日内期权选合约）：
-     1) 流动性：成交额、持仓量、买卖价差（权重最高，避免滑点/无法平仓）
-     2) Delta 适宜度：日内方向交易取 |delta| 0.35~0.65（弹性与胜率平衡）
-     3) 隐波水平：高 IV 溢价贵（买方不利），但高波动标的仍可选；用 IV 分位近似
-     4) 溢价率：低溢价（时间价值/标的小）→ 更“实”
-     5) 平值度：越接近平值，gamma 越大，日内弹性越好
-    direction: call / put / auto（auto 结合标的日内涨跌与动量）
-    """
-    contracts = [c for c in chain_data.get("contracts", []) if c.get("last")]
-    if not contracts:
-        return []
-    s = chain_data["underlying"]["price"]
-    front = chain_data.get("front_month")
-    # 池 = 近月 + 次月（日内交易只用近端合约，远月流动性差）
-    months = sorted({c["days"] for c in contracts})[:2]
-    pool = [c for c in contracts if c["days"] in months]
-    if not pool:
-        pool = contracts
+DELTA_BAND = (0.15, 0.85)     # 可交易 Delta 带：再虚/再实都不是日内买方标的
+SPREAD_GATE = 5.0             # 买卖价差 >5% 直接剔除（滑点吃光利润）
+SPREAD_UNKNOWN = 0.35         # 无两侧报价时的中性分（能挂但不知道能不能撮合）
+MAX_PREM = 20.0               # 溢价率百分数：超过即视为"纯赌方向"
+EV_TARGET = 0.30              # ROI 0.30 记为满分期望
+DELTA_DUP = 0.03              # 同月同侧 |Δ| 相差 <0.03 视为同一档，只留一只
 
-    # 方向判定
-    if direction == "auto":
-        direction = "call" if chain_data["underlying"].get("pct", 0) >= 0 else "put"
-    pool = [c for c in pool if c["type"] == direction] or pool
-
-    max_amt = max((c["amount"] for c in pool), default=1) or 1
-    max_oi = max((c["oi"] for c in pool), default=1) or 1
-    ivs = [c["iv"] for c in pool if c["iv"]]
-    iv_min, iv_max = (min(ivs), max(ivs)) if ivs else (0, 1)
-
-    scored = []
-    for c in pool:
-        liq = 0.45 * (c["amount"] / max_amt) + 0.25 * (c["oi"] / max_oi)
-        spread_pen = 0.0
-        if c.get("spread") is not None:
-            spread_pen = min(c["spread"], 20) / 20  # 价差越大越差
-        liq *= (1 - 0.4 * spread_pen)
-        d = abs(c.get("delta") or 0)
-        delta_score = max(0.0, 1 - abs(d - 0.5) / 0.35) if d else 0
-        iv_score = (c["iv"] - iv_min) / (iv_max - iv_min) if c["iv"] and iv_max > iv_min else 0.5
-        prem = c.get("premium_rate")
-        prem_score = max(0.0, 1 - min(abs(prem or 0), 15) / 15)
-        atm_score = max(0.0, 1 - abs(c["moneyness"]) / 0.06)
-        score = (0.40 * liq + 0.18 * delta_score + 0.14 * iv_score
-                 + 0.14 * prem_score + 0.14 * atm_score)
-        c2 = dict(c)
-        c2["score"] = round(score * 100, 1)
-        c2["_parts"] = {"liq": round(liq, 3), "delta": round(delta_score, 3),
-                        "iv": round(iv_score, 3), "prem": round(prem_score, 3),
-                        "atm": round(atm_score, 3)}
-        scored.append(c2)
-    scored.sort(key=lambda x: -x["score"])
-    return scored[:top]
+# 流动性绝对锚点（成交额元 / 持仓张 / 成交量张），对数线性映射到 0~1
+_LIQ_ANCHORS = {
+    "amount": (3e5, 3e8),
+    "oi": (500.0, 5e4),
+    "volume": (100.0, 3e4),
+}
 
 
 def _clip(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, v))
 
 
-def _expiry_score(days: int) -> float:
+def _lognorm(v: float, lo: float, hi: float) -> float:
+    """对数映射到 0~1：v<=lo → 0，v>=hi → 1（量级差异大的指标用）。"""
+    import math
+    v = max(float(v or 0.0), 0.0)
+    if v <= lo:
+        return 0.0
+    if v >= hi:
+        return 1.0
+    return _clip(math.log(v / lo) / math.log(hi / lo))
+
+
+def _liquidity(c: dict) -> float:
+    """流动性 0~1：成交额为主，持仓/成交量为辅，盘口价差单独一项。
+
+    三个量都用绝对锚点（对数映射），不跟池内最大值比——否则冷清标的全是「池里
+    最大」也能拿满分，分数跨天/跨标的不可比。
+    """
+    amount = _lognorm(c.get("amount") or 0, *_LIQ_ANCHORS["amount"])
+    oi = _lognorm(c.get("oi") or 0, *_LIQ_ANCHORS["oi"])
+    volume = _lognorm(c.get("volume") or 0, *_LIQ_ANCHORS["volume"])
+    spread = c.get("spread")
+    spread_score = SPREAD_UNKNOWN if spread is None else 1.0 - _clip(spread / SPREAD_GATE)
+    return (0.50 * amount + 0.22 * oi + 0.18 * volume + 0.10 * spread_score)
+
+
+def _expectancy(c: dict, levels: dict | None, spot: float | None) -> dict | None:
+    """把标的点位按 Δ 折算成合约价，算一张合约的期望 ROI。
+
+    分子分母都用**入场成本**口径：
+      cost = 现价 + Δ×(entry_break − spot)        ← 触发买入价对应的权利金
+      up   = Δ × (target − entry_break)            ← 到止盈标的位的权利金增量
+      down = −Δ × (stop − entry_break)             ← 到止损标的位的权利金缩水，
+                                                    再被合约层硬止损 30% 兜住
+      roi  = (p×up − (1−p)×down) / cost，p = |Δ|
+    用带符号的 Δ 乘价差，call 与 put 共用一套公式（put 的 Δ<0、target 在下）。
+    """
+    if not levels:
+        return None
+    entry_break = levels.get("entry_break")
+    stop = levels.get("stop")
+    target = levels.get("target")
+    if entry_break is None or stop is None or target is None:
+        return None
+    delta = c.get("delta") or 0.0
+    last = c.get("last") or 0.0
+    if not delta or not last:
+        return None
+    spot = spot or entry_break
+    p = abs(delta)
+    cost = last + delta * (entry_break - spot)
+    if cost <= 0:
+        return None
+    to_target = delta * (target - entry_break)
+    to_stop = delta * (stop - entry_break)
+    up = max(to_target, 0.0)         # 方向与计划相反时不构成可交易期望
+    down = min(max(-to_stop, 0.0), 0.30 * cost)
+    roi = (p * up - (1 - p) * down) / cost
+    return {"ev": round(p * up - (1 - p) * down, 4), "roi": round(roi, 3),
+            "up": round(up, 4), "down": round(down, 4), "p": round(p, 3),
+            "reversed": bool(delta * (target - entry_break) < 0)}
+
+
+def _iv_score(c: dict, stats: dict, trend: dict,
+              iv_range: tuple[float, float] | None = None) -> float:
+    """隐波便宜度 0~1，两个口径各占一半：
+
+    - 绝对：IV 20 日分位 / IV-RV 比（vol.iv_cheapness），衡量"贵不贵"；
+    - 相对：同侧合约里的 IV 高低，衡量"这只比同链其他档贵不贵"。
+    两者都缺时给 0.5，不奖不罚（缺 IV 的合约排在同侧最便宜与最贵之间）。
+    """
+    from services import vol as volsvc
+    pctl = (stats or {}).get("atm_iv_pctl20")
+    ratio = (trend or {}).get("iv_rv_ratio")
+    cheap = volsvc.iv_cheapness(pctl, ratio)
+    iv = c.get("iv")
+    rel = None
+    if iv and iv_range:
+        lo, hi = iv_range
+        if hi > lo:
+            rel = _clip((hi - iv) / (hi - lo))
+    if cheap is None and rel is None:
+        return 0.5
+    if cheap is None:
+        return _clip(rel)
+    if rel is None:
+        return _clip(cheap)
+    return _clip(0.5 * cheap + 0.5 * rel)
+
+
+def _dte_score(days: int) -> float:
     """日内买方：近月最优；临期 Theta 风险大，远月流动性/弹性差。"""
     if days <= 2:
         return 0.25
@@ -405,118 +533,205 @@ def _expiry_score(days: int) -> float:
     return 0.45
 
 
-def _score_side(contracts: list[dict], side: str, trend: dict) -> dict | None:
-    """对单个方向（call/put）的全部合约打分，返回最优一只。"""
-    pool = [c for c in contracts
-            if c.get("type") == side and (c.get("last") or 0) > 0
-            and c.get("delta") is not None and abs(c["delta"]) >= 0.05]
-    if not pool:
-        return None
-
-    t_dir = (trend or {}).get("direction") or "neutral"
-    t_score = float((trend or {}).get("score") or 0)
-    strength = _clip(abs(t_score) / 100.0)
-    # 趋势越强越略偏虚值（杠杆高）；震荡市回到平值附近（胜率高）
-    target_delta = 0.50 - 0.05 * strength if t_dir == side else 0.50
-
-    amts = [max(c.get("amount") or 0, 0) for c in pool]
-    ois = [max(c.get("oi") or 0, 0) for c in pool]
-    vols = [max(c.get("volume") or 0, 0) for c in pool]
-    max_amt = max(amts) or 1
-    max_oi = max(ois) or 1
-    max_vol = max(vols) or 1
-    ivs = [c["iv"] for c in pool if c.get("iv")]
-    iv_min, iv_max = (min(ivs), max(ivs)) if ivs else (0.0, 1.0)
-    atm_iv_pctl = ((trend or {}).get("atm_iv_pctl20"))
-
-    best = None
-    for c in pool:
-        amount = max(c.get("amount") or 0, 0)
-        oi = max(c.get("oi") or 0, 0)
-        vol = max(c.get("volume") or 0, 0)
-        # 流动性：成交额为主，持仓/成交量为辅；盘后无买卖盘时给中性分
-        liq_raw = (0.55 * (amount / max_amt)
-                   + 0.25 * (oi / max_oi)
-                   + 0.20 * (vol / max_vol))
-        spread = c.get("spread")
-        spread_score = 0.5 if spread is None else 1 - _clip(spread / 8.0)
-        liq = 0.80 * liq_raw + 0.20 * spread_score
-
-        raw_delta = c.get("delta") or 0
-        d = abs(raw_delta)
-        delta_score = _clip(1 - abs(d - target_delta) / 0.30)
-        atm_score = _clip(1 - abs(c.get("moneyness") or 0) / 0.07)
-        iv = c.get("iv")
-        iv_score = (1 - _clip((iv - iv_min) / (iv_max - iv_min))
-                    if iv and iv_max > iv_min else 0.5)
-        # 高 IV 分位整体压一档（买方付贵）
-        if atm_iv_pctl is not None:
-            if atm_iv_pctl >= 75:
-                iv_score *= 0.75
-            elif atm_iv_pctl <= 25:
-                iv_score = min(1.0, iv_score + 0.10)
-
-        last = c.get("last") or 0
-        theta = abs(c.get("theta") or 0)
-        daily_decay = theta / last if last else 0
-        theta_score = _clip(1 - daily_decay / 0.08)
-        prem = abs(c.get("premium_rate") or 0)
-        prem_score = _clip(1 - prem / 20.0)
-        exp_score = _expiry_score(int(c.get("days") or 0))
-
-        if t_dir == "neutral":
-            align = 0.5
-        elif t_dir == side:
-            align = 0.65 + 0.35 * strength
-        else:
-            align = _clip(0.40 - 0.30 * strength, 0.0, 0.40)
-
-        score = (0.27 * liq + 0.20 * delta_score + 0.12 * atm_score
-                 + 0.10 * iv_score + 0.11 * theta_score + 0.06 * prem_score
-                 + 0.08 * align + 0.06 * exp_score)
-
-        # 理由（按最重要维度取 3~5 条）
-        reasons = []
-        if t_dir == side and strength >= 0.15:
-            reasons.append("与当前标的趋势同向")
-        elif t_dir in ("call", "put") and strength >= 0.4:
-            reasons.append("逆当前趋势，仅作反向备选")
-        if liq >= 0.65:
-            amt_txt = f"{amount / 1e8:.2f} 亿" if amount >= 1e8 else f"{amount / 1e4:.0f} 万"
-            reasons.append(f"流动性好（成交额 {amt_txt}）")
-        if spread is not None and spread <= 2 and liq_raw >= 0.4:
-            reasons.append(f"买卖价差 {spread:.2f}% 偏窄")
-        reasons.append(f"Δ{raw_delta:+.2f}，日内弹性/胜率平衡")
-        if abs(c.get("moneyness") or 0) <= 0.02:
-            reasons.append("贴近平值，Gamma 弹性大")
-        elif t_dir == side and strength >= 0.4 and d <= 0.45:
-            reasons.append("顺势轻度虚值，杠杆更高")
-        if iv and iv_max > iv_min and iv_score >= 0.6:
-            reasons.append(f"IV {iv:.1f}%，同侧偏低")
-        if daily_decay <= 0.03:
-            reasons.append(f"剩余 {int(c.get('days') or 0)} 天，Theta 衰减可控")
-        elif daily_decay >= 0.06:
-            reasons.append(f"Theta {daily_decay * 100:.1f}%/日，注意时间损耗")
-        c2 = {k: v for k, v in c.items() if not k.startswith("_")}
-        c2.update({
-            "score": round(score * 100, 1),
-            "trend_aligned": bool(t_dir == side and strength >= 0.15),
-            "target_delta": round(target_delta, 2),
-            "reasons": reasons[:5],
-        })
-        if best is None or c2["score"] > best["score"]:
-            best = c2
-    return best
+POOL_MAX_DAYS = 75             # 池上限：只保留剩余 75 天内的近端合约
 
 
-def best_buys(chain_data: dict, trend: dict | None = None) -> dict:
-    """对**全部合约**按日内买方标准打分，多/空各选一只最优，并结合标的趋势给出主推方向。
+def _pool(chain_data: dict) -> list[dict]:
+    """可交易池：最近两个到期月里的近端合约（日内不用远月，流动性/弹性都差）。
 
-    日内买方核心：流动性（能进能出）> Delta 弹性（0.35~0.65）> 平值度/Gamma >
-    隐波成本 > Theta 衰减 > 溢价率 > 到期远近 > 是否顺势。
-    两个方向都会给出，逆势方向只作为反向备选并降低评分。
+    按「月份」筛会漏掉 month=0（简称解析失败）或跨年同月的合约，再按天数兜一道；
+    远月（>POOL_MAX_DAYS）即使月份相邻也不进池。
     """
-    contracts = chain_data.get("contracts") or []
+    contracts = [c for c in (chain_data.get("contracts") or [])
+                 if (c.get("last") or 0) > 0]
+    if not contracts:
+        return []
+    days_of: dict[int, int] = {}
+    for c in contracts:
+        m = c.get("month") or 0
+        days_of[m] = min(days_of.get(m, 10 ** 6), int(c.get("days") or 0))
+    keep = {m for m, _ in sorted(days_of.items(), key=lambda kv: kv[1])[:2]}
+    return [c for c in contracts
+            if (c.get("month") or 0) in keep
+            and int(c.get("days") or 0) <= POOL_MAX_DAYS]
+
+
+def _target_delta(trend: dict, side: str, calib: dict | None) -> float:
+    t_dir = (trend or {}).get("direction") or "neutral"
+    strength = _clip(abs(float((trend or {}).get("score") or 0)) / 100.0)
+    target = 0.50 - 0.05 * strength if t_dir == side else 0.50
+    shift = float((calib or {}).get("target_delta_shift") or 0.0)
+    if shift:
+        # 自校准：历史命中最好的 Δ 档偏高就整体上移（<=0.05）
+        target = _clip(target + shift, 0.20, 0.85)
+    return target
+
+
+def _score_contract(c: dict, side: str, spot: float, stats: dict, trend: dict,
+                    levels: dict | None, calib: dict | None,
+                    iv_range: tuple[float, float] | None = None) -> dict:
+    """单只合约打分（看板列表 / best_buys / 告警共用同一套）。"""
+    t_dir = (trend or {}).get("direction") or "neutral"
+    strength = _clip(abs(float((trend or {}).get("score") or 0)) / 100.0)
+    raw_delta = c.get("delta") or 0.0
+    d = abs(raw_delta)
+    target_delta = _target_delta(trend, side, calib)
+
+    liq = _liquidity(c)
+    delta_score = _clip(1 - abs(d - target_delta) / 0.30)
+    atm_score = _clip(1 - abs(c.get("moneyness") or 0) / 0.07)
+    iv_score = _iv_score(c, stats, trend, iv_range)
+
+    last = c.get("last") or 0.0
+    theta = abs(c.get("theta") or 0.0)
+    daily_decay = (theta / last) if last else 0.0
+    theta_gain = float((calib or {}).get("theta_gain") or 1.0)
+    if c.get("theta") is None or not last:
+        theta_score = 0.5          # 缺 Theta 数据：中性分，不奖不罚
+    else:
+        theta_score = _clip(1 - daily_decay * theta_gain / 0.08)
+
+    prem = c.get("premium_rate")
+    prem_score = 0.5 if prem is None else _clip(1 - abs(prem) / MAX_PREM)
+
+    dte_score = _dte_score(int(c.get("days") or 0))
+
+    if t_dir == "neutral":
+        align = 0.5
+    elif t_dir == side:
+        align = 0.65 + 0.35 * strength
+    else:
+        align = _clip(0.40 - 0.30 * strength, 0.0, 0.40)
+
+    rr = _expectancy(c, levels, spot)
+    ev_score = _clip(rr["roi"] / EV_TARGET) if rr else 0.5
+
+    parts = {"liq": liq, "ev": ev_score, "delta": delta_score, "theta": theta_score,
+             "atm": atm_score, "iv": iv_score, "prem": prem_score, "align": align,
+             "dte": dte_score}
+    score = sum(SCORE_WEIGHTS[k] * v for k, v in parts.items()) * 100
+
+    reasons = _reasons(c, side, trend, strength, liq, raw_delta, d, target_delta,
+                       iv_score, daily_decay, rr, parts)
+    out = {k: v for k, v in c.items() if not k.startswith("_")}
+    out.update({
+        "score": round(score, 1),
+        "trend_aligned": bool(t_dir == side and strength >= 0.15),
+        "target_delta": round(target_delta, 2),
+        "rr": rr,
+        "_parts": {k: round(v, 3) for k, v in parts.items()},
+        "reasons": reasons[:5],
+    })
+    return out
+
+
+def _reasons(c: dict, side: str, trend: dict, strength: float, liq: float,
+             raw_delta: float, d: float, target_delta: float, iv_score: float,
+             daily_decay: float, rr: dict | None, parts: dict) -> list[str]:
+    t_dir = (trend or {}).get("direction") or "neutral"
+    out: list[str] = []
+    if t_dir == side and strength >= 0.15:
+        out.append("与当前标的趋势同向")
+    elif t_dir in ("call", "put") and t_dir != side:
+        out.append("逆当前方向，仅作反向备选")
+    amount = c.get("amount") or 0
+    if liq >= 0.65:
+        amt_txt = f"{amount / 1e8:.2f}亿" if amount >= 1e8 else f"{amount / 1e4:.0f}万"
+        out.append(f"流动性好（成交额 {amt_txt}）")
+    spread = c.get("spread")
+    if spread is not None and spread <= 2 and liq >= 0.3:
+        out.append(f"买卖价差 {spread:.2f}% 偏窄")
+    if rr:
+        out.append(f"盈亏比：期望收益 {rr['roi'] * 100:+.0f}% 权利金"
+                   f"（p≈{rr['p']}，赚 {rr['up']} / 亏 {rr['down']}）")
+    out.append(f"Δ{raw_delta:+.2f}（目标 {target_delta:.2f}），日内弹性/胜率平衡")
+    if abs(c.get("moneyness") or 0) <= 0.02:
+        out.append("贴近平值，Gamma 弹性大")
+    iv = c.get("iv")
+    if iv and iv_score >= 0.6:
+        out.append(f"IV {iv:.1f}% 偏低，买方付得便宜")
+    elif iv and iv_score <= 0.25:
+        out.append(f"IV {iv:.1f}% 偏贵，买方成本高")
+    days = int(c.get("days") or 0)
+    if daily_decay <= 0.03:
+        out.append(f"剩余 {days} 天，Theta 衰减可控")
+    elif daily_decay >= 0.06:
+        out.append(f"Theta {daily_decay * 100:.1f}%/日，注意时间损耗")
+    return out
+
+
+def _dedupe(rows: list[dict]) -> list[dict]:
+    """同月同侧 |Δ| 相差 <DELTA_DUP 的合约只留评分最高的一只（行权价挨太近）。"""
+    kept: list[dict] = []
+    for r in rows:
+        dup = next((k for k in kept
+                    if k.get("month") == r.get("month")
+                    and k.get("type") == r.get("type")
+                    and abs(abs(k.get("delta") or 0) - abs(r.get("delta") or 0)) < DELTA_DUP),
+                   None)
+        if dup is None:
+            kept.append(r)
+    return kept
+
+
+def _label(rows: list[dict]) -> list[dict]:
+    for i, r in enumerate(rows):
+        r["role"] = "主选" if i == 0 else "备选"
+    return rows
+
+
+def rank_candidates(chain_data: dict, direction: str = "auto", top: int = 6,
+                    trend: dict | None = None, levels: dict | None = None,
+                    spot: float | None = None, calib: dict | None = None) -> list[dict]:
+    """按日内买方性价比为合约打分，返回主选在前的列表。
+
+    ``direction`` 为明确方向（call/put）时只返回该侧合约——即使与市场方向相反，
+    也照常返回并标 ``trend_aligned=False``（反向备选卡需要它）；``auto`` 时按趋势/
+    标的涨跌幅择边。池固定为最近两个月，先按 Delta 带与价差闸过滤。
+    """
+    t_dir = (trend or {}).get("direction") or "neutral"
+    if direction == "auto":
+        if t_dir in ("call", "put"):
+            side = t_dir
+        else:
+            pct = ((chain_data.get("underlying") or {}).get("pct") or 0)
+            side = "call" if pct >= 0 else "put"
+    elif direction in ("call", "put"):
+        side = direction
+    else:
+        side = "call"
+
+    pool = _pool(chain_data)
+    if not pool:
+        return []
+    spot = spot or (chain_data.get("underlying") or {}).get("price") or 0.0
+    stats = chain_data.get("stats") or {}
+
+    sided = [c for c in pool if c.get("type") == side]
+    if not sided:
+        return []
+    # Delta 带：全在外面时退化为不过滤（否则整块推荐消失）
+    band = [c for c in sided
+            if DELTA_BAND[0] <= abs(c.get("delta") or 0) <= DELTA_BAND[1]]
+    if band:
+        sided = band
+    # 价差闸：全被剔除时同样退化，保证表格有行可看
+    tight = [c for c in sided
+             if c.get("spread") is None or c["spread"] <= SPREAD_GATE]
+    if tight:
+        sided = tight
+
+    ivs = [c["iv"] for c in sided if c.get("iv")]
+    iv_range = (min(ivs), max(ivs)) if len(ivs) >= 2 else None
+    scored = [_score_contract(c, side, spot, stats, trend, levels, calib, iv_range)
+              for c in sided]
+    scored.sort(key=lambda x: -x["score"])
+    return _label(_dedupe(scored))[:top]
+
+
+def best_buys(chain_data: dict, trend: dict | None = None, levels: dict | None = None,
+              spot: float | None = None, calib: dict | None = None) -> dict:
+    """多/空各选一只最优（与 rank_candidates 同一套打分），并给出主推方向。"""
     trend = dict(trend or {})
     t_dir = trend.get("direction") or "neutral"
     t_score = float(trend.get("score") or 0)
@@ -525,23 +740,27 @@ def best_buys(chain_data: dict, trend: dict | None = None) -> dict:
     trend["label"] = {"call": "看多", "put": "看空"}.get(t_dir, "震荡/观望")
     trend["atm_iv_pctl20"] = (chain_data.get("stats") or {}).get("atm_iv_pctl20")
 
-    call = _score_side(contracts, "call", trend)
-    put = _score_side(contracts, "put", trend)
-    if not call and not put:
+    call = rank_candidates(chain_data, "call", top=1, trend=trend,
+                           levels=levels, spot=spot, calib=calib)
+    put = rank_candidates(chain_data, "put", top=1, trend=trend,
+                          levels=levels, spot=spot, calib=calib)
+    call_c = call[0] if call else None
+    put_c = put[0] if put else None
+    if not call_c and not put_c:
         return {"trend": trend, "call": None, "put": None, "recommended": None}
 
-    # 主推：趋势明确且够强时顺趋势；否则取两方向评分更高者
     if t_dir in ("call", "put") and trend["strength"] >= 0.15:
         rec_side = t_dir
     else:
-        rec_side = "call" if (call and (not put or call["score"] >= put["score"])) else "put"
-    rec = call if rec_side == "call" else put
+        rec_side = ("call" if (call_c and (not put_c or call_c["score"] >= put_c["score"]))
+                    else "put")
+    rec = call_c if rec_side == "call" else put_c
     recommended = None
     if rec:
         recommended = {"side": rec_side, "code": rec["code"], "secid": rec["secid"],
-                        "name": rec["name"], "score": rec["score"],
-                        "month": rec["month"], "trend_aligned": rec["trend_aligned"]}
-    return {"trend": trend, "call": call, "put": put, "recommended": recommended}
+                       "name": rec["name"], "score": rec["score"],
+                       "month": rec["month"], "trend_aligned": rec["trend_aligned"]}
+    return {"trend": trend, "call": call_c, "put": put_c, "recommended": recommended}
 
 
 def summarize_for_llm(chain_data: dict, direction: str = "auto") -> dict:

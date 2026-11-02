@@ -1,5 +1,9 @@
 # AGENTS.md — ETF 期权日内决策看板
 
+> **2026-11-01 源码回滚事故已恢复**（另一个会话把 10-30 之后的所有改动 `git checkout` 掉并删了
+> `services/index_option.py`）。恢复过程与规格见 `.scratch/restore-2026-11-01.md`。
+> 教训：**同一工作区不要并行开两个会话说改代码**，会互相覆盖；需要并行时用 `enter_worktree` 隔离。
+
 ## 项目概览
 
 A 股 9 只可交易期权的宽基 ETF 的**日内决策看板**。后端 FastAPI（Python）聚合东财行情/期权链/
@@ -48,10 +52,30 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   （stale-while-error，绝不抛异常）。新接口都加在这里。
 - 加一个接口：后端路由写 `routers/api.py`（前缀 `/api`），业务逻辑放 `services/`；
   前端在 `web/src/lib/api.ts` 加方法，轮询用 `web/src/lib/usePolling.ts`。K 线 `klt∈{1,5,15,30,60,101}`（3 分钟本地由 1 分钟聚合）。
-- **数据源策略（重要，2026-10 起）**：本机出口经代理（境外 IP），东财 `push2/push2his` 常被反爬
-  限流（空回包）。故行情/期权链主源改用 **`emdatah5.eastmoney.com`**（`getZJLXData`＝个股/指数/
-  外围/期权行情+资金流，`getZDYLBData`＝clist 同参同构），K线/分时走**腾讯**（`ifzq.gtimg.cn`），
-  `push2/push2his` 仅兜底。排查"没数据"先看这三条链路，别急着怪"没开盘"。
+- **数据源策略（2026-11-01 实测更新）**：东财 `push2` 的 **`stock/*` 接口在本机被接口级封禁**
+  （`trends2` / `kline` / `get`：TCP 443 可连、TLS 握手和证书都正常、请求发出后对端空回包，
+  IPv4/IPv6、TLS1.2、跳过证书、换 UA/Cookie、真实 Chrome 全部一样；根路径 404 说明服务器活着）。
+  **但 `clist/get` 与 `ulist.np/get` 仍 200**（2026-11-02 复测：**clist 也开始空回包**，
+  ulist 稳定 200，所以全市场快照已改走 ulist）—— 所以：
+  - 合约分钟线靠 **`em.option_snapshot_batch()`** 每分钟累积，由 `monitor` 后台任务调用
+    （不阻塞告警链路）。**主路径是 ulist 批量报价**：合约清单落盘 `data/option_universe.json`
+    （1268 个 secid，clist 能翻时建一次），之后每轮 4 个 ulist 请求（400 只/次、并发）
+    即可覆盖全市场，实测 **0.8s**；旧版 clist 翻页要 39s，且 clist 被封时直接拿不到。
+    clist 只在清单为空（首次冷启动）时兜底一次。
+  - 期权链 `option_service._raw_chain` 同理：优先 `em.option_chain_from_universe()`（清单+ulist，
+    ulist 返回字段与 clist diff 同构），`len(rows) < 20` 才退回 `clist_all`
+    （clist 被封时它要 12s 且只回 1~2 页 → 链不完整、月份缺）。
+  - `em._curl_json_v6` 走 IPv6：**先查一次 AAAA 并缓存 10 分钟，再用 `curl -6 --resolve`**
+    （fake-IP 下系统 DNS 只给 198.18.x 伪地址，**不能**用裸 `curl -6`）。
+    每次请求现场 `--doh-url` 解析要 1.11s（占单请求 1.4s 的 79%），缓存后降到 0.2~0.3s；
+    固定 IP 空回包会自动丢缓存并退回 `--doh-url` 重新解析。
+    **接口空回包（curl exit 52）不算通道故障**，不触发 `_V6_DEAD`，
+    否则 trends2 被封会把 clist/ulist 一起熔断；
+  - 行情/期权链主源仍是 **`emdatah5.eastmoney.com`**（`getZJLXData`/`getZDYLBData`），
+    K线/分时走**腾讯**（`ifzq.gtimg.cn`：复权 `fqkline` 被 WAF 拦时要退回不复权 `kline/kline`，否则日线/MA/关键位全空）。
+  排查"没数据"按这三条链路走，别先怪没开盘。
+- **冷启动预热**：`monitor._prewarm()` 启动后台跑一次 `strategy.directions()`（12 个标的要 8s），
+  否则用户重启服务后第一次打开看板要干等十几秒。
 - 资金流分钟序列：`services/em.py::fflow` 在交易时段内每次调用都用 emdatah5 快照累积
   并落盘 `data/flow_history.jsonl`（push2 fflow 收盘后常返回空 klines，且经代理易被限流）。
   收盘后/进程重启后用本地累积兜底，保证分时资金流图表可复盘；注意累积的是日累计值
@@ -64,6 +88,17 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
 - 隐波/希腊字母由 `services/bs.py` 自算（Eastmoney 不直接给），到期日 = 到期月第 4 个星期三。
 - 前端组件：REUI（`web/src/components/reui/*`，Tailwind v4 语法）与自研 shadcn 风格
   `web/src/components/ui/*` 混用；图表用 ECharts（`components/charts`）。
+- **中栏布局约定（2026-11-01）**：行情卡（分时图 + 两个横线开关 + 高度×2）→ T 型报价 →
+  **合约分时图** → 决策区（策略与仓位 / 今日推荐合约 / 标的点位 / 合约买卖点，都在 `PlanCard`）
+  → 优选合约 → 大模型决策。决策类卡片一律放中栏、合约分时图**下面**；右栏只留实时告警、
+  日内方向与信号、Kronos、到期日历。
+- **合约图三组横线**（支撑/压力、止盈/止损、打和点）：按钮常驻（数据没到只置灰），
+  且**线不依赖分时数据存在**——`optPrice` 为空时仍保留一个空 data 的「合约价格」series
+  来承载 `markLine`，否则分时源一断，线和开关会一起「消失」（用户会以为开关失效）。
+  分时源全断时用 `optLast`（合约现价）+ Δ 合成一条虚线走势兜底。
+- **分时缓存**：合约分时/买卖点走 `usePolling` 的 IndexedDB 缓存（kind=`trends`/`levels`），
+  切合约先渲染缓存；**缓存比轮询周期新时不发首轮请求**，来回切标的/合约几乎不产生请求。
+  盘中 15s、非交易 120s，页面切后台暂停。
 - **分时图时间轴约定（2026-10-19 起）**：轴一律由完整行情分时（`trends`，腾讯）定义；
   资金流/期权等稀疏序列必须用 `web/src/lib/series.ts` 的 `trimSession` + `alignToAxis`
   按「最近前值 + 同日校验」对齐。**禁止再用 `HH:MM` 精确相等 join**——东财资金流首点是

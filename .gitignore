@@ -7,6 +7,9 @@ venv/
 # Data / cache
 data/cache/
 data/*.json
+data/*.jsonl
+data/.deploy_token
+data/.deploy_status
 !data/.gitkeep
 
 # Secrets
@@ -17,6 +20,15 @@ data/*.json
 # Node (web)
 web/node_modules/
 web/.vite/
+
+# Agent 本地配置与调试产物
+.commandcode/
+.scratch/*.png
+.scratch/*.js
+.scratch/*.html
+
+# 期权 独立 agent skill（本地资产，不入库）
+期权/
 
 # OS
 .DS_Store

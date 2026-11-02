@@ -8,7 +8,7 @@
  *  - 总量 20MB 上限，按最后访问时间淘汰。
  */
 
-export type CacheKind = "ctx" | "chain" | "plan" | "sig";
+export type CacheKind = "ctx" | "chain" | "plan" | "sig" | "trends" | "levels";
 
 const DB_NAME = "etf-board";
 const STORE = "entries";
@@ -32,8 +32,11 @@ export function dayKey(d = new Date()): string {
   }
 }
 
+// v2：修复前「切合约时旧请求把数据写进新合约的键」污染过缓存，加版本段让旧键自然失效。
+const CACHE_VER = "v2";
+
 const keyOf = (kind: CacheKind, code: string, extra?: string | number | null) =>
-  `${kind}|${code}|${extra ?? "-"}`;
+  `${CACHE_VER}|${kind}|${code}|${extra ?? "-"}`;
 
 function open(): Promise<IDBDatabase | null> {
   if (dbp) return dbp;

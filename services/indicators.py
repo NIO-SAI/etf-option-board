@@ -124,8 +124,25 @@ def volume_stats(vols: list[float], closes: list[float] | None = None) -> dict:
     }
 
 
+def merge_levels(vals: list[float], tol: float = 0.003) -> list[float]:
+    """把相对距离小于 ``tol``（默认 0.3%）的价位合并成一档。
+
+    枢轴点常常扎堆：ETF 报价到 0.001，4.061 与 4.064 其实是同一道关口，
+    画成两条横线只会让图面变糊。保留先出现的那一档，顺序不变。
+    """
+    out: list[float] = []
+    for v in vals or []:
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        if all(abs(v - x) / max(abs(x), 1e-9) > tol for x in out):
+            out.append(v)
+    return out
+
+
 def support_resistance(closes: list[float], highs: list[float], lows: list[float]) -> dict:
-    """用日内枢轴/前高前低估算支撑与压力。"""
+    """用日内枢轴/前高前低估算支撑与压力（相邻档位先合并，避免重复横线）。"""
     if not closes:
         return {}
     hi, lo = max(highs), min(lows)
@@ -133,11 +150,28 @@ def support_resistance(closes: list[float], highs: list[float], lows: list[float
     ph, pl = _pivots(closes, 3)
     highs_px = sorted({closes[i] for i in ph}, reverse=True)
     lows_px = sorted({closes[i] for i in pl})
-    res = [x for x in highs_px if x > last][:2]
-    sup = [x for x in lows_px if x < last][-2:]
+    # 取「离现价最近」的一档：日内真正有用的是最近那道关口，而不是全天最高/最低那两个点。
+    # 只留一条——图上多画一条只会让人分不清哪条是要用的。
+    res_cands = sorted((x for x in highs_px if x > last), key=lambda x: x - last)[:1]
+    sup_cands = sorted((x for x in lows_px if x < last), key=lambda x: last - x)[:1]
+    res = sorted(merge_levels(res_cands))
+    sup = sorted(merge_levels(sup_cands))
+    # 全量档位（近→远）：出「止盈位」时要往上/下找下一道结构位，只有最近一档不够用。
+    res_all = sorted(merge_levels([x for x in highs_px if x > last]))
+    sup_all = sorted(merge_levels([x for x in lows_px if x < last]), reverse=True)
+    # 跨侧去重：现价在一条窄幅里来回磨时，最近的支撑与压力会贴在一起（如 4.064 / 4.066），
+    # 画出来是两根几乎重叠的线。此时只保留离现价更远的那条，另一侧不再画。
+    if res and sup:
+        near_res, near_sup = res[0], sup[-1]
+        if abs(near_res - near_sup) / max(abs(last), 1e-9) < 0.003:
+            if abs(near_res - last) >= abs(last - near_sup):
+                sup = sup[:-1]
+            else:
+                res = res[1:]
     return {
         "day_high": hi, "day_low": lo, "last": last,
         "resistance": res, "support": sup,
+        "resistances": res_all, "supports": sup_all,
         "pivot_high": round((hi + lo + last) / 3, 4),
     }
 

@@ -10,7 +10,7 @@ import datetime as dt
 import logging
 
 from config import settings
-from services import (alerts, decision, deploy as deploy_svc, market_service as ms,
+from services import (alerts, decision, deploy as deploy_svc, em, market_service as ms,
                       reversal, strategy, user_settings as usv)
 from services.universe import ETFS
 
@@ -23,6 +23,34 @@ _key_fired: set[str] = set()
 # 临期提醒已发记录（key 含日期与档位）。告警总线默认 90 秒冷却完全挡不住
 # 「9 只标的 × 已临期月份」的重复，必须按日去重。
 _expiry_fired: set[str] = set()
+
+
+_batch_busy = False
+_warmed = False
+
+
+async def _option_batch() -> None:
+    """全市场期权快照 → 分钟累积（后台任务，上一轮没跑完就跳过）。"""
+    global _batch_busy
+    if _batch_busy:
+        return
+    _batch_busy = True
+    try:
+        await em.option_snapshot_batch()
+    except Exception as exc:  # noqa: BLE001 — 累积失败不影响告警
+        log.debug("合约分钟批量累积失败: %s", exc)
+    finally:
+        _batch_busy = False
+
+
+async def _prewarm() -> None:
+    """启动后预热方向表（冷启动要拉 12 个标的，8s）：否则用户重启后第一次
+    打开看板要等十几秒。 """
+    try:
+        await strategy.directions()
+        log.info("方向表预热完成")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("预热方向表失败: %s", exc)
 
 
 async def _expiry_alert(now: dt.datetime) -> None:
@@ -187,7 +215,11 @@ def _in_trading_window(now: dt.datetime) -> bool:
 
 
 async def cycle() -> None:
+    global _warmed
     now = dt.datetime.now()
+    if not _warmed:
+        _warmed = True
+        asyncio.create_task(_prewarm())
     # 临期提醒是日期型信号，不该被交易时段挡住——开盘前就该看到「今天到期」
     await _expiry_alert(now)
     if not _in_trading_window(now):
@@ -202,6 +234,9 @@ async def cycle() -> None:
     except Exception:  # noqa: BLE001
         nt = {}
     await _national_team_alert(nt)
+    # 合约分钟累积：push2 的 stock/* 被接口级封禁，clist 仍可用 → 翻页记全市场。
+    # 一轮约 20~40s（接口限流 + 重试），**后台跑不阻塞告警链路**；上一轮没完成就跳过。
+    asyncio.create_task(_option_batch())
     await asyncio.gather(*[_check_etf(e, key_hm) for e in ETFS], return_exceptions=True)
     _state["last_cycle"] = now.isoformat(timespec="seconds")
     _state["cycles"] += 1

@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/reui/badge";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { OverlayChart, PredictChart } from "@/components/charts";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/misc";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
+import { AutoTip, GLOSSARY, Tip } from "@/components/ui/term";
 import { clsUpDown, money, nf, pct } from "@/lib/format";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
@@ -12,17 +13,29 @@ import { BrainCircuit, Loader2 } from "lucide-react";
 
 /* ---------------- 合约详情（分时叠加） ---------------- */
 export function ContractDetail({
-  contract, etfTrends, flow, etfPrevClose = null,
+  contract, code = "", etfTrends, flow, etfPrevClose = null, underName = "标的ETF",
 }: {
   contract: any;
+  code?: string;
   etfTrends: any[];
   flow: any[];
   etfPrevClose?: number | null;
+  underName?: string;
 }) {
   const secid = contract?.secid;
+  // 盘中 10s、收盘后 60s：收盘后行情不再变化，高频轮询只是空转。
+  const [open, setOpen] = useState(() => isTradingNow());
+  useEffect(() => {
+    const t = setInterval(() => setOpen(isTradingNow()), 60_000);
+    return () => clearInterval(t);
+  }, []);
   const { data: trends } = usePolling(
     () => (secid ? api.optTrends(secid) : Promise.resolve({ trends: [] })),
-    10_000, [secid]);
+    open ? 15_000 : 120_000, [secid], secid ? { kind: "trends", code: secid } : undefined);
+  // 关键位/计划以标的为单位（不随合约切换），滞后同步即可。
+  const { data: levels } = usePolling(
+    () => (secid && code ? api.optLevels(code, secid) : Promise.resolve(null)),
+    60_000, [secid, code], secid ? { kind: "levels", code: secid } : undefined);
 
   // 注意：图表始终保持挂载（不因未选合约而卸载），避免 ECharts 在同一 DOM 节点上
   // 反复 dispose/init 造成崩溃；切合约只更新数据（固定 key）。
@@ -43,11 +56,11 @@ export function ContractDetail({
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs tnum">
                 <span className="text-base font-semibold">{nf(contract.last, 4)}</span>
                 <span className={clsUpDown(contract.pct)}>{pct(contract.pct)}</span>
-                <span className="text-muted-foreground">IV {nf(contract.iv, 1)}%</span>
-                <span className="text-muted-foreground">Δ {nf(contract.delta, 3)}</span>
-                <span className="text-muted-foreground">溢价 {nf(contract.premium_rate, 2)}%</span>
-                <span className="text-muted-foreground">离到期 {contract.days}天</span>
-                <span className="text-muted-foreground">额 {money(contract.amount)}</span>
+                <span className="text-muted-foreground"><Tip label={`IV ${nf(contract.iv, 1)}%`} tip={GLOSSARY.IV} /></span>
+                <span className="text-muted-foreground"><Tip label={`Δ ${nf(contract.delta, 3)}`} tip={GLOSSARY.Delta} /></span>
+                <span className="text-muted-foreground"><Tip label={`溢价 ${nf(contract.premium_rate, 2)}%`} tip={GLOSSARY["溢价"]} /></span>
+                <span className="text-muted-foreground"><Tip label={`离到期 ${contract.days}天`} tip={GLOSSARY["离到期"]} /></span>
+                <span className="text-muted-foreground"><Tip label={`成交额 ${money(contract.amount)}`} tip={GLOSSARY["成交额"]} /></span>
               </div>
             </>
           ) : (
@@ -57,18 +70,39 @@ export function ContractDetail({
       </FramePanel>
       <FramePanel dense>
         <FrameHeader className="flex-row flex-wrap items-center justify-between gap-y-1">
-          <FrameTitle className="text-xs">分时叠加（合约价格 + 标的ETF价格 + 标的ETF主力净买额）</FrameTitle>
-          <span className="text-xs text-muted-foreground">蓝线 合约价格 · 灰线 标的ETF价格 · 紫线 标的ETF主力净买额（右轴）</span>
+          <FrameTitle className="text-xs">分时叠加（合约价格 + {underName}价格 + {underName}主力净买额）</FrameTitle>
+          <span className="text-xs text-muted-foreground">蓝线 合约价格 · 灰线 {underName}价格 · 紫线 {underName}主力净买额（右轴）</span>
         </FrameHeader>
-        <div className="px-1 pb-2">
+        <div className="relative px-1 pb-2">
           <ErrorBoundary label="分时叠加图">
             <OverlayChart id="overlay" optTrends={t} etfTrends={etfTrends} flow={flow}
+              underName={underName} levels={levels}
+              breakEven={contract?.break_even ?? null} optDelta={contract?.delta ?? null}
+              optLast={contract?.last ?? null}
               optPrevClose={contract?.prev_close ?? null} etfPrevClose={etfPrevClose} height={300} />
           </ErrorBoundary>
+          {contract && t.length === 0 && (
+            <div className="pointer-events-none absolute inset-x-0 top-1/3 text-center text-[11px] text-muted-foreground">
+              该合约暂无分时数据（本地快照累积中，开盘后自动补齐）
+            </div>
+          )}
         </div>
       </FramePanel>
     </Frame>
   );
+}
+
+/** 是否处于连续竞价时段（含集合竞价）。周末直接判否，避免收盘/休市时白拉数据。 */
+function isTradingNow(now = new Date()) {
+  try {
+    const d = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Shanghai" }));
+    const wd = d.getDay();
+    if (wd === 0 || wd === 6) return false;
+    const m = d.getHours() * 60 + d.getMinutes();
+    return (m >= 570 && m <= 690) || (m >= 780 && m <= 900);
+  } catch {
+    return true;
+  }
 }
 
 /* ---------------- Kronos 预测图（内嵌到策略面板） ---------------- */
@@ -221,7 +255,7 @@ function Section({ title, items, tone }: { title: string; items?: string[]; tone
       <ul className="flex flex-col gap-0.5">
         {items.map((t, i) => (
           <li key={i} className={`flex gap-1 text-[11px] leading-snug ${tone === "warn" ? "text-warning-foreground" : ""}`}>
-            <span className="text-muted-foreground">•</span>{t}
+            <span className="text-muted-foreground">•</span><AutoTip text={t} />
           </li>
         ))}
       </ul>

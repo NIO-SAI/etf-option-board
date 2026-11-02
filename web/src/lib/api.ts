@@ -24,6 +24,11 @@ export const api = {
   optKline: (secid: string, klt = 1, lmt = 240) =>
     get(`/option/kline?secid=${secid}&klt=${klt}&lmt=${lmt}`),
   optTrends: (secid: string) => get(`/option/trends?secid=${secid}`),
+  optLevels: (code: string, secid: string) =>
+    get(`/option/levels?code=${code}&secid=${secid}`),
+  calibration: () => get("/calibration"),
+  indexOptionOverview: () => get("/index-option/overview"),
+  indexOption: (symbol: string) => get(`/index-option/${symbol}`),
   strategy: (code: string, kronos = 0, klt = 1) =>
     get(`/strategy/${code}?kronos=${kronos ? 1 : 0}&klt=${klt}`),
   predict: (secid: string, klt = 5, lookback = 120, pred_len = 20) =>

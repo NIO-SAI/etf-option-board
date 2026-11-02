@@ -152,8 +152,9 @@ def _run_cli(prompt: str, timeout: int) -> str:
     if not exe:
         raise RuntimeError(f"未找到 {settings.llm_cli_bin} CLI")
     os.makedirs(settings.llm_cli_dir, exist_ok=True)
-    cmd = [exe, "run", "--pure", "--format", "json", "-m", settings.llm_cli_model,
-           "--dir", settings.llm_cli_dir, prompt]
+    # 当前 opencode 版本没有 `--pure` / `--dir` 两个 flag（旧写法会直接
+    # `Unrecognized flag` 退出）：工作目录改用 subprocess 的 cwd。
+    cmd = [exe, "run", "--format", "json", "-m", settings.llm_cli_model, prompt]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
                           cwd=settings.llm_cli_dir)
     texts: list[str] = []

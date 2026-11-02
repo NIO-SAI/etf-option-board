@@ -181,3 +181,14 @@
 }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-corner { background: transparent; }
+
+/* 选中合约的蓝色蒙层：用伪元素叠加而不是 background-color，
+   才能盖在「首选」的红/绿底色之上（两信号并存），且不改变单元格高度。 */
+.sel-cell { position: relative; }
+.sel-cell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
+}

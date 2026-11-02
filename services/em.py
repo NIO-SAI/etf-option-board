@@ -10,6 +10,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import time
 from urllib.parse import urlencode
 
@@ -33,6 +34,9 @@ _H5_REF = "https://data.eastmoney.com/"
 # 注意：一律用 ifzq.gtimg.cn（不带 web. 前缀）。web.ifzq.gtimg.cn 会触发腾讯 WAF，
 # 间歇性返回 JS 挑战页 → json 解析失败 → 回落 push2（多为空），造成"没数据/旧数据"。
 _TX_DAY = "https://ifzq.gtimg.cn/appstock/app/fqkline/get"
+# 不复权日/周/月线：fqkline（复权）端点会间歇命中腾讯 WAF（返回挑战页 → json 解析失败），
+# 指数尤其如此（qfq 对指数本无意义）。取不到复权线时退回这一条。
+_TX_RAW = "https://ifzq.gtimg.cn/appstock/app/kline/kline"
 _TX_MIN = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
 _TX_TREND = "https://ifzq.gtimg.cn/appstock/app/minute/query"
 # 多日分时：盘前当日只有 09:30 一个占位点时，用它回退到上一完整交易日
@@ -61,6 +65,131 @@ def _push2_dead(host: str) -> bool:
 def _push2_mark_dead(host: str) -> None:
     _PUSH2_DEAD[host] = time.time() + _PUSH2_DEAD_TTL
     log.info("em push2 兜底主机 %s 空回包，%ds 内跳过", host, int(_PUSH2_DEAD_TTL))
+
+
+# push2 的 IPv6 通道（合约分时/K线的主力来源）
+#
+# 本机出口是境外 IPv4，push2/push2his 对境外 IP 反爬（GET 一律空回包，连 ndays=5 的
+# 历史分时都拿不到）。但这些域名的 AAAA 记录指向国内 IPv6 节点，走 IPv6 出网就能拿到
+# 真实数据——这是期权分时唯一的实时来源，所以单独给它一条通道：
+#   - 用 curl -6 --doh-url 走国内 DoH 解析（系统 DNS 常把 AAAA 过滤掉）；
+#   - 并发上限 2（IPv6 路径容易丢包，压太多反而全超时）；
+#   - 抖动很正常，**连续 5 次**失败才熔断 60s，别一次空包就放弃整条通道。
+_V6_HOSTS = ("push2.eastmoney.com", "push2his.eastmoney.com", "push2delay.eastmoney.com")
+_DOH_URLS = ("https://dns.alidns.com/dns-query", "https://doh.pub/dns-query")
+_V6_SEM = asyncio.Semaphore(2)
+_V6_DEAD: dict[str, float] = {}
+_V6_DEAD_TTL = 60.0
+_V6_FAILS: dict[str, int] = {}
+_V6_FAIL_LIMIT = 2
+_V6_TIMEOUT = "8"
+
+# AAAA 解析缓存：curl 每次用 --doh-url 都要现场 DoH 解析，实测占单请求 1.4s 里的
+# **1.11s**（79%）。解析一次缓存 10 分钟、改用 --resolve 固定 IPv6 地址，单请求降到
+# 0.2~0.3s。IP 轮换/失效时下一次 DoH 兜底会重新解析。
+_V6_ADDR: dict[str, tuple[str, float]] = {}
+_V6_ADDR_TTL = 600.0
+
+
+async def _v6_addr(host: str) -> str | None:
+    """DoH 查 AAAA 并缓存（阿里/腾讯的 JSON 接口，走普通 IPv4 请求）。"""
+    hit = _V6_ADDR.get(host)
+    if hit and time.time() < hit[1]:
+        return hit[0]
+    for base in ("https://dns.alidns.com/resolve", "https://doh.pub/resolve"):
+        try:
+            d = await _curl_json(base, {"name": host, "type": "AAAA"}, referer=base)
+        except Exception:  # noqa: BLE001
+            continue
+        ips = [a.get("data") for a in (d or {}).get("Answer", [])
+               if isinstance(a, dict) and a.get("type") == 28]
+        if ips:
+            _V6_ADDR[host] = (ips[0], time.time() + _V6_ADDR_TTL)
+            return ips[0]
+    return None
+
+
+def _host_of(url: str) -> str:
+    return url.split("//", 1)[-1].split("/", 1)[0]
+
+
+def _v6_host(host: str) -> bool:
+    return host in _V6_HOSTS
+
+
+def _v6_dead(host: str) -> bool:
+    return time.time() < _V6_DEAD.get(host, 0.0)
+
+
+def _v6_mark_dead(host: str) -> None:
+    _V6_DEAD[host] = time.time() + _V6_DEAD_TTL
+    _V6_FAILS[host] = 0
+    log.info("em push2 IPv6 通道 %s 连续 %d 次无回包，%ds 内跳过",
+             host, _V6_FAIL_LIMIT, int(_V6_DEAD_TTL))
+
+
+def _v6_ok(host: str) -> None:
+    _V6_FAILS.pop(host, None)
+
+
+def _v6_fail(host: str) -> None:
+    n = _V6_FAILS.get(host, 0) + 1
+    _V6_FAILS[host] = n
+    if n >= _V6_FAIL_LIMIT:
+        _v6_mark_dead(host)
+
+
+class _V6EmptyReply(RuntimeError):
+    """IPv6 通道正常，但该接口空回包（东财按接口封禁，不代表通道坏了）。"""
+
+
+async def _curl_json_v6(url: str, params: dict | None = None,
+                        referer: str | None = None) -> object:
+    """curl -6 取 JSON（push2 域名的 IPv6 通道）。
+
+    优先用缓存的 AAAA 地址 + `--resolve`（省掉每次 1.1s 的 DoH 解析）；
+    解析失败/地址失效时才退回 `--doh-url` 现场解析。
+    """
+    host = _host_of(url)
+    p = dict(params or {})
+    p["_"] = int(time.time() * 1000)
+    full = _build(url, p)
+    addr = await _v6_addr(host)
+    attempts: list[list[str]] = []
+    if addr:
+        attempts.append(["--resolve", f"{host}:443:[{addr}]"])
+    for doh in _DOH_URLS:
+        attempts.append(["--doh-url", doh])
+    err: str | None = None
+    codes: list[int | None] = []
+    for i, extra in enumerate(attempts):
+        proc = await asyncio.create_subprocess_exec(
+            "curl", "-s", "-6", "-m", _V6_TIMEOUT, *extra,
+            "-A", _UA, "-e", referer or _REFERER,
+            "-H", "Accept: application/json, text/plain, */*",
+            full,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        async with _V6_SEM:
+            out, _ = await proc.communicate()
+        codes.append(proc.returncode)
+        body = out.decode("utf-8", "replace").strip()
+        if not body:
+            # 固定 IP 那条路空回包：可能地址已轮换，丢掉缓存让下一次重新解析
+            if i == 0 and addr:
+                _V6_ADDR.pop(host, None)
+            err = f"try{i} 空回包(exit={proc.returncode})"
+            continue
+        try:
+            return json.loads(body)
+        except ValueError as exc:
+            err = f"try{i} 非法 JSON: {exc}"
+    # 全部是 curl exit 52（Empty reply）= 接口级封禁，通道本身是通的：
+    # 这种情况不能算通道故障，否则 trends2 被封会把 clist 等可用接口一起熔断。
+    if codes and all(c == 52 for c in codes):
+        raise _V6EmptyReply(f"接口空回包 {host}（{err}）")
+    raise RuntimeError(f"curl6 无回包 {host}（{err}）")
 # 东财/腾讯抖动重试：重试会放大请求量（触发反爬），配合"过期缓存兜底"改为 2 轮
 _RETRY_TRIES = 2
 _RETRY_DELAY = 0.3
@@ -125,7 +254,7 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
             return hit[2]
 
     n_tries = _RETRY_TRIES if tries is None else max(1, tries)
-    hostkey = url.split("//", 1)[-1].split("/", 1)[0]
+    hostkey = _host_of(url)
     memo = _MEMO.get(hostkey)
     prefer = memo[0] if memo and now - memo[1] < _MEMO_TTL else None
 
@@ -138,12 +267,22 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
     async def _curl():
         return await _curl_json(url, params, referer)
 
-    transports = [("curl", _curl), ("direct", _direct)]
-    if prefer != "curl":
-        transports.reverse()
+    async def _curl6():
+        return await _curl_json_v6(url, params, referer)
+
+    if _v6_host(hostkey):
+        # push2 家族：IPv6 优先（境外 IPv4 必被反爬），IPv6 熔断期间才退回 IPv4
+        transports = [] if _v6_dead(hostkey) else [("curl6", _curl6)]
+        if not _push2_dead(hostkey):
+            transports += [("curl", _curl), ("direct", _direct)]
+    else:
+        transports = [("curl", _curl), ("direct", _direct)]
+        if prefer != "curl":
+            transports.reverse()
 
     data = None
     used = None
+    v6_empty = False
     # 东财限流：单次成功率约 30~50%，失败即重试（direct 被 WAF 拒绝时很快失败）
     for attempt in range(n_tries):
         for name, fn in transports:
@@ -151,6 +290,8 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
                 async with _SEM:
                     data = await fn()
             except Exception as exc:  # noqa: BLE001
+                if isinstance(exc, _V6EmptyReply):
+                    v6_empty = True
                 log.debug("em fetch %s via %s 失败: %s", hostkey, name, exc)
                 data = None
             if data is not None:
@@ -160,6 +301,12 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
             break
         if attempt < n_tries - 1:
             await asyncio.sleep(_RETRY_DELAY)
+
+    if _v6_host(hostkey):
+        if data is not None:
+            _v6_ok(hostkey)
+        elif not _v6_dead(hostkey) and not v6_empty:
+            _v6_fail(hostkey)
 
     if data is None:
         # 全部尝试失败 → 退回上次成功值（忽略 TTL），避免上游瞬时抖动导致页面缺数据
@@ -205,6 +352,26 @@ async def clist(fs: str, fields: str, pn: int = 1, pz: int = 100, fid: str = "f1
     if not d or not d.get("data"):
         return []
     return d["data"].get("diff") or []
+
+
+async def ulist_quotes(secids: list[str], batch: int = 50, ttl: float = 12.0,
+                       fields: str = "f12,f2,f3,f4,f31,f32,f5,f6,f108") -> dict[str, dict]:
+    """批量取指定 secid 的最新行情（push2 `ulist.np/get`）。
+
+    中金所期权（m:221）的 `clist` 不返回最新价（f2 恒为 "-"），只能靠它补齐；
+    实测一批 60 个 secid 仍全部有价，50 一批够用。
+    """
+    out: dict[str, dict] = {}
+    for i in range(0, len(secids), batch):
+        chunk = secids[i:i + batch]
+        d = await get_json("https://push2.eastmoney.com/api/qt/ulist.np/get",
+                           {"secids": ",".join(chunk), "ut": _UT, "fields": fields,
+                            "fltt": 2, "invt": 2}, ttl=ttl)
+        for it in ((d or {}).get("data") or {}).get("diff") or []:
+            code = it.get("f12")
+            if code:
+                out[code] = it
+    return out
 
 
 async def clist_all(fs: str, fields: str, pz: int = 100, max_page: int = 8,
@@ -262,6 +429,11 @@ async def _tx_kline(secid: str, klt: int, lmt: int, ttl: float) -> list[dict]:
         d = await get_json(_TX_DAY, {"param": f"{code},{period},,,{lmt},qfq"}, ttl=ttl)
         node = ((d or {}).get("data") or {}).get(code) or {}
         rows = node.get(f"qfq{period}") or node.get(period) or []
+        if not rows:
+            # 复权端点被 WAF 拦（返 None）时退回不复权 K 线，否则日线/MA20/均线关键位全空
+            d = await get_json(_TX_RAW, {"param": f"{code},{period},,,{lmt}"}, ttl=ttl)
+            node = ((d or {}).get("data") or {}).get(code) or {}
+            rows = node.get(period) or []
         # row: [date, open, close, high, low, volume, ...]
         return [{"date": r[0], "open": _numf(r[1]), "close": _numf(r[2]),
                  "high": _numf(r[3]), "low": _numf(r[4]),
@@ -290,14 +462,16 @@ async def kline(secid: str, klt: int = 1, lmt: int = 240, fqt: int = 1,
     bars = await _tx_kline(secid, klt, lmt, ttl)
     if bars:
         return bars
-    if _push2_dead("push2his.eastmoney.com"):
+    h = "push2his.eastmoney.com"
+    # 两条通道都熔断才短路；IPv6 是期权 K 线唯一的真实来源，不能因 IPv4 死掉就放弃
+    if _push2_dead(h) and _v6_dead(h):
         return []
     d = await get_json("https://push2his.eastmoney.com/api/qt/stock/kline/get",
                        {"secid": secid, "fields1": _fields1(), "fields2": _fields2(),
                         "klt": klt, "fqt": fqt, "end": "20500101", "lmt": lmt, "ut": _UT},
-                       ttl=ttl, tries=1)
+                       ttl=ttl)
     if d is None:
-        _push2_mark_dead("push2his.eastmoney.com")
+        _push2_mark_dead(h)
         return []
     return parse_klines(d.get("data"))
 
@@ -409,14 +583,16 @@ async def trends(secid: str, ndays: int = 1, ttl: float = 30.0) -> list[dict]:
                     if prec and prec > 0:
                         _TREND_PREV_CLOSE[secid] = prec
                     return pts
-    if _push2_dead("push2.eastmoney.com"):
+    h = "push2.eastmoney.com"
+    # 两条通道都熔断才短路：IPv6 是合约分时的真实来源（境外 IPv4 拿不到）
+    if _push2_dead(h) and _v6_dead(h):
         return []
     d = await get_json("https://push2.eastmoney.com/api/qt/stock/trends2/get",
                        {"secid": secid, "fields1": "f1,f2,f3,f4,f5,f6,f7,f8",
                         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58", "iscr": 0,
-                        "ndays": ndays, "ut": _UT}, ttl=ttl, tries=1)
+                        "ndays": ndays, "ut": _UT}, ttl=ttl)
     if d is None:
-        _push2_mark_dead("push2.eastmoney.com")
+        _push2_mark_dead(h)
         return []
     return _trends_trim(parse_trends(d.get("data")), ndays)
 
@@ -610,6 +786,148 @@ async def fflow(secid: str, klt: int = 1, lmt: int = 0, ttl: float = 20.0) -> di
 
 
 # --------------------------------------------------------------------------
+# 板块/指数分时快照累积
+#
+# 板块代码（47.xxxxxx，如 A股平均股价 47.800005）既无腾讯映射（_tx_code 只认 1./0.），
+# push2 分时又被反爬打空 —— 迷你走势图历来是空的。这里复用期权分时那套
+# emdatah5 快照累积（交易时段逐分钟落 data/index_history.jsonl），
+# 让「上证指数/平均股价」这类底栏指标也有日内曲线可看。
+# --------------------------------------------------------------------------
+_IDX_HIST: dict[str, list[str]] = {}
+_IDX_PREV: dict[str, list[str]] = {}
+_IDX_DAY: str | None = None
+_IDX_MAX = 240
+_IDX_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "index_history.jsonl")
+_IDX_LOADED = False
+_IDX_FLUSHED: dict[str, str] = {}
+
+
+def _idx_load() -> None:
+    """进程首次使用时从磁盘恢复当日/昨日序列（幂等）。"""
+    global _IDX_LOADED, _IDX_DAY
+    if _IDX_LOADED:
+        return
+    _IDX_LOADED = True
+    today = time.strftime("%Y-%m-%d")
+    _IDX_DAY = today
+    if not os.path.exists(_IDX_PATH):
+        return
+
+    def _feed(bucket: dict[str, list[str]], secid: str, fline: str) -> None:
+        hist = bucket.setdefault(secid, [])
+        minute = fline.split(",", 1)[0]
+        if hist and hist[-1].split(",", 1)[0] == minute:
+            hist[-1] = fline
+        else:
+            hist.append(fline)
+            if len(hist) > _IDX_MAX:
+                del hist[:len(hist) - _IDX_MAX]
+
+    try:
+        by_day: dict[str, list[tuple[str, str]]] = {}
+        kept: list[str] = []
+        cutoff = (dt.datetime.now() - dt.timedelta(days=7)).strftime("%Y-%m-%d")
+        with open(_IDX_PATH, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                d = r.get("date")
+                if not d or d < cutoff or d > today:
+                    continue
+                kept.append(line)
+                secid, fline = r.get("secid"), r.get("line")
+                if secid and fline:
+                    by_day.setdefault(d, []).append((secid, fline))
+        with open(_IDX_PATH, "w", encoding="utf-8") as f:
+            for line in kept:
+                f.write(line + "\n")
+        for secid, fline in by_day.get(today, []):
+            _feed(_IDX_HIST, secid, fline)
+            _IDX_FLUSHED[secid] = fline.split(",", 1)[0]
+        prev_days = sorted(d for d in by_day if d < today)
+        if prev_days:
+            for secid, fline in by_day[prev_days[-1]]:
+                _feed(_IDX_PREV, secid, fline)
+    except OSError as exc:
+        log.debug("指数分时历史加载失败: %s", exc)
+
+
+def _idx_persist(secid: str, line: str) -> None:
+    minute = line.split(",", 1)[0]
+    if _IDX_FLUSHED.get(secid) == minute:
+        return
+    _IDX_FLUSHED[secid] = minute
+    try:
+        os.makedirs(os.path.dirname(_IDX_PATH), exist_ok=True)
+        with open(_IDX_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(
+                {"date": minute.split(" ", 1)[0], "secid": secid, "line": line},
+                ensure_ascii=False) + "\n")
+    except OSError as exc:
+        log.debug("指数分时落盘失败: %s", exc)
+
+
+async def snapshot_trends(secid: str, ttl: float = 20.0) -> list[dict]:
+    """板块/指数分时（emdatah5 快照累积）。输出与 trends() 同构。
+
+    交易时段内取一次快照并入当日序列；当日不足 2 点时用最近一个有数据的昨日。
+    """
+    global _IDX_DAY, _IDX_HIST, _IDX_PREV
+    _idx_load()
+    today = time.strftime("%Y-%m-%d")
+    if _IDX_DAY != today:
+        if _IDX_HIST:
+            _IDX_PREV = _IDX_HIST
+        _IDX_HIST = {}
+        _IDX_FLUSHED.clear()
+        _IDX_DAY = today
+    hist = _IDX_HIST.setdefault(secid, [])
+    if _now_in_session():
+        q = await get_json(f"{_H5_URL}/getZJLXData",
+                           {"secid": secid, "fields": "f43", "ut": _H5_UT},
+                           ttl=ttl, referer=_H5_REF)
+        row = (q or {}).get("data") if isinstance(q, dict) else None
+        px = _numf(row.get("f43")) if row else 0.0
+        if px > 0:
+            ts = time.strftime("%Y-%m-%d %H:%M")
+            line = f"{ts},{px}"
+            if hist and hist[-1].split(",", 1)[0] == ts:
+                hist[-1] = line
+            else:
+                hist.append(line)
+                if len(hist) > _IDX_MAX:
+                    del hist[:len(hist) - _IDX_MAX]
+                _idx_persist(secid, line)
+    kept = [l for l in hist if _hm_in_session(l.split(",", 1)[0][-5:])]
+    if len(kept) < 2:
+        kept = [l for l in _IDX_PREV.get(secid, [])
+                if _hm_in_session(l.split(",", 1)[0][-5:])]
+    out: list[dict] = []
+    for l in kept:
+        ts, _, sp = l.partition(",")
+        p = _numf(sp)
+        out.append({"time": ts, "price": p, "high": p, "low": p,
+                    "volume": None, "amount": None, "avg": None})
+    return out
+
+
+async def trends_or_snapshot(secid: str, ndays: int = 1,
+                             ttl: float = 30.0) -> list[dict]:
+    """真实分时优先，取不到时退回快照累积（板块类代码的唯一来源）。"""
+    real = await trends(secid, ndays=ndays, ttl=ttl)
+    if len(real) >= 2:
+        return real
+    return await snapshot_trends(secid)
+
+
+# --------------------------------------------------------------------------
 # 期权分时快照累积（与资金流 fflow 同一策略）
 #
 # 期权 secid 形如 10.xxx / 12.xxx：_tx_code 无腾讯映射（不支持期权），push2 分时
@@ -627,6 +945,138 @@ _OPT_PATH = os.path.join(
     "data", "opt_history.jsonl")
 _OPT_LOADED = False
 _OPT_FLUSHED: dict[str, str] = {}      # secid -> 已落盘的最后分钟
+
+# 全市场合约清单：ulist 批量报价需要先知道 secid，而 clist（唯一能翻出全量清单的接口）
+# 也会被接口级封禁。所以清单落盘复用：clist 能翻的时候建一次，之后每分钟只用 ulist
+# 更新价格（1 次 400 只，实测净耗时 0.2s）。
+_OPT_UNIVERSE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "option_universe.json")
+_OPT_UNIVERSE: list[str] = []
+_OPT_UNIVERSE_LOADED = False
+_ULIST_URL = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+_CFX_MARKET = 221
+_CFX_DAY = ""
+_CFX_SECIDS: list[str] = []
+_CFX_RE = re.compile(r"^([A-Z]+)(\d{4})-[CP]-")
+
+
+async def _cffex_option_secids() -> list[str]:
+    """中金所股指期权合约清单（近月 + 次月）。
+
+    push2 的 clist 已被接口级封禁，但 `em.clist` 的主源是 emdatah5（`getZDYLBData`），
+    m:221 一次能翻出 760 条（约 0.9s），每天取一次即可。
+    只保留最近两个到期月：远月几乎没人交易，却会和近月一起把分钟累积的落盘撑大。
+    """
+    global _CFX_DAY, _CFX_SECIDS
+    today = time.strftime("%Y-%m-%d")
+    if _CFX_SECIDS and _CFX_DAY == today:
+        return _CFX_SECIDS
+    rows = await clist_all(f"m:{_CFX_MARKET}", "f12,f14", pz=100, max_page=9, ttl=1800.0)
+    codes = [r.get("f12") for r in rows if r.get("f12")]
+    if not codes:
+        return _CFX_SECIDS
+    months: dict[str, set[str]] = {}
+    for c in codes:
+        m = _CFX_RE.match(c)
+        if m:
+            months.setdefault(m.group(1), set()).add(m.group(2))
+    keep = {sym: sorted(yms)[:2] for sym, yms in months.items()}
+    out = []
+    for c in codes:
+        m = _CFX_RE.match(c)
+        if m and m.group(2) in keep.get(m.group(1), ()):
+            out.append(f"{_CFX_MARKET}.{c}")
+    if out:
+        _CFX_SECIDS = out
+        _CFX_DAY = today
+    return _CFX_SECIDS
+
+
+def _opt_universe_load() -> None:
+    global _OPT_UNIVERSE, _OPT_UNIVERSE_LOADED
+    if _OPT_UNIVERSE_LOADED:
+        return
+    _OPT_UNIVERSE_LOADED = True
+    try:
+        with open(_OPT_UNIVERSE_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+        _OPT_UNIVERSE = [s for s in (d.get("secids") or []) if isinstance(s, str)]
+    except (OSError, ValueError):
+        _OPT_UNIVERSE = []
+
+
+def _opt_universe_save(secids: list[str]) -> None:
+    global _OPT_UNIVERSE
+    _OPT_UNIVERSE = sorted(set(secids))
+    try:
+        os.makedirs(os.path.dirname(_OPT_UNIVERSE_PATH), exist_ok=True)
+        with open(_OPT_UNIVERSE_PATH, "w", encoding="utf-8") as f:
+            json.dump({"day": time.strftime("%Y-%m-%d"), "secids": _OPT_UNIVERSE}, f)
+    except OSError as exc:
+        log.debug("合约清单落盘失败: %s", exc)
+
+
+async def option_chain_from_universe(market: int, fields: str,
+                                     chunk: int = 400) -> list[dict]:
+    """用落盘的合约清单 + ulist 批量取全字段——clist 被接口级封禁时的主路径。
+
+    返回结构与 clist 的 `diff` 同构（f12/f14/f2/f18…），调用方无需区分来源。
+    ulist 一次 400 只，沪 692 / 深 570 各 2 个请求、并发后约 0.5s
+    （clist 翻页被封时要 12s 且只回 1~2 页）。
+    """
+    _opt_universe_load()
+    prefix = f"{market}."
+    secids = [s for s in _OPT_UNIVERSE if s.startswith(prefix)]
+    if not secids:
+        return []
+    parts = [secids[i:i + chunk] for i in range(0, len(secids), chunk)]
+
+    async def _one(part: list[str]) -> list[dict]:
+        d = await get_json(_ULIST_URL, {
+            "secids": ",".join(part), "fltt": 2, "invt": 2, "ut": _UT,
+            "fields": fields,
+        }, ttl=45)
+        return ((d or {}).get("data") or {}).get("diff") or []
+
+    res = await asyncio.gather(*[_one(p) for p in parts], return_exceptions=True)
+    out: list[dict] = []
+    for r in res:
+        if isinstance(r, list):
+            out.extend(r)
+    return out
+
+
+async def _ulist_prices(secids: list[str], chunk: int = 400) -> list[tuple[str, float]]:
+    """批量报价：一次 400 只，返回 [(secid, price)]。
+
+    比 clist 翻页省得多（13 个请求 → 3~4 个），而且 ulist 目前没被封。
+    分片并发：全市场 1268 只约 0.7s（串行 2.5s）。
+    """
+    parts = [secids[i:i + chunk] for i in range(0, len(secids), chunk)]
+
+    async def _one(part: list[str]) -> list[tuple[str, float]]:
+        d = await get_json(_ULIST_URL, {
+            "secids": ",".join(part), "fltt": 2, "invt": 2, "ut": _UT,
+            "fields": "f12,f13,f2",
+        }, ttl=25)
+        out: list[tuple[str, float]] = []
+        for it in ((d or {}).get("data") or {}).get("diff") or []:
+            market, code, px = it.get("f13"), it.get("f12"), it.get("f2")
+            try:
+                v = float(px)
+            except (TypeError, ValueError):
+                continue
+            if market and code and v > 0:
+                out.append((f"{market}.{code}", v))
+        return out
+
+    res = await asyncio.gather(*[_one(p) for p in parts], return_exceptions=True)
+    rows: list[tuple[str, float]] = []
+    for r in res:
+        if isinstance(r, list):
+            rows.extend(r)
+    return rows
 
 
 def _opt_load() -> None:
@@ -701,6 +1151,177 @@ def _opt_persist(secid: str, line: str) -> None:
         log.warning("期权分时落盘失败 %s %s: %s", secid, minute, exc)
 
 
+def _opt_accumulate(secid: str, px: float) -> None:
+    """把一次快照价并入该合约的当日分钟序列（同分钟覆盖，新分钟落盘）。"""
+    hist = _OPT_HIST.setdefault(secid, [])
+    if not px or px <= 0:
+        return
+    ts = time.strftime("%Y-%m-%d %H:%M")
+    line = f"{ts},{px}"
+    if hist and hist[-1].split(",", 1)[0] == ts:   # 同一分钟 -> 覆盖
+        hist[-1] = line
+        return
+    hist.append(line)
+    if len(hist) > _OPT_MAX:
+        del hist[:len(hist) - _OPT_MAX]
+    _opt_persist(secid, line)
+
+
+async def opt_snapshot_many(secids: list[str], ttl: float = 12.0) -> dict[str, float]:
+    """批量取合约最新价并**一次性**并入分钟累积（避免逐个请求 + 逐行落盘）。
+
+    emdatah5 不接受 secid 逗号批量（rc=102），只能并发单取；但累积与落盘原本按
+    合约逐个写盘，合约一多就是几十次 open/append。这里统一在交易时段内并发取价、
+    再批量并入内存序列，落盘仍由 _opt_persist 按「新分钟」触发一次。
+    """
+    if not secids:
+        return {}
+    _opt_load()
+    _roll_opt_day()
+    if not _now_in_session():
+        return {}
+    rows = await asyncio.gather(*[
+        get_json(f"{_H5_URL}/getZJLXData",
+                 {"secid": s, "fields": "f43", "ut": _H5_UT},
+                 ttl=ttl, referer=_H5_REF)
+        for s in secids], return_exceptions=True)
+    out: dict[str, float] = {}
+    for secid, q in zip(secids, rows):
+        row = (q or {}).get("data") if isinstance(q, dict) else None
+        px = _numf(row.get("f43")) if row else 0.0
+        if not px:
+            continue
+        out[secid] = px
+        _opt_accumulate(secid, px)
+    return out
+
+
+def _opt_accumulate_many(rows: list[tuple[str, float]]) -> int:
+    """批量并入分钟累积（同分钟覆盖），新分钟一次性落盘（避免几百次 open）。"""
+    ts = time.strftime("%Y-%m-%d %H:%M")
+    pending: list[tuple[str, str]] = []
+    added = 0
+    for secid, px in rows:
+        if not secid or not px or px <= 0:
+            continue
+        hist = _OPT_HIST.setdefault(secid, [])
+        line = f"{ts},{px}"
+        if hist and hist[-1].split(",", 1)[0] == ts:      # 同一分钟 -> 覆盖
+            hist[-1] = line
+            continue
+        hist.append(line)
+        if len(hist) > _OPT_MAX:
+            del hist[:len(hist) - _OPT_MAX]
+        if _OPT_FLUSHED.get(secid) != ts:
+            _OPT_FLUSHED[secid] = ts
+            pending.append((secid, line))
+        added += 1
+    if pending:
+        try:
+            os.makedirs(os.path.dirname(_OPT_PATH), exist_ok=True)
+            with open(_OPT_PATH, "a", encoding="utf-8") as f:
+                for secid, line in pending:
+                    f.write(json.dumps({"date": ts.split(" ", 1)[0], "secid": secid,
+                                        "line": line}, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            log.warning("期权分时批量落盘失败: %s", exc)
+    return added
+
+
+_CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
+
+
+async def _universe_from_clist(pages: int = 9) -> list[str]:
+    """clist 翻页建立全市场合约清单（只在这个清单为空时才需要）。"""
+
+    async def _page(market: int, pn: int):
+        d = await get_json(_CLIST_URL, {
+            "pn": pn, "pz": 100, "po": 1, "np": 1, "fltt": 2, "invt": 2,
+            "fid": "f6", "fs": f"m:{market}", "ut": _UT, "fields": "f12,f2",
+        }, ttl=25)
+        return ((d or {}).get("data") or {}).get("diff") or []
+
+    async def _market(market: int) -> list[str]:
+        out: list[str] = []
+        empty_streak = 0
+        for pn in range(1, pages + 1):
+            diff: list[dict] = []
+            # 东财对连续翻页会空回包（实测 pn=1 空、pn=2 正常）：重试几次再放弃。
+            for attempt in range(3):
+                diff = await _page(market, pn)
+                if diff:
+                    break
+                await asyncio.sleep(0.4)
+            if not diff:
+                empty_streak += 1
+                if empty_streak >= 2:      # 连续两页都空 = 到头/被限流
+                    break
+                continue
+            empty_streak = 0
+            out.extend(f"{market}.{it['f12']}" for it in diff if it.get("f12"))
+            if len(diff) < 100:            # 最后一页
+                break
+            await asyncio.sleep(0.2)       # 翻页太快会被限流
+        return out
+
+    res = await asyncio.gather(_market(10), _market(12), return_exceptions=True)
+    codes: list[str] = []
+    for r in res:
+        if isinstance(r, list):
+            codes.extend(r)
+    return codes
+
+
+async def option_snapshot_batch(pages: int = 9) -> int:
+    """全市场期权快照 → 分钟累积（交易时段内每分钟一次）。
+
+    主路径是 **ulist 批量报价**（1 次 400 只、净耗时约 0.2s，3 次覆盖全市场），
+    清单来自落盘的 `option_universe.json` / 当日已累积的合约——不再每分钟翻 13 页
+    clist。只有清单为空（首次冷启动）时才用 clist 翻页建一次清单。
+    """
+    if not _now_in_session():
+        return 0
+    _opt_load()
+    _roll_opt_day()
+    _opt_universe_load()
+
+    secids = sorted(set(_OPT_HIST) | set(_OPT_UNIVERSE))
+    # 股指期权（IO/MO/HO）的 secid 是 `221.IO2611-C-3550` 这种非纯数字形式，
+    # 从前只累积 ETF 期权，导致它们的合约分时图永远没有价格线。
+    fx = await _cffex_option_secids()
+    if fx:
+        secids = sorted(set(secids) | set(fx))
+    if not secids:
+        secids = await _universe_from_clist(pages)
+        if not secids:
+            log.debug("合约清单为空且 clist 不可用，跳过本轮分钟累积")
+            return 0
+        _opt_universe_save(secids)
+
+    rows = await _ulist_prices(secids)
+    if not rows:
+        return 0
+    n = _opt_accumulate_many(rows)
+    # 清单外出现的新合约（换月/新挂牌）补进清单
+    fresh = [s for s, _ in rows if s not in set(_OPT_UNIVERSE)]
+    if fresh:
+        _opt_universe_save(list(_OPT_UNIVERSE) + fresh)
+    return n
+
+
+def _roll_opt_day() -> None:
+    """跨天滚动：昨日 ← 旧今日，今日清空。"""
+    global _OPT_DAY, _OPT_HIST, _OPT_PREV
+    today = time.strftime("%Y-%m-%d")
+    if _OPT_DAY == today:
+        return
+    if _OPT_HIST:
+        _OPT_PREV = _OPT_HIST
+    _OPT_HIST = {}
+    _OPT_FLUSHED.clear()
+    _OPT_DAY = today
+
+
 async def opt_trends(secid: str, ttl: float = 12.0) -> list[dict]:
     """合约当日分时：交易时段内用 emdatah5 快照逐分钟累积。
 
@@ -709,32 +1330,15 @@ async def opt_trends(secid: str, ttl: float = 12.0) -> list[dict]:
     当日累积不足 2 点时（开盘前/刚切换合约），用最近一个有数据的昨日序列兜底，
     保证界面不空——但那是昨日数据。
     """
-    global _OPT_DAY, _OPT_HIST, _OPT_PREV
     _opt_load()
-    today = time.strftime("%Y-%m-%d")
-    if _OPT_DAY != today:
-        if _OPT_HIST:
-            _OPT_PREV = _OPT_HIST
-        _OPT_HIST = {}
-        _OPT_FLUSHED.clear()
-        _OPT_DAY = today
+    _roll_opt_day()
     hist = _OPT_HIST.setdefault(secid, [])
     if _now_in_session():
         q = await get_json(f"{_H5_URL}/getZJLXData",
                            {"secid": secid, "fields": "f43,f57,f58",
                             "ut": _H5_UT}, ttl=ttl, referer=_H5_REF)
         row = (q or {}).get("data") if isinstance(q, dict) else None
-        px = _numf(row.get("f43")) if row else 0.0
-        if row and px > 0:
-            ts = time.strftime("%Y-%m-%d %H:%M")
-            line = f"{ts},{px}"
-            if hist and hist[-1].split(",", 1)[0] == ts:   # 同一分钟 -> 覆盖
-                hist[-1] = line
-            else:
-                hist.append(line)
-                if len(hist) > _OPT_MAX:
-                    del hist[:len(hist) - _OPT_MAX]
-                _opt_persist(secid, line)
+        _opt_accumulate(secid, _numf(row.get("f43")) if row else 0.0)
     kept = [l for l in hist if _hm_in_session(l.split(",", 1)[0][-5:])]
     if len(kept) < 2:
         kept = [l for l in _OPT_PREV.get(secid, [])

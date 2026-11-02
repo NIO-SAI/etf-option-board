@@ -4,10 +4,86 @@ import { Sparkline } from "@/components/charts";
 import { IndexLevelsDialog } from "@/components/IndexLevelsDialog";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
+import { Fold } from "@/components/ui/fold";
+import { AutoTip, GLOSSARY, Tip } from "@/components/ui/term";
 import { clsUpDown, gamma, money, nf, pct, signedMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useState, type ReactNode } from "react";
-import { ArrowDownRight, ArrowUpRight, Flame, Loader2, Minus, Star } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowDownRight, ArrowUpRight, Loader2, Minus, Star } from "lucide-react";
+
+/* ---------------- T 型报价列定义 ---------------- */
+
+/**
+ * 一列 = 一个字段 + 一句「这列到底什么意思」。help 文案是随手可查的口径说明：
+ * 这些列（打和点/内在/时间价值/希腊字母）对新手不是自明的，缺了就得去翻书。
+ */
+type Col = { key: string; label: string; help: string; get: (c: any, ctx: { rv: any; rf: any }) => ReactNode };
+
+const COLS: Col[] = [
+  { key: "last", label: "现价", help: "最新成交价；无成交时取买卖中间价", get: (c) => nf(c.last, 4) },
+  { key: "change", label: "涨跌", help: "现价 − 昨日结算价（权利金变动额）", get: (c) => <span className={clsUpDown(c.change)}>{nf(c.change, 4)}</span> },
+  { key: "pct", label: "涨幅", help: "涨跌 ÷ 昨收 × 100%", get: (c) => <span className={clsUpDown(c.pct)}>{pct(c.pct, 1)}</span> },
+  { key: "volume", label: "总量", help: "当日累计成交张数", get: (c) => money(c.volume) },
+  { key: "oi", label: "持仓", help: "未平仓合约张数（持仓量）；买卖盘厚不厚主要看它", get: (c) => money(c.oi) },
+  { key: "limitUp", label: "涨停", help: "交易所涨停价；行情源未提供时显示 —", get: (c) => (c.limit_up ? nf(c.limit_up, 4) : "—") },
+  { key: "breakEven", label: "打和点", help: "到期盈亏平衡价：认购 = 行权价 + 权利金，认沽 = 行权价 − 权利金", get: (c) => nf(c.break_even, 4) },
+  { key: "intrinsic", label: "内在", help: "内在价值：立即行权能拿到的价值（认购 S−K，认沽 K−S，最低 0）", get: (c) => nf(c.intrinsic, 4) },
+  { key: "timeValue", label: "时间", help: "时间价值 = 现价 − 内在价值；到期归零，买方每天都在为它付钱", get: (c) => nf(c.time_value, 4) },
+  { key: "premium", label: "溢价率", help: "溢价率%：到期时标的要涨/跌多少才能覆盖权利金（越低越「实」）", get: (c) => (c.premium_rate == null ? "—" : `${nf(c.premium_rate, 2)}%`) },
+  { key: "leverage", label: "杠杆", help: "杠杆比率 = 标的价 ÷ 权利金（静态）；实际杠杆 = 杠杆 × |Δ|", get: (c) => nf(c.leverage, 1) },
+  { key: "hv", label: "历史波", help: "历史波动率%：标的近 20 日已实现波动（年化），衡量「实际发生了多大波动」", get: (_c, ctx) => (ctx.rv == null ? "—" : `${nf(ctx.rv, 1)}%`) },
+  { key: "iv", label: "隐波", help: "隐含波动率%：由现价反推的市场预期年化波动（BS 口径）；越高权利金越贵", get: (c) => (c.iv == null ? "—" : `${nf(c.iv, 1)}%`) },
+  { key: "rf", label: "无风险", help: "无风险利率%：定价模型里的年化无风险利率，短期合约影响很小", get: (_c, ctx) => (ctx.rf == null ? "—" : `${nf(ctx.rf, 2)}%`) },
+  { key: "delta", label: "Δ", help: "Delta：标的价格每变动 1 元，期权价格的变动量（认购 0~1、认沽 −1~0）", get: (c) => nf(c.delta, 3) },
+  { key: "gamma", label: "Γ", help: "Gamma：标的价格每变动 1 元，Delta 的变动量；平值附近最大，日内爆发力来源", get: (c) => gamma(c.gamma) },
+  { key: "vega", label: "Vega", help: "Vega：隐含波动率每变动 1 个百分点，期权价格的变动量（买方怕降波）", get: (c) => nf(c.vega, 4) },
+  { key: "rho", label: "Rho", help: "Rho：无风险利率每变动 1 个百分点，期权价格的变动量（短期影响很小）", get: (c) => nf(c.rho, 4) },
+  { key: "theta", label: "Theta", help: "Theta：每过 1 天的时间价值损耗（买方为负，越临近到期越快）", get: (c) => nf(c.theta, 4) },
+  { key: "theory", label: "理论价", help: "按 20 日已实现波动定价的参考价；现价明显高于它说明市场为波动率多付了钱", get: (c) => nf(c.theory, 4) },
+];
+
+// 常看字段在前；紧凑模式只留这 4 列 + 名称，避免 20 列横向滚到看不清。
+const PINNED = ["last", "pct", "delta", "gamma"];
+const OTHER = COLS.map((c) => c.key).filter((k) => !PINNED.includes(k));
+// 认购在左、认沽在右，两侧镜像：远离行权价的一端放最不常看的列。
+const ORDER = {
+  call: [...OTHER].reverse().concat(["name", ...PINNED]),
+  put: [...PINNED].reverse().concat(["name", ...OTHER]),
+  callComfort: ["name", ...PINNED],
+  putComfort: [...PINNED].reverse().concat("name"),
+};
+const COL_OF: Record<string, Col> = Object.fromEntries(COLS.map((c) => [c.key, c]));
+
+/**
+ * 带口径说明的表头。tooltip 在 hover 时**立即**出现（不等浏览器默认的 1s+ 延迟），
+ * 且 `whitespace-normal` + 固定宽度：说明文字是整句中文，若继承表头的 nowrap 会拉成一条长线。
+ */
+function HelpTh({ col }: { col: Col }) {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  return (
+    <TH
+      className="text-right whitespace-nowrap"
+      onMouseEnter={(e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        setPos({ x: r.left + r.width / 2, y: r.bottom });
+      }}
+      onMouseLeave={() => setPos(null)}
+      onFocus={() => setPos(null)}
+    >
+      <span className="cursor-help border-b border-dotted border-muted-foreground/50">{col.label}</span>
+      {pos && (
+        <span
+          role="tooltip"
+          className="pointer-events-none fixed z-50 w-56 whitespace-normal rounded-md border border-border bg-card px-2 py-1.5 text-left text-[11px] font-normal leading-snug text-foreground shadow-lg"
+          style={{ left: pos.x, top: pos.y + 6, transform: "translateX(-50%)" }}
+        >
+          <b className="mb-0.5 block text-[10px] text-muted-foreground">{col.label}</b>
+          {col.help}
+        </span>
+      )}
+    </TH>
+  );
+}
 
 /* ---------------- 方向标签 ---------------- */
 // 方向本质是「看多/看空/观望」这一状态：复用 ReUI 已装的 <tone>-light 状态徽标
@@ -73,9 +149,11 @@ function SignalMark({ signal }: { signal?: { dir: string; score: number; ts: str
 /* ---------------- 标的列表 ---------------- */
 
 export function EtfList({
-  etfs, quotes, trendsMap, directions = {}, indices = [], selected, onSelect,
+  etfs, futOpts = [], quotes, trendsMap, directions = {}, indices = [], selected, onSelect,
 }: {
   etfs: any[];
+  /** 股指期权标的（IO/MO/HO）。与 ETF 并列展示，但标「中金所」以示规则不同。 */
+  futOpts?: any[];
   quotes: Record<string, any>;
   trendsMap: Record<string, number[]>;
   directions?: Record<string, {
@@ -87,10 +165,10 @@ export function EtfList({
   onSelect: (c: string) => void;
 }) {
   // 大盘指数（只读补充信息，非期权标的；固定清单保证始终显示）
+  // 只留两条：上证指数（可看关键位）与平均股价（板块口径的赚钱效应）。多一条就会
+  // 把矮窗口下的底栏挤到需要滚动，而底栏的存在意义正是「不滚动也能看全」。
   const BIG_INDEXES = [
     { code: "000001", name: "上证指数" },
-    { code: "000985", name: "中证全指" },
-    { code: "800000", name: "东财全A" },
     { code: "800005", name: "平均股价" },
   ];
   const indexRows = BIG_INDEXES.map((b) => ({ ...b, quote: indices.find((i) => i.code === b.code) }));
@@ -132,13 +210,59 @@ export function EtfList({
                   </div>
                 </div>
                 <Sparkline data={trendsMap[e.code] ?? []} up={(q?.pct ?? 0) >= 0} width={40} height={26} />
-                <div className="w-14 shrink-0 text-right">
+                <div className="w-16 shrink-0 text-right">
                   <div className="text-xs font-semibold tnum">{q ? nf(q.price, 3) : "—"}</div>
                   <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>
+                  <div className="text-[10px] tnum text-muted-foreground" title="当日成交额">
+                    {q?.amount ? `${(q.amount / 1e8).toFixed(1)}亿` : "—"}
+                  </div>
                 </div>
               </button>
             );
           })}
+          {futOpts.length > 0 && (
+            <>
+              <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground">股指期权（{futOpts.length}）</div>
+              {futOpts.map((f) => {
+                const q = quotes[f.code];
+                const on = f.code === selected;
+                const dir = (directions[f.code]?.direction ?? "neutral") as Dir;
+                return (
+                  <button
+                    key={f.code}
+                    type="button"
+                    aria-current={on ? "true" : undefined}
+                    onClick={() => onSelect(f.code)}
+                    className={cn(
+                      "flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                      on ? "bg-muted dark:bg-muted/50" : "hover:bg-muted/50",
+                    )}
+                  >
+                    <div className="flex min-w-0 flex-1 flex-col gap-1">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span className={cn("truncate text-xs font-medium", on && "text-primary")}>{f.name}</span>
+                        <DirBadge dir={dir} className="shrink-0" />
+                      </div>
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-[10px] text-muted-foreground tnum">{f.code} · {f.track}</span>
+                        {/* 中金所现结/合约乘数与 ETF 期权不同，直接标出来，避免按 ETF 口径误读 */}
+                        <Badge variant="outline" className="shrink-0 text-[9px] leading-4">中金所</Badge>
+                      </div>
+                    </div>
+                    <Sparkline data={trendsMap[f.code] ?? []} up={(q?.pct ?? 0) >= 0} width={40} height={26} />
+                    <div className="w-16 shrink-0 text-right">
+                      <div className="text-xs font-semibold tnum">{q ? nf(q.price, 2) : "—"}</div>
+                      <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>
+                      <div className="text-[10px] tnum text-muted-foreground" title="当日成交额">
+                        {q?.amount ? `${(q.amount / 1e8).toFixed(1)}亿` : "—"}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </>
+          )}
         </div>
 
         {/* 大盘指数：面板固定底栏（ETF 列表滚动、本区常驻可见）；窗口过矮时本区内部滚动，保证不被裁切 */}
@@ -156,6 +280,9 @@ export function EtfList({
                 <Row
                   key={ix.code}
                   {...rowProps}
+                  title={ix.code === "800005"
+                    ? "该指数没有分钟/历史行情源（腾讯不认板块代码、东财 push2 当前不可达）：走势依赖交易时段内的快照累积，开盘后自动补齐"
+                    : undefined}
                   className={cn(
                     "flex w-full items-center gap-2.5 px-3 py-2.5 text-left",
                     clickable && "transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
@@ -164,6 +291,7 @@ export function EtfList({
                   <div className="flex min-w-0 flex-1 flex-col gap-1">
                     <div className="flex items-center gap-1.5">
                       <span className="truncate text-xs font-medium">{ix.name}</span>
+                      <DirBadge dir={(directions[ix.code]?.direction ?? "neutral") as Dir} className="shrink-0" />
                       <Badge variant="outline" className="shrink-0">指数</Badge>
                     </div>
                     <div className="truncate text-[10px] text-muted-foreground tnum">{ix.code}{clickable && " · 关键位"}</div>
@@ -306,8 +434,130 @@ export function BiasBar({ bias }: { bias: any }) {
   );
 }
 
+/* ---------------- 今日推荐合约 ---------------- */
+
+/**
+ * 单张推荐卡：主推（顺应当前方向）/ 反向备选（只在对冲或反转信号时小仓参与）。
+ *
+ * 「买 1 张」的盈亏是按张数折算后的绝对金额——百分比看不出一张合约到底赚多少，
+ * 而仓位决策恰恰是按金额做的。
+ */
+function RecommendOne({ rec, onSelect, tone, note }: {
+  rec: any;
+  onSelect: (c: any) => void;
+  tone: "primary" | "reverse";
+  note?: string;
+}) {
+  const isCall = rec.side === "call";
+  const roi = rec.rr?.roi;
+  const { entry, stop, target } = rec;
+  // 盈亏比用**价格结构**（目标距离 ÷ 止损距离），不取后端给的 pct 比值：
+  // 百分比都是相对同一入场价算的，两者等价但价格口径不受取整影响。
+  const rr = entry != null && stop != null && target != null && entry !== stop
+    ? Math.abs((target - entry) / (entry - stop))
+    : null;
+  // 触发价离现价超过 3% 时，标「触发买入」而不是「买入」：它不是现价能成交的价位。
+  const farEntry = rec.entry_pct != null && Math.abs(rec.entry_pct) >= 3;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Badge variant={isCall ? "destructive-light" : "success-light"}>
+          {tone === "primary" ? "推荐买入" : "反向备选"} · {isCall ? "认购" : "认沽"}
+        </Badge>
+        <button
+          type="button"
+          onClick={() => onSelect(rec)}
+          className={cn("truncate text-sm font-semibold transition-colors hover:text-primary",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")}
+          title="点击查看该合约详情"
+        >
+          {rec.name}
+        </button>
+        <span className="text-[11px] text-muted-foreground tnum">
+          <Tip label={`评分 ${rec.score}`} tip={GLOSSARY["评分"]} />
+          {" · "}<Tip label={`Δ${nf(rec.delta, 2)}`} tip={GLOSSARY.Delta} />
+          {" · "}<Tip label={`IV${nf(rec.iv, 1)}%`} tip={GLOSSARY.IV} />
+          {" · "}<Tip label={`剩${rec.days}天`} tip={GLOSSARY["离到期"]} />
+        </span>
+        <span className="ml-auto flex items-center gap-2 text-[11px] text-muted-foreground tnum">
+          {rr ? <span><Tip label={`盈亏比 ${rr.toFixed(1)}:1`} tip={GLOSSARY["盈亏比"]} /></span> : null}
+          {roi != null ? (
+            <span className={roi >= 0 ? "text-up" : "text-down"}>
+              <Tip label={`期望 ${roi >= 0 ? "+" : ""}${(roi * 100).toFixed(0)}%`} tip={GLOSSARY["期望收益"]} />
+            </span>
+          ) : null}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-md bg-muted/25 px-2.5 py-2 sm:grid-cols-4">
+        <PriceCell label="现价" value={rec.price} />
+        <PriceCell label={farEntry ? "触发买入" : "买入"} value={rec.entry} sub={rec.entry_pct} tone="primary" />
+        <PriceCell label="止损" value={rec.stop} sub={rec.stop_pct} tone="down" />
+        <PriceCell label="止盈" value={rec.target} sub={rec.target_pct} tone="up" />
+      </div>
+      {(rec.profit != null || rec.loss != null) && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] tnum">
+          <span className="text-muted-foreground">买 1 张（<Tip label="成本" tip="买入一张合约要占用的现金 = 入场价 × 合约乘数（ETF 期权 10000 份/张，股指期权 100 元/点）。" /> ¥{Math.round(rec.cost ?? 0).toLocaleString()}）：</span>
+          {rec.profit != null && <span className="text-up">止盈 +¥{Math.round(rec.profit).toLocaleString()}</span>}
+          {rec.loss != null && <span className="text-down">止损 −¥{Math.round(Math.abs(rec.loss)).toLocaleString()}</span>}
+        </div>
+      )}
+      {(rec.reasons ?? []).length > 0 && (
+        <p className="text-[11px] leading-snug text-muted-foreground">
+          {(rec.reasons as string[]).map((r, i) => (
+            <span key={i}>
+              {i > 0 && " ｜ "}
+              <AutoTip text={r} />
+            </span>
+          ))}
+        </p>
+      )}
+      {tone === "reverse" && note && <div className="text-[10px] text-warning" role="note">{note}</div>}
+    </div>
+  );
+}
+
+function PriceCell({ label, value, sub, tone }: { label: string; value: any; sub?: any; tone?: "primary" | "up" | "down" }) {
+  const cls = tone === "down" ? "text-down" : tone === "up" ? "text-up" : tone === "primary" ? "text-primary" : "";
+  return (
+    <div className="flex flex-col">
+      <span className="text-[10px] text-muted-foreground"><Tip label={label} /></span>
+      <span className={cn("text-sm font-semibold tnum", cls)}>{value == null ? "—" : nf(value, 4)}</span>
+      {sub != null && <span className={cn("text-[10px] tnum", cls)}>{pct(sub, 1)}</span>}
+    </div>
+  );
+}
+
+export function RecommendCard({ rec, onSelect }: { rec: any; onSelect: (c: any) => void }) {
+  const primary = rec?.primary;
+  const reverse = rec?.reverse;
+  return (
+    <FramePanel dense>
+      <FrameHeader className="flex-row items-center justify-between">
+        <FrameTitle className="text-xs">今日推荐合约</FrameTitle>
+        <span className="text-[10px] text-muted-foreground"><AutoTip text="日内性价比 + 目标/止损盈亏比" /></span>
+      </FrameHeader>
+      <div className="flex flex-col gap-2 px-3 pb-3">
+        {!primary && !reverse ? (
+          rec ? (
+            <EmptyState title="暂无推荐" hint="期权链未返回可用报价或方向不明" />
+          ) : (
+            <div className="flex flex-col gap-2">
+              <Skeleton className="h-5 w-40" />
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          )
+        ) : null}
+        {primary && <RecommendOne rec={primary} onSelect={onSelect} tone="primary" />}
+        {primary && reverse && <div className="h-px bg-border" />}
+        {reverse && <RecommendOne rec={reverse} onSelect={onSelect} tone="reverse" note={rec?.reverse_note} />}
+      </div>
+    </FramePanel>
+  );
+}
+
 /* ---------------- 交易方案 ---------------- */
-export function PlanCard({ bundle }: { bundle: any }) {
+export function PlanCard({ bundle, onSelect }: { bundle: any; onSelect?: (c: any) => void }) {
   const lv = bundle?.levels;
   const plans: any[] = bundle?.plans ?? [];
   const side = lv?.side;
@@ -319,6 +569,7 @@ export function PlanCard({ bundle }: { bundle: any }) {
   return (
     <Frame spacing="sm" stacked>
       <DecisionCard bundle={bundle} />
+      {onSelect && <RecommendCard rec={bundle?.recommendation} onSelect={onSelect} />}
       <FramePanel dense>
         <FrameHeader><FrameTitle>标的点位（ETF）</FrameTitle></FrameHeader>
         {!bundle ? (
@@ -347,18 +598,23 @@ export function PlanCard({ bundle }: { bundle: any }) {
         )}
       </FramePanel>
       <FramePanel dense>
-        <FrameHeader><FrameTitle>合约买卖点（按 Delta 折算）</FrameTitle></FrameHeader>
+        <Fold title="合约买卖点（按 Delta 折算）" hint={<span className="shrink-0 text-[10px] tnum">{plans.length} 只</span>}>
         {plans.length > 0 ? (
           <Table>
             <THead>
               <TR>
-                <TH>合约</TH><TH className="text-right">现价</TH><TH className="text-right">入场</TH>
-                <TH className="text-right">止损</TH><TH className="text-right">止盈</TH><TH className="text-right">盈亏比</TH>
+                <TH>合约</TH><TH className="text-right"><Tip label="现价" /></TH>
+                <TH className="text-right"><Tip label="入场" /></TH>
+                <TH className="text-right"><Tip label="止损" /></TH><TH className="text-right"><Tip label="止盈" /></TH>
+                <TH className="text-right"><Tip label="盈亏比" /></TH>
               </TR>
             </THead>
             <TBody>
               {plans.map((p: any, i: number) => {
-                const rr = p.stop_pct && p.target_pct ? Math.abs(p.target_pct / p.stop_pct) : null;
+                // 盈亏比用**价格结构**（止损/止盈幅度已相对入场价，这里仍用价格算，口径统一）
+                const pe = p.entry, ps = p.stop, pt = p.target;
+                const rr = pe != null && ps != null && pt != null && pe !== ps
+                  ? Math.abs((pt - pe) / (pe - ps)) : null;
                 return (
                   <TR key={i}>
                     <TD className="max-w-[140px] truncate">{p.contract}</TD>
@@ -377,6 +633,7 @@ export function PlanCard({ bundle }: { bundle: any }) {
         ) : (
           <EmptyState title="暂无合约方案" hint="缺少可用 Delta 或昨收，无法折算买卖点" />
         )}
+        </Fold>
       </FramePanel>
     </Frame>
   );
@@ -404,14 +661,14 @@ export function DecisionCard({ bundle }: { bundle: any }) {
   const used = chk?.checked && deltaLimit ? Math.abs(Number(delta) || 0) / deltaLimit : null;
   return (
     <FramePanel dense>
-      <FrameHeader className="flex-row items-center justify-between">
-        <FrameTitle className="text-xs">策略与仓位</FrameTitle>
-        {st?.month === "next" && (
+      <Fold
+        title="策略与仓位"
+        right={st?.month === "next" ? (
           <Badge variant="warning-light" title="当月合约临期，新开仓改用次月">
             改推次月
           </Badge>
-        )}
-      </FrameHeader>
+        ) : undefined}
+      >
       {!bundle ? (
         <PlanSkeleton />
       ) : !st ? (
@@ -482,6 +739,7 @@ export function DecisionCard({ bundle }: { bundle: any }) {
           )}
         </div>
       )}
+      </Fold>
     </FramePanel>
   );
 }
@@ -571,7 +829,7 @@ function PlanSkeleton() {
 function Stat({ label, value, tone, muted }: { label: string; value: any; tone?: "up" | "down"; muted?: boolean }) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
-      <span className="truncate text-xs text-muted-foreground">{label}</span>
+      <span className="truncate text-xs text-muted-foreground"><Tip label={label} /></span>
       <span
         className={cn(
           "truncate tnum",
@@ -661,14 +919,17 @@ export function CandidateList({
           className={cn(
             "flex items-center gap-2 rounded-md border border-border/60 px-2.5 py-2 text-left transition-colors",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-            c.secid === selected ? "border-primary/60 bg-muted dark:bg-muted/50" : "hover:bg-muted/40",
+            c.secid === selected ? "border-primary bg-primary/12 ring-2 ring-inset ring-primary" : "hover:bg-muted/40",
           )}
         >
           <span className="w-4 shrink-0 text-center text-xs text-muted-foreground tnum" aria-hidden>{i + 1}</span>
           <div className="min-w-0 flex-1">
             <div className="truncate text-xs font-medium">{c.name}</div>
             <div className="text-xs leading-tight text-muted-foreground tnum">
-              {c.code} ·Δ{nf(c.delta, 2)} ·Γ{gamma(c.gamma)} ·IV{c.iv == null ? "—" : `${c.iv}%`} ·溢价{c.premium_rate == null ? "—" : `${c.premium_rate}%`}
+              {c.code} · <Tip label={`Δ${nf(c.delta, 2)}`} tip={GLOSSARY["Delta"]} />
+              {" · "}<Tip label={`Γ${gamma(c.gamma)}`} tip={GLOSSARY["Gamma"]} />
+              {" · "}<Tip label={`IV${c.iv == null ? "—" : `${c.iv}%`}`} tip={GLOSSARY["IV"]} />
+              {" · "}<Tip label={`溢价${c.premium_rate == null ? "—" : `${c.premium_rate}%`}`} tip={GLOSSARY["溢价率"]} />
             </div>
           </div>
           <div className="shrink-0 text-right">
@@ -698,7 +959,20 @@ export function OptionTQuote({
 }) {
   const tq = chain?.t_quote;
   const expiries = chain?.expiries ?? [];
+  // 20 列默认铺开，横向会超出容器：打开时自动滚到中间，让平值附近（最常看的行权价）
+  // 落在视野中央，而不是停在最左边那堆虚值认购上。
+  const [compact, setCompact] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowCount = (chain?.t_quote?.rows ?? []).length;
+  useEffect(() => {
+    const box = scrollRef.current?.firstElementChild as HTMLElement | null;
+    if (box) box.scrollLeft = Math.max(0, (box.scrollWidth - box.clientWidth) / 2);
+  }, [rowCount, month, compact]);
   if (!chain || chain.error) return <div className="p-4 text-xs text-muted-foreground">加载中…</div>;
+  const callOrder = compact ? ORDER.callComfort : ORDER.call;
+  const putOrder = compact ? ORDER.putComfort : ORDER.put;
+  // 历史波/无风险利率是标的级口径，整张表共用一份（列定义里以 ctx 传入）。
+  const colCtx = { rv: chain.rv20, rf: chain.risk_free_rate };
   const s = chain.underlying?.price ?? 0;
   const rows: any[] = tq?.rows ?? [];
   const best = chain.best;
@@ -725,7 +999,9 @@ export function OptionTQuote({
     <div className={cn("flex flex-col transition-opacity duration-200", loading && "pointer-events-none opacity-60")} aria-busy={loading || undefined}>
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-1 pb-2">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-xs font-semibold">{chain.etf?.name} 期权链</span>
+          <span className="truncate text-xs font-semibold">
+            {chain.etf?.name}{chain.underlying?.kind === "index" ? "" : " 期权链"}
+          </span>
           {cacheTag}
           {loading && (
             <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground" role="status">
@@ -733,15 +1009,36 @@ export function OptionTQuote({
               切换中…
             </span>
           )}
-          <span className="shrink-0 text-xs text-muted-foreground tnum">标的 {nf(s, 3)}（{pct(chain.underlying?.pct)}）</span>
+          <span className="shrink-0 text-xs text-muted-foreground tnum">标的 {nf(s, chain.underlying?.kind === "index" ? 2 : 3)}（{pct(chain.underlying?.pct)}）</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted-foreground">
-            ATM IV {chain.stats?.atm_iv ?? "—"}%{chain.stats?.atm_iv_pctl20 != null ? ` · 20日分位${Math.round(chain.stats.atm_iv_pctl20)}%` : ""} · 偏斜 {chain.stats?.skew ?? "—"} · PCR {chain.stats?.pcr ?? "—"}
+            <Tip label={`ATM IV ${chain.stats?.atm_iv ?? "—"}%`} tip={GLOSSARY["ATM IV"]} />
+            {chain.stats?.atm_iv_pctl20 != null && (
+              <>{" · "}<Tip label={`20日分位 ${Math.round(chain.stats.atm_iv_pctl20)}%`} tip={GLOSSARY["IV 分位"]} /></>
+            )}
+            {" · "}<Tip label={`偏斜 ${chain.stats?.skew ?? "—"}`} tip={GLOSSARY["偏斜"]} />
+            {" · "}<Tip label={`PCR ${chain.stats?.pcr ?? "—"}`} tip={GLOSSARY.PCR} />
             {expiryDays != null && expiryDays < 7 && (
-              <span className="ml-1 font-semibold text-warning">距到期{expiryDays}天·Theta衰减快</span>
+              <span className="ml-1 font-semibold text-warning"><AutoTip text={`距到期${expiryDays}天·Theta衰减快`} /></span>
             )}
           </span>
+          <div className="inline-flex items-center rounded-lg bg-muted p-0.5" role="group" aria-label="列显示模式">
+            {[{ dense: false, label: "全部列" }, { dense: true, label: "精简" }].map((o) => (
+              <button
+                key={o.label}
+                type="button"
+                onClick={() => setCompact(o.dense)}
+                aria-pressed={compact === o.dense}
+                className={cn(
+                  "rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  compact === o.dense ? "bg-background shadow-xs" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
           <Tabs tabs={expiries.map((m: number) => ({ key: String(m), label: `${m}月` }))} value={String(month)} onChange={(k) => onMonth(Number(k))} />
         </div>
       </div>
@@ -786,32 +1083,48 @@ export function OptionTQuote({
           <span className="ml-auto text-[10px] text-muted-foreground">红=认购首选 · 绿=认沽首选</span>
         </div>
       )}
-      <div className="max-h-[62vh] overflow-auto">
+      <div className="max-h-[62vh] overflow-auto" ref={scrollRef}>
         <Table>
           <THead>
             <TR>
-              <TH colSpan={6} className="text-center text-up">认购 Call</TH>
+              <TH colSpan={callOrder.length} className="text-center text-up">认购 Call</TH>
               <TH className="text-center">行权价</TH>
-              <TH colSpan={6} className="text-center text-down">认沽 Put</TH>
+              <TH colSpan={putOrder.length} className="text-center text-down">认沽 Put</TH>
             </TR>
             <TR>
-              <TH>名称</TH><TH className="text-right">现价</TH><TH className="text-right">涨跌</TH><TH className="text-right">IV</TH><TH className="text-right">Δ</TH><TH className="text-right" title="Gamma：Delta 对标的价格的变动率，平值附近最大">Γ</TH>
+              {callOrder.map((k) => (k === "name" ? <TH key={k}>名称</TH> : <HelpTh key={k} col={COL_OF[k]} />))}
               <TH className="text-center">K</TH>
-              <TH className="text-right" title="Gamma：Delta 对标的价格的变动率，平值附近最大">Γ</TH><TH className="text-right">Δ</TH><TH className="text-right">IV</TH><TH className="text-right">涨跌</TH><TH className="text-right">现价</TH><TH>名称</TH>
+              {putOrder.map((k) => (k === "name"
+                ? <TH key={k} className="text-right">名称</TH>
+                : <HelpTh key={k} col={COL_OF[k]} />))}
             </TR>
           </THead>
           <TBody>
             {rows.map((row: any) => {
               const c = row.call, p = row.put;
               const isAtm = row.strike === atmStrike;
+              // 整行可点：按点击落在认购/认沽哪一侧决定选哪只（行权价列本身不响应）
+              const onRowClick = (e: React.MouseEvent<HTMLTableRowElement>) => {
+                const td = (e.target as HTMLElement).closest("td");
+                if (!td) return;
+                const idx = (td as HTMLTableCellElement).cellIndex;
+                const callN = callOrder.length;
+                if (idx < callN && c) pickContract(c);
+                else if (idx > callN && p) pickContract(p);
+              };
               return (
-                <TR key={row.strike} className={cn(isAtm && "bg-warning/15 ring-1 ring-inset ring-warning/40")}>
-                  <ContractCells c={c} selected={selectedSecid} onSelect={onSelect} align="left" pick={pickOf(c)} />
-                  <TD className={cn("text-center font-semibold tnum", isAtm && "text-warning-foreground")}>
-                    {isAtm && <span className="mr-1 rounded bg-warning/25 px-1 align-middle text-[9px] leading-4">ATM</span>}
+                <TR key={row.strike}
+                  onClick={onRowClick}
+                  className={cn(
+                    "cursor-pointer",
+                    // 选中不再给整行上色（只框选中合约所在的那半侧，见 ContractCells）
+                    isAtm && "bg-warning/15 ring-1 ring-inset ring-warning/40",
+                  )}>
+                  <ContractCells c={c} order={callOrder} ctx={colCtx} selected={selectedSecid} onSelect={onSelect} align="left" pick={pickOf(c)} />
+                  <TD className={cn("text-center font-semibold tnum", isAtm && "bg-warning/20 text-warning-foreground")}>
                     {row.strike.toFixed(3)}
                   </TD>
-                  <ContractCells c={p} selected={selectedSecid} onSelect={onSelect} align="right" pick={pickOf(p)} />
+                  <ContractCells c={p} order={putOrder} ctx={colCtx} selected={selectedSecid} onSelect={onSelect} align="right" pick={pickOf(p)} />
                 </TR>
               );
             })}
@@ -822,25 +1135,31 @@ export function OptionTQuote({
   );
 }
 
-function ContractCells({ c, selected, onSelect, align, pick }: {
-  c: any; selected?: string; onSelect: (c: any) => void; align: "left" | "right";
+function ContractCells({ c, order, ctx, selected, onSelect, align, pick }: {
+  c: any; order: string[]; ctx: { rv: any; rf: any };
+  selected?: string; onSelect: (c: any) => void; align: "left" | "right";
   pick?: "call" | "put";
 }) {
-  if (!c) return <TD colSpan={6} className="text-center text-muted-foreground">—</TD>;
+  if (!c) return <TD colSpan={order.length} className="text-center text-muted-foreground">—</TD>;
   const on = c.secid === selected;
-  const num = (v: any, d = 4) => nf(v, d);
+  const n = order.length;
+  // name 在 call/put/comfort 四种列序里的位置都不同，按实际下标算边框
+  const nameIdx = order.indexOf("name");
+  // 选中框只框**这一侧**的单元格组（名称…K），中间的行权价列归两侧共用、不框。
+  // 用内阴影画 2px 边而不是 border：border 会改变行高，来回切合约时整张表上下跳。
+  const selStyle = (i: number) => (on ? {
+    boxShadow: [
+      i === 0 ? "inset 2px 0 0 0 var(--primary)" : null,
+      i === n - 1 ? "inset -2px 0 0 0 var(--primary)" : null,
+      "inset 0 2px 0 0 var(--primary)",
+      "inset 0 -2px 0 0 var(--primary)",
+    ].filter(Boolean).join(", "),
+  } : undefined);
+  const selCls = on ? "sel-cell" : "";
   // 首选合约：认购用红、认沽用绿，整侧单元格铺底色，与 ATM 的琥珀色区分
   const pickCls = pick === "call" ? "bg-up/10" : pick === "put" ? "bg-down/10" : "";
-  const vals = [
-    <TD key="last" className={cn("text-right tnum", pickCls, pick && "font-semibold", on && "font-bold")}>{num(c.last)}</TD>,
-    <TD key="pct" className={cn("text-right tnum", pickCls, clsUpDown(c.pct))}>{pct(c.pct, 1)}</TD>,
-    <TD key="iv" className={cn("text-right tnum text-muted-foreground", pickCls)}>{nf(c.iv, 1)}</TD>,
-    <TD key="d" className={cn("text-right tnum text-muted-foreground", pickCls)}>{nf(c.delta, 2)}</TD>,
-    <TD key="g" className={cn("text-right tnum text-muted-foreground", pickCls)} title="Gamma：Δ 对标的价格的变动率">{gamma(c.gamma)}</TD>,
-  ];
   const name = (
-    <TD key="name" className={cn("p-0", pickCls, align === "right" && "text-right",
-      pick === "call" && "border-l-2 border-up", pick === "put" && "border-r-2 border-down")}>
+    <TD key="name" style={selStyle(nameIdx)} className={cn("p-0", selCls, pickCls, align === "right" && "text-right")}>
       {/* 可点选 → 必须是真按钮，才能键盘 Tab 到、Enter 触发并显示焦点环 */}
       <button
         type="button"
@@ -851,19 +1170,40 @@ function ContractCells({ c, selected, onSelect, align, pick }: {
           align === "right" && "justify-end",
         )}
       >
-        {on && <Flame className="size-3 shrink-0 text-warning" aria-hidden />}
-        {pick && (
+        {pick === "put" && (
           <span className={cn(
             "shrink-0 rounded px-1 text-[9px] font-semibold leading-4",
-            pick === "call" ? "bg-up/20 text-up" : "bg-down/20 text-down",
+            "bg-down/20 text-down",
           )}>
             首选
           </span>
         )}
         <span className={cn("truncate", pick === "call" && "text-up", pick === "put" && "text-down")}>{c.name}</span>
+        {pick === "call" && (
+          <span className={cn(
+            "shrink-0 rounded px-1 text-[9px] font-semibold leading-4",
+            "bg-up/20 text-up",
+          )}>
+            首选
+          </span>
+        )}
       </button>
     </TD>
   );
-  const cells = align === "left" ? [name, ...vals] : [...vals.reverse(), name];
-  return <>{cells}</>;
+  return (
+    <>
+      {order.map((k, i) => {
+        if (k === "name") return name;
+        const col = COL_OF[k];
+        return (
+          <TD key={k} style={selStyle(i)}
+            className={cn("text-right whitespace-nowrap tnum text-muted-foreground", pickCls, selCls,
+              k === "last" && "text-foreground", on && k === "last" && "font-bold")}
+            title={col.label}>
+            {col.get(c, ctx)}
+          </TD>
+        );
+      })}
+    </>
+  );
 }

@@ -7,8 +7,8 @@ import datetime as dt
 import logging
 import time
 
-from services import (decision, index_levels, kronos, market_service as ms, market_turnover,
-                      option_service as osvc, user_settings as usv)
+from services import (decision, em, index_levels, kronos, market_service as ms, market_turnover,
+                      option_service as osvc, pick_tracker as tracker, user_settings as usv, vol)
 from services.indicators import atr, macd_state, pct_change, support_resistance, volume_stats
 from services.universe import ETF_BY_CODE, ETFS, TRACK_INDEX
 
@@ -19,6 +19,22 @@ _NT_TTL = 30
 
 _DIR_CACHE: tuple[float, dict] | None = None
 _DIR_TTL = 60
+
+# 最近一次 analyze 算出的标的买卖点（供期权链接口复用，保证盈亏比口径一致）
+_PLAN_CACHE: dict[str, tuple[float, dict, float]] = {}
+_PLAN_TTL = 300
+
+
+def plan_hint(code: str) -> dict:
+    """返回最近一次 analyze 的评分上下文 ``{levels, spot, iv_rv_ratio}``（5 分钟内）。
+
+    期权链接口自己没有 K 线，借用这里缓存的点位与 IV/RV，避免「优选合约表」与
+    「T 型报价高亮」因为输入不同而给出不同分数。没有缓存时返回 ``{}``。
+    """
+    hit = _PLAN_CACHE.get(code)
+    if not hit or time.time() - hit[0] > _PLAN_TTL:
+        return {}
+    return hit[1]
 
 
 async def national_team_cached() -> dict:
@@ -55,8 +71,54 @@ async def directions() -> dict:
             return etf["code"], {"direction": "neutral", "score": 0, "confidence": 0}
 
     out = dict(await asyncio.gather(*[one(e) for e in ETFS]))
+    # 股指期权（MO/IO/HO）也要进这张表：否则左栏那三行永远显示「观望」，
+    # 点进去却是「看空 -54.5」，同一份方向两处口径打架。
+    from services import index_option as idxo
+    fut = await asyncio.gather(*[idxo.direction(f["code"]) for f in idxo.FUT_OPTS],
+                               return_exceptions=True)
+    for f, d in zip(idxo.FUT_OPTS, fut):
+        out[f["code"]] = d if isinstance(d, dict) else {"direction": "neutral", "score": 0, "confidence": 0}
+    # 左栏底栏的两个大盘指数也要有同样的三档徽标（看多/看空/观望）
+    idx = await asyncio.gather(*[index_direction(c, s) for c, s in _BIG_INDEX],
+                               return_exceptions=True)
+    for (c, _), d in zip(_BIG_INDEX, idx):
+        out[c] = d if isinstance(d, dict) else {"direction": "neutral", "score": 0, "confidence": 0}
     _DIR_CACHE = (now, out)
     return out
+
+
+# 左栏底栏固定显示的两个大盘指数（code -> 东财 secid）
+_BIG_INDEX = [("000001", "1.000001"), ("800005", "47.800005")]
+
+
+def _clamp(v: float, lo: float = -1.0, hi: float = 1.0) -> float:
+    return max(lo, min(hi, v))
+
+
+async def index_direction(code: str, secid: str) -> dict:
+    """指数的日内方向（与标的同口径的三档）。
+
+    指数没有期权链可算 Δ/希腊字母，只看日内结构三件事：涨跌幅、近 15 分钟斜率、
+    现价相对当日均价的位置。三项都归一化后加权，±20 分以内算观望。
+    """
+    try:
+        # 平均股价这类板块代码没有外部分钟源，只能靠交易时段内的快照累积，
+        # 所以必须走 trends_or_snapshot（em.trends 对它恒为空）。
+        tr = em.parse_trends(await em.trends_or_snapshot(secid, ndays=1))
+    except Exception:  # noqa: BLE001 — 指数方向失败不影响主流程
+        tr = []
+    px = [t["price"] for t in tr if t.get("price")]
+    if len(px) < 6:
+        return {"direction": "neutral", "score": 0, "confidence": 0}
+    last, base = px[-1], (px[0] or px[-1])
+    vwap = sum(px) / len(px)
+    pct = (last / base - 1) * 100 if base else 0.0
+    k = min(15, len(px) - 1)
+    slope = (last - px[-1 - k]) / base * 100 if base else 0.0
+    score = round(45 * _clamp(pct / 1.2) + 35 * _clamp(slope / 0.5)
+                  + 20 * (1 if last >= vwap else -1), 1)
+    return {"direction": "call" if score >= 20 else "put" if score <= -20 else "neutral",
+            "score": score, "confidence": round(min(abs(score) / 60, 1), 2)}
 
 
 def _now_hm() -> str:
@@ -245,6 +307,28 @@ def bias_score(etf_ctx, track, national, ext, kronos_sum, idx_levels=None,
     return {"score": score, "direction": direction, "confidence": round(conf, 2), "detail": detail}
 
 
+def _struct_target(entry: float, stop: float, levels: list | None, *,
+                   up: bool, atr_v: float) -> float:
+    """止盈 = 入场方向上的下一道结构位（不再机械地取 2R）。
+
+    买方止盈要落在真实的流动性墙上：太近（<1.2R）性价比不够，跳到再上一档；
+    太远（>3.5R）多半到不了，收敛到 3.5R；没有可用结构位时退回 2.2×ATR 的动量目标。
+    这样不同标的/不同时段算出来的盈亏比才不一样（1.4:1、2.6:1…），而不是永远 2.0:1。
+    """
+    risk = abs(entry - stop) or atr_v or max(entry * 0.01, 1e-4)
+    cands = [x for x in (levels or []) if (x - entry if up else entry - x) > 1.2 * risk]
+    if cands:
+        t = min(cands) if up else max(cands)
+        cap = 3.5 * risk
+        if abs(t - entry) > cap:
+            t = entry + cap if up else entry - cap
+        return round(t, 4)
+    # 没有可用结构位时按 ATR 走，但**至少 2R**：ATR 很小（窄幅震荡）时
+    # 2.2×ATR 会算出比止损距离还短的目标，盈亏比掉到 0.3:1 这种东西。
+    dist = max(2.2 * atr_v, 2.0 * risk)
+    return round(entry + dist if up else entry - dist, 4)
+
+
 def plan_levels(etf_ctx, direction: str) -> dict:
     """基于标的日内结构给出入场/止损/止盈（标的层面），再折算到合约。"""
     k1 = etf_ctx.get("kline_1m") or []
@@ -264,7 +348,7 @@ def plan_levels(etf_ctx, direction: str) -> dict:
         entry = round(h15, 4)                 # 突破近端高点入场
         pullback = round(max(last - 0.5 * a, l15 + 0.3 * a), 4)
         stop = round(min(l15 - 0.5 * a, last - 1.5 * a), 4)
-        target = round(entry + 2 * (entry - stop), 4)
+        target = _struct_target(entry, stop, sr.get("resistances"), up=True, atr_v=a)
         return {"side": "long", "entry_break": entry, "entry_pullback": pullback,
                 "stop": stop, "target": target, "atr": round(a, 4),
                 "day_high": sr.get("day_high"), "day_low": sr.get("day_low")}
@@ -272,11 +356,32 @@ def plan_levels(etf_ctx, direction: str) -> dict:
         entry = round(l15, 4)                 # 跌破近端低点入场
         pullback = round(min(last + 0.5 * a, h15 - 0.3 * a), 4)
         stop = round(max(h15 + 0.5 * a, last + 1.5 * a), 4)
-        target = round(entry - 2 * (stop - entry), 4)
+        target = _struct_target(entry, stop, sr.get("supports"), up=False, atr_v=a)
         return {"side": "short", "entry_break": entry, "entry_pullback": pullback,
                 "stop": stop, "target": target, "atr": round(a, 4),
                 "day_high": sr.get("day_high"), "day_low": sr.get("day_low")}
     return {"side": "flat", "note": "方向不明，观望"}
+
+
+def pullback_plan(levels: dict) -> dict:
+    """把「突破/跌破入场」计划换成「回踩入场」，用于反向备选卡。
+
+    反向是逆势小仓，追突破价往往比现价高/低一大截（实测 +10% 触发），性价比差；
+    改用回踩结构位入场，止损仍用原结构位，目标按新入场重算 2R，盈亏比不变。
+    """
+    if not levels:
+        return levels
+    break_px = levels.get("entry_break")
+    pull = levels.get("entry_pullback")
+    stop = levels.get("stop")
+    if break_px is None or pull is None or stop is None:
+        return levels
+    long_side = break_px > stop                 # 看涨计划：目标在入场上方
+    risk = abs(pull - stop)
+    if risk <= 0:
+        return levels
+    target = round(pull + 2 * risk, 4) if long_side else round(pull - 2 * risk, 4)
+    return {**levels, "entry_break": round(pull, 4), "target": target}
 
 
 def chain_for_month(chain_data: dict, month: int | None) -> dict:
@@ -345,9 +450,51 @@ def contract_levels(contract: dict, und_levels: dict, s_now: float) -> dict:
         "contract": contract.get("name"), "code": contract.get("code"),
         "current": cur, "delta": delta,
         "entry": entry, "stop": stop, "target": target,
+        # entry_pct 是触发价相对现价的偏离（≥3% 标「触发买入」）；
+        # 止损/止盈幅度一律相对入场价——买方实际承担/赚取的就是这笔，
+        # 相对现价算会把触发偏离混进去，盈亏比跟着失真。
         "entry_pct": round((entry / cur - 1) * 100, 1) if entry else None,
-        "stop_pct": round((stop / cur - 1) * 100, 1) if stop else None,
-        "target_pct": round((target / cur - 1) * 100, 1) if target else None,
+        "stop_pct": round((stop / entry - 1) * 100, 1) if entry else None,
+        "target_pct": round((target / entry - 1) * 100, 1) if entry else None,
+    }
+
+
+def recommend_card(cand: dict | None, levels: dict | None, spot: float,
+                   direction: str, kind: str = "primary") -> dict | None:
+    """把一只合约整理成前端「推荐卡」：买入/止损/止盈 + 理由。
+
+    价格全部来自 ``contract_levels``（按 Δ 折算标的点位），前端不再二次计算——
+    一份公式两处实现，迟早会分叉。``kind`` 区分主推（primary）与反向（reverse）。
+    """
+    if not cand:
+        return None
+    cl = contract_levels(cand, levels or {}, spot) or {}
+    rr = cand.get("rr") or {}
+    reasons = list(cand.get("reasons") or [])
+    if cl.get("stop_pct") is not None and cl.get("target_pct") is not None:
+        reasons.append(f"按 {abs(cand.get('delta') or 0):.2f}Δ 折算："
+                       f"止损 {cl['stop_pct']:+.0f}% / 止盈 {cl['target_pct']:+.0f}%")
+    if rr.get("roi") is not None:
+        reasons.append(f"期望收益 {rr['roi'] * 100:+.0f}% 权利金"
+                       f"（p≈{rr.get('p')}，赚 {rr.get('up')} / 亏 {rr.get('down')}）")
+    # 买 1 张的现金盈亏（乘数：ETF 10000 份/张、股指期权 100 元/点）
+    mult = cand.get("multiplier") or 10000
+    entry, stop, target = cl.get("entry"), cl.get("stop"), cl.get("target")
+    profit = round((target - entry) * mult, 0) if target is not None and entry is not None else None
+    loss = round((entry - stop) * mult, 0) if stop is not None and entry is not None else None
+    return {
+        "kind": kind, "side": direction,
+        "code": cand.get("code"), "secid": cand.get("secid"),
+        "name": cand.get("name"), "month": cand.get("month"),
+        "days": cand.get("days"), "score": cand.get("score"),
+        "delta": cand.get("delta"), "iv": cand.get("iv"),
+        "price": cand.get("last"),
+        "entry": cl.get("entry"), "stop": cl.get("stop"), "target": cl.get("target"),
+        "entry_pct": cl.get("entry_pct"), "stop_pct": cl.get("stop_pct"),
+        "target_pct": cl.get("target_pct"),
+        "multiplier": mult, "profit": profit, "loss": loss,
+        "cost": round(entry * mult, 0) if entry is not None else None,
+        "rr": rr, "reasons": reasons[:5],
     }
 
 
@@ -355,13 +502,15 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
     etf = ETF_BY_CODE.get(etf_code)
     if not etf:
         return {"error": f"未知标的 {etf_code}"}
-    chain, etf_ctx, national, ext, idx_lv, turnover = await asyncio.gather(
+    chain, etf_ctx, national, ext, idx_lv, turnover, daily = await asyncio.gather(
         osvc.chain(etf_code),
         ms.etf_context(etf_code, etf["secid"]),
         national_team_cached(),
         ms.external_snapshot(),
         index_levels.snapshot(),
         market_turnover.snapshot(),
+        # 20 日已实现波动：给买方判断「隐波贵不贵」（em 层 45s 缓存，不额外压请求）
+        ms.kline(etf["secid"], klt=101, lmt=30),
     )
     track = await ms.track_index_state(etf["track"])
 
@@ -381,6 +530,15 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
     levels = plan_levels(etf_ctx, plan_dir)
 
     s_now = (chain.get("underlying") or {}).get("price") or 0
+    # 买方择时：IV 相对 20 日已实现波动（IV 分位样本不足时的即时替代口径）
+    ivrv = vol.iv_rv(chain, daily)
+    _PLAN_CACHE[etf_code] = (time.time(), {"levels": levels, "spot": s_now,
+                                           "iv_rv_ratio": (ivrv or {}).get("ratio")})
+    iv_note = vol.buyer_note((chain.get("stats") or {}).get("atm_iv_pctl20"),
+                             (ivrv or {}).get("ratio"))
+    if iv_note:
+        signals = [*signals, {"type": "iv_cost", "level": "warn",
+                              "dir": "neutral", "text": iv_note}]
 
     # ── 决策层：到期约束 → 策略类型 → 手数上限 → 撜口与限额 ─────────────
     us = usv.load()
@@ -399,7 +557,36 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
         target_month = calendar_rows[1]["month"]
     work_chain = chain_for_month(chain, target_month)
     rank_dir = bias["direction"] if bias["direction"] != "neutral" else "auto"
-    candidates = osvc.rank_candidates(work_chain, rank_dir, top=6)
+    calib = tracker.calibration()
+    rank_trend = {**bias, "iv_rv_ratio": (ivrv or {}).get("ratio")}
+    candidates = osvc.rank_candidates(work_chain, rank_dir, top=6, trend=rank_trend,
+                                      levels=levels, spot=s_now, calib=calib)
+    # 实盘跟踪：记录主选、回填历史记录的 5/15/30 分钟收益（失败只记日志）
+    tracker.record(etf_code, plan_dir, candidates[0] if candidates else None,
+                   iv_pctl=iv_pct)
+    tracker.update(etf_code, chain)
+
+    # 合约没有外部分钟源，只能本地逐分钟累积：给前 3 只候选各记一次快照，
+    # 用户点开详情时就不会是一条断断续续的线（失败忽略，不影响主流程）。
+    try:
+        await asyncio.gather(*[osvc.option_trends(c["secid"]) for c in candidates[:3]],
+                             return_exceptions=True)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("合约分时预热失败 %s: %s", etf_code, exc)
+
+    # 反向合约：同一条链上反方向再选一只；买卖点用**回踩入场**的反向点位折算
+    # （逆势小仓不该追突破价，实测反向卡触发价能比现价高 10%）。
+    reverse_dir = "put" if plan_dir == "call" else "call"
+    rev_levels = pullback_plan(plan_levels(etf_ctx, reverse_dir))
+    rev_cands = osvc.rank_candidates(work_chain, reverse_dir, top=3, trend=rank_trend,
+                                     levels=rev_levels, spot=s_now, calib=calib)
+    recommendation = {
+        "primary": recommend_card(candidates[0] if candidates else None,
+                                  levels, s_now, plan_dir, "primary"),
+        "reverse": recommend_card(rev_cands[0] if rev_cands else None,
+                                  rev_levels, s_now, reverse_dir, "reverse"),
+        "reverse_note": "逆势方向，只在对冲或明确反转信号时小仓参与",
+    }
 
     if strat.get("month") == "next" and not candidates:
         strat = {**strat, "strategy": decision.STRATEGY_WAIT,
@@ -454,11 +641,20 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
         "etf": etf,
         "underlying": chain.get("underlying"),
         "chain_stats": chain.get("stats"),
+        "iv_rv": ivrv,
+        "calibration": calib,
         "front_month": chain.get("front_month"),
         "bias": bias,
         "signals": signals,
         "levels": levels,
+        # 合约图按所选合约方向取计划：认购看涨计划、认沽看跌计划，
+        # 否则看跌主推时点开购合约会看到「止盈在止损下面」（方向反了）。
+        "levels_by_side": {
+            "call": levels if plan_dir == "call" else rev_levels,
+            "put": levels if plan_dir == "put" else rev_levels,
+        },
         "plans": [p for p in plans if p],
+        "recommendation": recommendation,
         "candidates": [{k: v for k, v in c.items() if not k.startswith("_")} for c in candidates],
         "kronos": kronos_sum,
         "track": {"quote": track.get("quote"), "support": track.get("support"), "macd": track.get("macd")},

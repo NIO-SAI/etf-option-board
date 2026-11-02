@@ -203,7 +203,9 @@ async def _build_plan(etf: dict, ctx: dict, side: str, score: float,
     iv_note = ""
     try:
         chain = await osvc.chain(etf["code"])
-        cands = osvc.rank_candidates(chain, direction, top=3)
+        cands = osvc.rank_candidates(chain, direction, top=3,
+                                     trend={"direction": direction, "score": score},
+                                     levels=levels, spot=last)
         s_now = (chain.get("underlying") or {}).get("price") or last or 0
         if cands and entry_s and stop_s and target_s:
             cl = strategy.contract_levels(cands[0], levels, s_now)
