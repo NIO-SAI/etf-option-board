@@ -163,13 +163,14 @@ Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/do
     → 信号引擎打分 → 大模型出可执行方案 → SSE 声音+弹窗告警。
   - 规模：后端 `services/` 15 个模块约 5.3k 行；前端 `web/src` 约 3.5k 行 TS/TSX。
   - 文档地图：架构与策略逻辑 → `CONTEXT.md`；部署/命令/数据源策略 → 本文件；
-    标的清单 → `README.md`；工作追踪与 triage 结论 → `.scratch/`；
-    `期权/` 下 4 个独立 agent skill（策略顾问/链数据/策略报告/长期备兑）是仓库资产，
-    不属于看板运行时。
+    标的清单 → `README.md`；工作追踪与 triage 结论 → `.scratch/`。
+  - 4 个独立 agent skill（策略顾问/链数据/策略报告/长期备兑）**已移出本仓库**，
+    现在在 `~/workspace/Skills/疯疯旭SKILL/期权/`，不属于看板运行时；
+    本仓库的 `.gitignore` 仍保留 `期权/` 规则，防止误拷回来。
 - **易踩的三个点**：行情主源是 `emdatah5` + 腾讯（K线/分时），`push2` 仅兜底，排查「没数据」
   别先怪没开盘；改前端必须 `bash web/build.sh`，否则线上不变；用户设置（总资金/单笔风险%）
   存 `data/settings.json`，靠 `.gitignore` 的 `data/*.json` 规则规避 auto-backup —— **新增长期数据
-  文件一律用 `.json` 后缀**，`data/*.jsonl` 是被 git 跟踪的。
+  文件一律用 `.json` 后缀**；`data/*.jsonl` 已于 2026-11-02 移出跟踪（分钟线累积会持续增长）。
 - **动态状态不写进本文件**（会过期），按需现取：追踪器进度看 `.scratch/<feature>/` 与
   `.scratch/triage-*.md`；服务健康 `curl http://127.0.0.1:6799/api/health`；
   最近一次部署结果看 `data/.deploy_status`。
