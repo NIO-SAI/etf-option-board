@@ -7,14 +7,19 @@ import datetime as dt
 import json
 import os
 
+import logging
+
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
-from services import (alerts, decision, deploy as deploy_svc, em, index_levels, kronos, llm,
+from services import (alerts, board_collector as bcol, boardflow as bf, decision,
+                      deploy as deploy_svc, em, index_levels, kronos, llm,
                       market_service as ms, monitor, option_playbook as playbook,
                       option_service as osvc, reversal, strategy, user_settings as usv,
                       vol)
 from services.universe import ETF_BY_CODE, ETFS, EXTERNAL, INDICES, NATIONAL_TEAM_ETFS
+
+log = logging.getLogger("api")
 
 router = APIRouter(prefix="/api")
 
@@ -595,3 +600,95 @@ async def settings_update(payload: dict):
     if not usv.save(settings):
         return {"error": "设置写入失败"}
     return usv.view(settings)
+
+
+# --------------------------------------------------------------------------
+# 板块资金（本地库只读 + 采集器状态；数据由 board_collector 在交易时段写入）
+# --------------------------------------------------------------------------
+@router.get("/board/health")
+async def board_health():
+    """采集器状态与库里最新一轮的时间，前端用它判断「交易中 / 最后更新时间」。"""
+    try:
+        last = await asyncio.to_thread(bf.last_cycle)
+        counts = await asyncio.to_thread(bf.counts)
+    except Exception as exc:  # noqa: BLE001 — 库未初始化/损坏时降级，不抛 500
+        last, counts = None, {"boards": 0, "days": 0}
+        log.warning("板块库状态读取失败: %s", exc)
+    return {
+        "trading": bf.in_session(dt.datetime.now()),
+        "last": last,
+        "counts": counts,
+        "collector": bcol.state(),
+        "retention": {"points_days": bf.KEEP_POINT_DAYS, "rank_days": bf.KEEP_RANK_DAYS},
+    }
+
+
+@router.get("/board/rank")
+async def board_rank(type: str = Query("concept",
+                                       description="concept / industry / watch"),
+                     date: str | None = Query(None, description="YYYY-MM-DD，缺省为最近一个有数据的交易日")):
+    """板块资金排行（只读本地库，不会触发任何上游请求）。
+
+    库为空时返回 `items=[]` 与 `error` 提示，前端显示空态而不是 500。
+    """
+    btype = type if type in ("concept", "industry", "watch", "all") else "concept"
+    want_watch = btype == "watch"
+    if not date:
+        dates = await asyncio.to_thread(bf.available_dates, 1)
+        date = dates[0] if dates else dt.date.today().isoformat()
+
+    watch = await asyncio.to_thread(bf.load_watch)
+    watch_codes = {w["code"] for w in watch}
+
+    try:
+        if want_watch or btype == "all":
+            rows = await asyncio.to_thread(bf.read_rank, date)
+            if want_watch:
+                rows = [r for r in rows if r["code"] in watch_codes]
+        else:
+            rows = await asyncio.to_thread(bf.read_rank, date, btype)
+    except Exception as exc:  # noqa: BLE001 — 库损坏/未初始化一律降级
+        return {"date": date, "type": btype, "items": [], "error": f"板块库读取失败: {exc}"}
+
+    for r in rows:
+        r["watch"] = r["code"] in watch_codes
+        if r.get("prev_rank") is not None:
+            r["rank_delta"] = int(r["prev_rank"]) - int(r["rank"]) if r.get("rank") else None
+        else:
+            r["rank_delta"] = None
+
+    today = dt.date.today().isoformat()
+    out = {"date": date, "type": btype, "items": rows, "is_today": date == today,
+           "trading": bf.in_session(dt.datetime.now()),
+           "watch_count": len(watch_codes)}
+    if not rows:
+        out["error"] = ("还没有自选板块，点列表右侧星标即可加入"
+                        if want_watch and not watch_codes
+                        else "暂无采集数据（交易时段每 30 秒采集一次）")
+    return out
+
+
+@router.get("/board/watch")
+async def board_watch():
+    return {"items": await asyncio.to_thread(bf.load_watch)}
+
+
+@router.post("/board/watch")
+async def board_watch_add(code: str = Query(...), name: str = Query("")):
+    """加入自选板块（幂等）。"""
+    if not code.startswith("BK"):
+        return {"error": "板块代码必须是 BK 开头"}
+    items = await asyncio.to_thread(bf.load_watch)
+    if not any(it["code"] == code for it in items):
+        items.append({"code": code, "name": (name or code).strip()})
+        if not await asyncio.to_thread(bf.save_watch, items):
+            return {"error": "自选板块写入失败"}
+    return {"items": items}
+
+
+@router.delete("/board/watch")
+async def board_watch_remove(code: str = Query(...)):
+    items = [it for it in await asyncio.to_thread(bf.load_watch) if it["code"] != code]
+    if not await asyncio.to_thread(bf.save_watch, items):
+        return {"error": "自选板块写入失败"}
+    return {"items": items}

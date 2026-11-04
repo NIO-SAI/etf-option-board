@@ -56,4 +56,15 @@ export const api = {
   alerts: () => get("/alerts?limit=60"),
   reversalSignals: (code: string) => get(`/reversal/signals?code=${code}`),
   monitorCycle: async () => (await fetch(`${BASE}/monitor/cycle`, { method: "POST" })).json(),
+
+  // 板块资金（读本地库，采集由后端随机进行）
+  boardHealth: () => get("/board/health"),
+  boardRank: (type = "concept", date?: string) =>
+    get(`/board/rank?type=${type}${date ? `&date=${date}` : ""}`),
+  boardWatch: () => get("/board/watch"),
+  boardWatchAdd: async (code: string, name: string) =>
+    (await fetch(`${BASE}/board/watch?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`,
+      { method: "POST" })).json(),
+  boardWatchRemove: async (code: string) =>
+    (await fetch(`${BASE}/board/watch?code=${encodeURIComponent(code)}`, { method: "DELETE" })).json(),
 };

@@ -8,7 +8,10 @@
  *  - 总量 20MB 上限，按最后访问时间淘汰。
  */
 
-export type CacheKind = "ctx" | "chain" | "plan" | "sig" | "trends" | "levels";
+export type CacheKind =
+  | "ctx" | "chain" | "plan" | "sig" | "trends" | "levels"
+  // 板块资金：排行 / 分时 / 详情 / 多日 / ETF / 4维
+  | "brank" | "bseries" | "bdetail" | "bmulti" | "etfrank" | "etfseries" | "emseries";
 
 const DB_NAME = "etf-board";
 const STORE = "entries";

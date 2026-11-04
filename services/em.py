@@ -1,6 +1,8 @@
 """东方财富行情接口客户端（异步 httpx，直连 + curl 兜底 + 短 TTL 缓存）。
 
 所有请求手拼 query（safe=",:"），否则 fs=m:10+t:10 等会被编码成 %3A 而返回空数据。
+注意 `+` **不能**放进 safe：raw `+` 在 query 里等价空格，emdatah5 会忽略 fs 过滤
+（实测 fs=m:90+t:3 返回 1113 条全板块，编码成 %2B 才返回正确的 531 条概念板块）。
 """
 
 from __future__ import annotations
@@ -219,7 +221,7 @@ async def close() -> None:
 def _build(url: str, params: dict) -> str:
     if not params:
         return url
-    return f"{url}?{urlencode(params, safe=',:+')}"
+    return f"{url}?{urlencode(params, safe=',:')}"
 
 
 async def _curl_json(url: str, params: dict | None = None,

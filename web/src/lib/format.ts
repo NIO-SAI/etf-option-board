@@ -50,6 +50,19 @@ export const signedWan = (v: any): string => {
   return `${r > 0 ? "+" : ""}${r}万`;
 };
 
+/** 板块/ETF 资金：≥1 亿按「亿」两位小数，否则按「万」整数（板块资金动辄几十亿，万亿单位难读）。 */
+export const signedYi = (v: any): string => {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = Number(v);
+  if (!isFinite(n)) return "—";
+  if (Math.abs(n) >= 1e8) {
+    const yi = Math.round((n / 1e8) * 100) / 100;
+    return `${yi > 0 ? "+" : ""}${yi.toFixed(2)}亿`;
+  }
+  const wan = Math.round(n / 1e4);
+  return `${wan > 0 ? "+" : ""}${wan}万`;
+};
+
 export const upDown = (v: any): "up" | "down" | "flat" => {
   const n = Number(v);
   if (!isFinite(n) || n === 0) return "flat";

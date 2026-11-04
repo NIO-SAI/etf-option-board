@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from routers import api
-from services import em, kronos, monitor
+from services import board_collector, em, kronos, monitor
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -34,12 +34,14 @@ async def lifespan(app: FastAPI):
     log.info("启动：预热 Kronos（后台）")
     task_k = asyncio.create_task(kronos.warmup())
     task_m = asyncio.create_task(monitor.run_forever())
+    # 板块资金采集：交易时段每 30 秒写本地库，异常只记日志
+    task_b = asyncio.create_task(board_collector.run_forever())
     yield
     log.info("关闭：停止监控与推理子进程")
-    for t in (task_k, task_m):
+    for t in (task_k, task_m, task_b):
         t.cancel()
     with contextlib.suppress(asyncio.CancelledError):
-        await asyncio.gather(task_k, task_m, return_exceptions=True)
+        await asyncio.gather(task_k, task_m, task_b, return_exceptions=True)
     await kronos.shutdown()
     await em.close()
 

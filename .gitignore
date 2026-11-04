@@ -8,6 +8,9 @@ venv/
 data/cache/
 data/*.json
 data/*.jsonl
+data/*.db
+data/*.db-wal
+data/*.db-shm
 data/.deploy_token
 data/.deploy_status
 !data/.gitkeep

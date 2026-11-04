@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Activity, BarChart3, Layers, Wallet } from "lucide-react";
+import { Activity, Layers, Wallet } from "lucide-react";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { EmptyState } from "@/components/ui/misc";
@@ -29,16 +29,6 @@ function BoardPlaceholder({
         </FramePanel>
       </Frame>
     </main>
-  );
-}
-
-export function BoardFlowPage() {
-  return (
-    <BoardPlaceholder
-      title="概念资金分时"
-      subtitle="概念/行业板块主力净流入排行与当日资金分时"
-      icon={<BarChart3 className="size-4" />}
-    />
   );
 }
 
