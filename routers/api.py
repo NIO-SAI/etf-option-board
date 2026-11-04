@@ -984,13 +984,51 @@ async def etf_flow_series(codes: str = Query(""), date: str | None = Query(None)
 
 @router.get("/etf-flow/4dim")
 async def etf_flow_4dim(code: str = Query(...), date: str | None = Query(None)):
-    """单只 ETF 的 4 维资金累计曲线（机构/大单/中户/散户）。"""
+    """单只 ETF 的 4 维资金累计曲线（机构/大单/中户/散户）。
+
+    取数优先级：
+    1) 东财分钟资金流（push2 fflow kline，含 5 档：主力/小/中/大/超大）——当日有真实 4 维分时；
+    2) 本地库（采集器累积，导入的历史只有主力一列）；
+    3) 都拿不到时回查一次实时快照，供前端展示四个数字。
+    """
     if not date:
         try:
             dates = await asyncio.to_thread(bf.available_dates, 1, "etf")
         except Exception:  # noqa: BLE001
             dates = []
         date = dates[0] if dates else dt.date.today().isoformat()
+
+    today = dt.date.today().isoformat()
+
+    def _secid() -> str:
+        return f"{'1' if code.startswith('5') else '0'}.{code}"
+
+    # 1) 东财分钟 5 档资金（f51 时间, f52 主力, f53 小单, f54 中单, f55 大单, f56 超大单）
+    if date == today:
+        try:
+            ff = await em.fflow(_secid(), ttl=20.0)
+            klines = (ff or {}).get("klines") or []
+            if klines:
+                axis_k: list[str] = []
+                d_main, d_small, d_med, d_large, d_super = [], [], [], [], []
+                for line in klines:
+                    parts = line.split(",")
+                    if len(parts) < 6 or len(parts[0]) < 16:
+                        continue
+                    axis_k.append(parts[0][-5:])
+                    d_main.append(float(parts[1] or 0))
+                    d_small.append(float(parts[2] or 0))
+                    d_med.append(float(parts[3] or 0))
+                    d_large.append(float(parts[4] or 0))
+                    d_super.append(float(parts[5] or 0))
+                if len(axis_k) >= 2:
+                    return {"date": date, "code": code, "axis": axis_k,
+                            "dims": {"main": d_main, "super": d_super, "large": d_large,
+                                     "medium": d_med, "small": d_small},
+                            "source": "em_kline", "errors": None}
+        except Exception:  # noqa: BLE001 — 取不到就走本地库
+            pass
+
     try:
         raw = await asyncio.to_thread(bf.read_etf_points, date, [code])
     except Exception as exc:  # noqa: BLE001
@@ -1016,9 +1054,7 @@ async def etf_flow_4dim(code: str = Query(...), date: str | None = Query(None)):
     out = {"date": date, "code": code, "axis": axis, "dims": dims}
     if not axis or all_zero():
         try:
-            # ETF 代码转东财 secid：5 开头沪市(1.)，其余深市(0.)
-            secid = f"{'1' if code.startswith('5') else '0'}.{code}"
-            q = await em.stock_get(secid, "f57,f58,f137,f140,f143,f146,f149,f170", ttl=20.0)
+            q = await em.stock_get(_secid(), "f57,f58,f137,f140,f143,f146,f149,f170", ttl=20.0)
             row = bf.parse_etf_quote(code, q)
             if row:
                 out["snapshot"] = {"main": row["flow"], "super": row["super"],
