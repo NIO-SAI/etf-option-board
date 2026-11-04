@@ -15,7 +15,8 @@ export type CacheKind =
 
 const DB_NAME = "etf-board";
 const STORE = "entries";
-const CAP_BYTES = 20 * 1024 * 1024;
+// 板块资金四页 + 详情的缓存量比期权上下文大一个量级，容量提到 60MB
+const CAP_BYTES = 60 * 1024 * 1024;
 const MEM_MAX = 40;
 
 type Entry = { k: string; day: string; ts: number; at: number; size: number; data: any };
@@ -149,21 +150,31 @@ function touchMem(e: Entry) {
   }
 }
 
+/** 板块资金类缓存：容量吃紧时优先淘汰它们，别把期权上下文挤掉。 */
+const BOARD_KINDS = ["|brank|", "|bseries|", "|bdetail|", "|bmulti|", "|etfrank|", "|etfseries|", "|emseries|"];
+const isBoardEntry = (k: string) => BOARD_KINDS.some((seg) => k.includes(seg));
+
 async function evictOne(): Promise<boolean> {
-  let pick: string | null = null;
-  let at = Infinity;
-  for (const [k, m] of meta) {
-    if (m.at < at) {
-      at = m.at;
-      pick = k;
+  // 第一轮只淘汰板块类；没有可淘汰的再退回全局 LRU（保证一定能腾出空间）
+  for (const boardOnly of [true, false]) {
+    let pick: string | null = null;
+    let at = Infinity;
+    for (const [k, m] of meta) {
+      if (boardOnly && !isBoardEntry(k)) continue;
+      if (m.at < at) {
+        at = m.at;
+        pick = k;
+      }
+    }
+    if (pick) {
+      total -= meta.get(pick)?.size ?? 0;
+      meta.delete(pick);
+      mem.delete(pick);
+      await idbDel(pick);
+      return true;
     }
   }
-  if (!pick) return false;
-  total -= meta.get(pick)?.size ?? 0;
-  meta.delete(pick);
-  mem.delete(pick);
-  await idbDel(pick);
-  return true;
+  return false;
 }
 
 export type Cached<T = any> = { data: T; ts: number; day: string };

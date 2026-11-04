@@ -23,6 +23,19 @@
 
 标的 ↔ 期权链映射经 Sina 交叉验证：`科创50`→588000（华夏），`科创板50`→588080（易方达）。
 
+## 2.1 板块资金（本地库，2026-11-04）
+
+| 数据 | 写入 | 读取 |
+|---|---|---|
+| 概念/行业板块排行与分时 | `board_collector` 30s → `board_flow.db` | `/api/board/rank|series|detail|multi|dates` |
+| ETF 资金流（9 核心 + 宽基/行业 Top30） | `board_collector` 30s → 同库 | `/api/etf-flow/rank|series|4dim` |
+| 指数 / 行业 / 全 A 4 维资金 | `board_collector` 30s / 60s → 同库 | `/api/em-flow/targets|industries|series` |
+
+术语：**主力净流入** = 超大单 + 大单净额（东财 f62/f137）；**4 维** = 机构(超大单 f140)、
+大单(f143)、中户(f146)、散户(f149)；**区间累计** = 区间内各交易日当日净流入之和；
+**名次变化** = 上一轮名次 − 本轮名次（正数为上升，新上榜不伪造数字）。
+单写路径与缓存策略见 `docs/adr/0003-板块资金单写路径与本地缓存.md`。
+
 ## 3. 期权定价（services/bs.py）
 
 - **隐含波动率**：由期权中间价（买卖中值 / 最新价）经 Newton-Raphson + 二分反解，年化。

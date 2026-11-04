@@ -10,6 +10,11 @@ A 股 9 只可交易期权的宽基 ETF 的**日内决策看板**。后端 FastA
 资金流/指数/外围，内置 BS 定价、Kronos 预测桥、大模型决策、实时告警；前端 REUI + React +
 Vite + Tailwind v4，深色看板，SSE 弹窗+声音告警。
 
+顶栏是一排页面标签（hash 路由 `#/options` 与 `#/board/*`）：**期权看板**外加从 stock-webui
+移植的**板块资金四页**（概念资金分时 / 主力资金多日图 / ETF资金流 / 东财资金分时），
+四页共用 `services/boardflow.py` 的本地 SQLite。规格见 `.scratch/board-flow/spec.md`、
+取舍见 `docs/adr/0003-板块资金单写路径与本地缓存.md`。
+
 ## 关键命令
 
 ```bash
@@ -34,6 +39,10 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   测试通知：`curl -X POST http://127.0.0.1:6799/api/admin/test-alert`（发 3 条【测试】告警走真实 SSE）。
 - 已装 LaunchAgent `com.etf-option-board` 常驻 `:6799`（崩溃自动拉起）。手动起服务前先确认
   端口未被它占用（`launchctl print gui/$(id -u)/com.etf-option-board`），日志 `/tmp/etf-option-board.log`。
+- 板块资金排障：`curl /api/board/health` 看采集时间与库里条数；`/api/board/rank?type=all`、
+  `/api/etf-flow/rank`、`/api/em-flow/series?target_type=index&code=1.000300` 逐个核。
+  库文件 `data/board_flow.db`（gitignore），自选在 `data/board_watch.json`、`data/etf_watch.json`，
+  4 维行业配置在 `data/em_flow_config.json`。
 - 后端代码更新后重启生效：`curl -s -X POST http://127.0.0.1:6799/api/admin/restart`
   （先优雅关闭 Kronos 子进程再以非零码退出，LaunchAgent 约 5 秒自动拉起；curl 报连接重置属正常）。
   首次上线该接口前需手动重启一次：`launchctl kickstart -k gui/$(id -u)/com.etf-option-board`。
@@ -82,6 +91,14 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   口径（f137 等），与 push2 的分钟增量口径不同。当日已错过的数据无法回补。
   另保留最近一个有数据的昨日序列：9:15 开盘前当日无数据时自动展示昨日（前端打
   「昨日资金流」角标，`etf_context.flow_day` 标识数据日期），界面不空。
+- **板块资金（2026-11-04 新增，ADR-0003）**：单写路径 —— 只有 `services/board_collector.py`
+  在交易时段写 `data/board_flow.db`（SQLite），`/api/board/*`、`/api/etf-flow/*`、`/api/em-flow/*`
+  一律只读，**不要为了让页面有数据去实时抓东财**。采集分频：板块排行 30s（约 11 请求）、
+  ETF 30s（69 只）、指数 4 维 30s、行业 4 维 60s（默认 `|净流入|` 前 40，可配置）。
+  保留窗口 30/120 天，启动与每日裁剪；页面走 IndexedDB SWR，盘中 30s / 休市 300s。
+  纯函数（时段/解析/名次/区间聚合/序列对齐/裁剪）在 `boardflow.py`，单测在 `tests/test_boardflow.py`。
+  **两个数据源坑**：emdatah5 的 `fs=m:90+t:3` 必须编码成 `%2B`（raw `+` 被当空格会忽略过滤）；
+  板块 4 维 secid 必须是 `90.BKxxxx`。
 - `services/universe.py` 维护标的/指数/外围/国家队清单；改标的只改这里。
 - 期权链：东财 `fs=m:10`(沪)/`m:12`(深) 全量列表，按简称前缀切分。**注意前缀顺序**
   （`科创50` vs `科创板50`，`300ETF` vs `沪深300ETF`）。
