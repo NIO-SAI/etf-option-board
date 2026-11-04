@@ -763,7 +763,6 @@ export function MoneyLinesChart({
     } else {
       axis.filter((t) => isHalfHour(t)).forEach((t) => data.push({ xAxis: t, lineStyle: { color: "#6b7280", type: [4, 4], width: 1 } }));
     }
-    data.push({ yAxis: 0, lineStyle: { color: "#9ca3af", type: "solid", width: 1 } });
     opt.series[0].markLine = { symbol: "none", silent: true, label: { show: false }, data };
     return opt;
   };
@@ -1011,8 +1010,7 @@ export function BoardFlowChart({
       } else {
         times.filter((t) => isHalfHour(t)).forEach((t) => data.push({ xAxis: t, lineStyle: { color: "#6b7280", type: [4, 4], width: 1 } }));
       }
-      // 0 轴：一条 1px 直线，不带任何刻度/标签
-      data.push({ yAxis: 0, lineStyle: { color: "#9ca3af", type: "solid", width: 1 } });
+
       series[0].markLine = { symbol: "none", silent: true, label: { show: false }, data };
     }
 
