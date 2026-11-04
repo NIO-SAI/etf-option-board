@@ -167,9 +167,11 @@ async def national_team_signal() -> dict:
 
     综合打分：主力净流入合力(近5分钟增量) + 量能放大 + 指数位置。
     """
-    idx = await index_support_state("1.000001")
+    # 指数关键位与 7 只 ETF 行情并发（此前串行相加，/api/national 要 1.6s）
+    idx_task = asyncio.ensure_future(index_support_state("1.000001"))
     tasks = [etf_context(e["code"], e["secid"]) for e in NATIONAL_TEAM_ETFS]
     ctxs = await asyncio.gather(*tasks, return_exceptions=True)
+    idx = await idx_task
     entries = []
     main_sum = 0.0
     surge_cnt = 0
@@ -215,10 +217,10 @@ async def track_index_state(track: str) -> dict:
     secid = TRACK_INDEX.get(track)
     if not secid:
         return {}
-    q, sup, tr, flr = await asyncio.gather(
-        quote(secid), index_support_state(secid), trends(secid), flow_series(secid))
+    q, sup, tr, flr, k1 = await asyncio.gather(
+        quote(secid), index_support_state(secid), trends(secid), flow_series(secid),
+        kline(secid, klt=5, lmt=60))
     fl, flow_day = flr
-    k1 = await kline(secid, klt=5, lmt=60)
     closes = [b["close"] for b in k1]
     tr_day = (tr[-1]["time"] or "")[:10] if tr else None
     return {"secid": secid, "quote": q, "support": sup, "trends": tr, "trends_day": tr_day,

@@ -193,8 +193,9 @@ async def _curl_json_v6(url: str, params: dict | None = None,
 # 东财/腾讯抖动重试：重试会放大请求量（触发反爬），配合"过期缓存兜底"改为 2 轮
 _RETRY_TRIES = 2
 _RETRY_DELAY = 0.3
-# 全局并发闸：东财对同 IP 并发突发很敏感；主源已切 H5/腾讯，放宽到 8 提升吞吐
-_SEM = asyncio.Semaphore(8)
+# 全局并发闸：东财对同 IP 并发突发很敏感；主源已切 H5/腾讯，且上游实测
+# httpx 直连 0.02~0.2s，放宽到 16 提升吞吐（9 只标的并发聚合时不再排队）
+_SEM = asyncio.Semaphore(16)
 
 
 def _client() -> httpx.AsyncClient:

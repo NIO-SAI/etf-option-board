@@ -19,6 +19,9 @@ _NT_TTL = 30
 
 _DIR_CACHE: tuple[float, dict] | None = None
 _DIR_TTL = 60
+# 过期值最长继续服务时间：SWR 期间上游若持续失败，旧值也不该无限顶下去
+_DIR_STALE_MAX = 300
+_DIR_REFRESHING = False
 
 # 最近一次 analyze 算出的标的买卖点（供期权链接口复用，保证盈亏比口径一致）
 _PLAN_CACHE: dict[str, tuple[float, dict, float]] = {}
@@ -48,43 +51,63 @@ async def national_team_cached() -> dict:
 
 
 async def directions() -> dict:
-    """全部标的的实时方向（看多/看空/观望）。轻量：不含 Kronos，带 60s 缓存。"""
-    global _DIR_CACHE
+    """全部标的的实时综合方向（看多/看空/观望）。轻量：不含 Kronos，带 60s 缓存。
+
+    缓存过期后走 stale-while-revalidate：**旧值立即返回**，后台异步重建。
+    重建要 1~3s（9 只标的 etf_context + 指数），此前 /option/chain 每 15s 轮询
+    撞上缓存失效就卡 3s，前端表现为行情刷新慢。
+    """
+    global _DIR_CACHE, _DIR_REFRESHING
     now = time.time()
-    if _DIR_CACHE and now - _DIR_CACHE[0] < _DIR_TTL:
-        return _DIR_CACHE[1]
-    national, ext, idx_lv, turnover = await asyncio.gather(
-        national_team_cached(), ms.external_snapshot(), index_levels.snapshot(),
-        market_turnover.snapshot())
+    hit = _DIR_CACHE
+    if hit and now - hit[0] < _DIR_TTL:
+        return hit[1]
+    if hit and now - hit[0] < _DIR_STALE_MAX:
+        if not _DIR_REFRESHING:
+            _DIR_REFRESHING = True
+            asyncio.get_running_loop().create_task(_rebuild_dirs())
+        return hit[1]
+    return await _rebuild_dirs()
 
-    async def one(etf: dict) -> tuple[str, dict]:
-        try:
-            ctx, track = await asyncio.gather(
-                ms.etf_context(etf["code"], etf["secid"]),
-                ms.track_index_state(etf["track"]),
-            )
-            b = bias_score(ctx, track, national, ext, None, idx_lv, turnover)
-            return etf["code"], {"direction": b["direction"], "score": b["score"],
-                                 "confidence": b["confidence"]}
-        except Exception as exc:  # noqa: BLE001
-            log.debug("direction 计算失败 %s: %s", etf.get("code"), exc)
-            return etf["code"], {"direction": "neutral", "score": 0, "confidence": 0}
 
-    out = dict(await asyncio.gather(*[one(e) for e in ETFS]))
-    # 股指期权（MO/IO/HO）也要进这张表：否则左栏那三行永远显示「观望」，
-    # 点进去却是「看空 -54.5」，同一份方向两处口径打架。
-    from services import index_option as idxo
-    fut = await asyncio.gather(*[idxo.direction(f["code"]) for f in idxo.FUT_OPTS],
-                               return_exceptions=True)
-    for f, d in zip(idxo.FUT_OPTS, fut):
-        out[f["code"]] = d if isinstance(d, dict) else {"direction": "neutral", "score": 0, "confidence": 0}
-    # 左栏底栏的两个大盘指数也要有同样的三档徽标（看多/看空/观望）
-    idx = await asyncio.gather(*[index_direction(c, s) for c, s in _BIG_INDEX],
-                               return_exceptions=True)
-    for (c, _), d in zip(_BIG_INDEX, idx):
-        out[c] = d if isinstance(d, dict) else {"direction": "neutral", "score": 0, "confidence": 0}
-    _DIR_CACHE = (now, out)
-    return out
+async def _rebuild_dirs() -> dict:
+    global _DIR_CACHE, _DIR_REFRESHING
+    try:
+        now = time.time()
+        national, ext, idx_lv, turnover = await asyncio.gather(
+            national_team_cached(), ms.external_snapshot(), index_levels.snapshot(),
+            market_turnover.snapshot())
+
+        async def one(etf: dict) -> tuple[str, dict]:
+            try:
+                ctx, track = await asyncio.gather(
+                    ms.etf_context(etf["code"], etf["secid"]),
+                    ms.track_index_state(etf["track"]),
+                )
+                b = bias_score(ctx, track, national, ext, None, idx_lv, turnover)
+                return etf["code"], {"direction": b["direction"], "score": b["score"],
+                                     "confidence": b["confidence"]}
+            except Exception as exc:  # noqa: BLE001
+                log.debug("direction 计算失败 %s: %s", etf.get("code"), exc)
+                return etf["code"], {"direction": "neutral", "score": 0, "confidence": 0}
+
+        out = dict(await asyncio.gather(*[one(e) for e in ETFS]))
+        # 股指期权（MO/IO/HO）也要进这张表：否则左栏那三行永远显示「观望」，
+        # 点进去却是「看空 -54.5」，同一份方向两处口径打架。
+        from services import index_option as idxo
+        fut = await asyncio.gather(*[idxo.direction(f["code"]) for f in idxo.FUT_OPTS],
+                                   return_exceptions=True)
+        for f, d in zip(idxo.FUT_OPTS, fut):
+            out[f["code"]] = d if isinstance(d, dict) else {"direction": "neutral", "score": 0, "confidence": 0}
+        # 左栏底栏的两个大盘指数也要有同样的三档徽标（看多/看空/观望）
+        idx = await asyncio.gather(*[index_direction(c, s) for c, s in _BIG_INDEX],
+                                   return_exceptions=True)
+        for (c, _), d in zip(_BIG_INDEX, idx):
+            out[c] = d if isinstance(d, dict) else {"direction": "neutral", "score": 0, "confidence": 0}
+        _DIR_CACHE = (now, out)
+        return out
+    finally:
+        _DIR_REFRESHING = False
 
 
 # 左栏底栏固定显示的两个大盘指数（code -> 东财 secid）
@@ -502,7 +525,7 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
     etf = ETF_BY_CODE.get(etf_code)
     if not etf:
         return {"error": f"未知标的 {etf_code}"}
-    chain, etf_ctx, national, ext, idx_lv, turnover, daily = await asyncio.gather(
+    chain, etf_ctx, national, ext, idx_lv, turnover, daily, track = await asyncio.gather(
         osvc.chain(etf_code),
         ms.etf_context(etf_code, etf["secid"]),
         national_team_cached(),
@@ -511,8 +534,9 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
         market_turnover.snapshot(),
         # 20 日已实现波动：给买方判断「隐波贵不贵」（em 层 45s 缓存，不额外压请求）
         ms.kline(etf["secid"], klt=101, lmt=30),
+        # 关联指数状态与上述 7 路并发（此前在 gather 之后串行等 0.68s）
+        ms.track_index_state(etf["track"]),
     )
-    track = await ms.track_index_state(etf["track"])
 
     kronos_sum = None
     if with_kronos:
