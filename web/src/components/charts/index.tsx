@@ -669,7 +669,7 @@ export function Sparkline({ data, up, height = 24, width = 54 }: { data: number[
 
 /** 板块资金多线图：统一时间轴、前值填充后的累计净流入（元 → 亿/万显示）。 */
 export function MoneyLinesChart({
-  id, axis, series, height = 320, maxLines = 8, mode = "line",
+  id, axis, series, height = 320, maxLines = 8, mode = "line", vLines,
 }: {
   id: string;
   axis: string[];
@@ -678,6 +678,8 @@ export function MoneyLinesChart({
   maxLines?: number;
   /** line=分线；stack=堆叠面积（4 维资金用） */
   mode?: "line" | "stack";
+  /** 在这些 x 轴刻度上画竖向虚线（多日图用来分隔交易日） */
+  vLines?: string[];
 }) {
   const colors = ["#ef4444", "#f59e0b", "#a855f7", "#3b82f6", "#14b8a6", "#ec4899", "#84cc16", "#f97316"];
   const shown = (series ?? []).slice(0, maxLines);
@@ -730,10 +732,23 @@ export function MoneyLinesChart({
         : { lineStyle: { width: s.watch ? 2.4 : 1.4 } }),
       data: s.values,
     })),
-  }), [axis, shown, mode]);
+  }), [axis, shown, mode, vLines]);
+
+  // 日分隔线：只在第一条 series 上挂 markLine（避免重复绘制）
+  const withDays = (opt: any) => {
+    if (!vLines?.length || !opt.series?.length) return opt;
+    opt.series[0].markLine = {
+      symbol: "none",
+      silent: true,
+      label: { show: false },
+      lineStyle: { color: "rgba(255,255,255,0.22)", type: "dashed", width: 1 },
+      data: vLines.map((v) => ({ xAxis: v })),
+    };
+    return opt;
+  };
 
   if (!axis.length) return null;
-  return <ReactECharts key={id} option={option} notMerge style={{ height }} />;
+  return <ReactECharts key={id} option={withDays(option)} notMerge style={{ height }} />;
 }
 
 /** 板块资金详情：累计净流入折线 + 每分钟增量柱（同一时间轴，单位元）。 */
@@ -855,13 +870,15 @@ export type FlowLine = {
 
 /** 板块资金分时：多条线叠加，线末标签显示「名称 + 资金 + 涨跌幅」，悬停时其余线变淡。 */
 export function BoardFlowChart({
-  id, lines, hoverCode, temp, height = 420,
+  id, lines, hoverCode, temp, height = 420, onHoverCode,
 }: {
   id: string;
   lines: FlowLine[];
   hoverCode?: string | null;
   temp?: FlowLine | null;
   height?: number | string;
+  /** 鼠标直接落在曲线上时也切换聚焦（红涨绿跌分段） */
+  onHoverCode?: (code: string | null) => void;
 }) {
   const option = useMemo(() => {
     const timeSet = new Set<string>();
@@ -909,9 +926,9 @@ export function BoardFlowChart({
           distance: 6,
         },
         labelLayout: { moveOverlap: "shiftY" as const },
-        // 悬停线本身退到分段线的下面（半透明），避免把红绿分段盖住
+        // 悬停线本身退到分段线下面（半透明但保留宽度，保证鼠标还能命中这条线）
         z: focus ? 2 : 3,
-        ...(focus ? { lineStyle: { width: 0.6, color, opacity: 0.25 } } : {}),
+        ...(focus ? { lineStyle: { width: 3, color, opacity: 0.25 } } : {}),
       };
     });
 
@@ -1035,5 +1052,20 @@ export function BoardFlowChart({
   }, [lines]);
 
   if (!times) return null;
-  return <ReactECharts key={id} option={option} notMerge style={{ height }} />;
+  return (
+    <ReactECharts
+      key={id}
+      option={option}
+      notMerge
+      style={{ height }}
+      onEvents={{
+        mouseover: (p: any) => {
+          const id2 = String(p?.seriesId ?? "");
+          if (id2.includes("_seg_") || id2 === "_temp_hover") return;
+          if (id2 && id2 !== hoverCode) onHoverCode?.(id2);
+        },
+        globalout: () => onHoverCode?.(null),
+      }}
+    />
+  );
 }

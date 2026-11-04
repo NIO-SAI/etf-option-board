@@ -530,7 +530,7 @@ export function BoardFlowPage() {
             ) : (
               <div className="min-h-0 flex-1">
                 <BoardFlowChart id="board-flow-lines" lines={lines} hoverCode={hoverCode}
-                  temp={tempLine} height="100%" />
+                  temp={tempLine} height="100%" onHoverCode={setHoverCode} />
               </div>
             )}
             <div className="mt-1 flex items-center justify-between px-2 text-[10px] text-muted-foreground">

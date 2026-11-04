@@ -57,11 +57,31 @@ export function BoardMultiPage() {
     return m;
   }, [items]);
 
-  const chartSeries = picked
-    .map((c) => byCode[c])
-    .filter(Boolean)
-    .slice(0, MAX_LINES)
-    .map((i) => ({ code: i.code, name: i.name, values: i.values }));
+  // 曲线用「分钟级」序列（区间内每天的分时首尾相接），排行仍用日累计
+  const codesKey = picked.slice(0, MAX_LINES).join(",");
+  const { data: intraday } = usePolling(
+    () => (codesKey
+      ? api.boardMultiSeries(codesKey, start || data?.start, end || data?.end)
+      : Promise.resolve(null)),
+    interval,
+    [codesKey, start, end, data?.start, data?.end, interval],
+    { kind: "bseries", code: `multi:${codesKey}`, extra: `${start || "auto"}:${end || "auto"}` },
+  );
+
+  const chartSeries = (intraday?.series ?? []).map((s: any) => ({
+    code: s.code, name: s.name, values: s.values,
+  }));
+
+  /** 快捷区间：最近 N 个交易日 */
+  const quickRange = (n: number) => {
+    const asc = [...(data?.available_dates ?? [])].sort();
+    if (!asc.length) return;
+    const endDate = asc[asc.length - 1];
+    const startDate = asc[Math.max(0, asc.length - n)];
+    touched.current = true;
+    setStart(startDate);
+    setEnd(endDate);
+  };
 
   const toggle = (code: string) => {
     touched.current = true;
@@ -120,7 +140,21 @@ export function BoardMultiPage() {
                 {(data?.available_dates ?? []).map((d: string) => <option key={d} value={d}>{d}</option>)}
               </select>
             </label>
-            <span>· {data?.start ?? "—"} ~ {data?.end ?? "—"}（{dates.length} 个交易日）</span>
+            <span className="flex items-center gap-0.5 rounded-md border border-border bg-muted/40 p-0.5">
+              {[3, 5, 8].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => quickRange(n)}
+                  title={`最近 ${n} 个交易日`}
+                  className={cn("rounded px-1.5 py-0.5 transition-colors",
+                    dates.length === n ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}
+                >
+                  {n}日
+                </button>
+              ))}
+            </span>
+            <span>· {intraday?.start ?? data?.start ?? "—"} ~ {intraday?.end ?? data?.end ?? "—"}（{intraday?.dates?.length ?? dates.length} 个交易日）</span>
             <span>· 已选 {picked.length}/{MAX_LINES}</span>
           </div>
 
@@ -179,19 +213,19 @@ export function BoardMultiPage() {
                 {picked.length === 1 ? "单板块走势" : "区间资金走势对比"}
               </FrameTitle>
               <span className="truncate text-[10px] text-muted-foreground">
-                每个点的值是当日主力净流入（不是累计）
+                分钟级曲线 · 竖虚线为交易日分隔
               </span>
             </div>
           </FrameHeader>
           <div className="px-2 pb-2">
             {!data ? (
               <Skeleton className="h-[360px] w-full" />
-            ) : !dates.length || !chartSeries.length ? (
-              <EmptyState title="还没有选中板块" hint="在左侧勾选最多 6 个板块看走势对比" />
+            ) : !chartSeries.length || !(intraday?.axis?.length) ? (
+              <EmptyState title="还没有选中板块" hint="在左侧勾选最多 6 个板块看分钟级走势对比" />
             ) : (
               <>
-                <MoneyLinesChart id="board-multi-lines" axis={dates} series={chartSeries as any}
-                  height={380} maxLines={MAX_LINES} />
+                <MoneyLinesChart id="board-multi-lines" axis={intraday?.axis ?? []} series={chartSeries as any}
+                  height={380} maxLines={MAX_LINES} vLines={intraday?.day_breaks ?? []} />
                 <div className="flex flex-wrap gap-x-3 gap-y-1 px-1 pt-1 text-[10px] text-muted-foreground">
                   {chartSeries.map((s) => (
                     <span key={s.code} className="inline-flex items-center gap-1">

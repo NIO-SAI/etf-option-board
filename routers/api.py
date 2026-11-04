@@ -725,6 +725,11 @@ async def board_series(codes: str = Query("", description="逗号分隔的板块
 
     watch = {w["code"] for w in await asyncio.to_thread(bf.load_watch)}
     meta = {r["code"]: r for r in rank}
+    # 指数 / 全 A 不在板块排行里，用标的清单补中文名（否则图例只显示 secid）
+    from services.universe import INDICES
+    for it in INDICES:
+        meta.setdefault(it["secid"], {"name": it["name"], "type": "index"})
+    meta.setdefault(bf.EM_MARKET_CODE, {"name": bf.EM_MARKET_NAME, "type": "market"})
     if not wanted:
         pool = [r for r in rank if r["type"] == type] or rank
         wanted = [r["code"] for r in pool[:8]]
@@ -1173,3 +1178,62 @@ async def board_index_rank(date: str | None = Query(None)):
     items.sort(key=lambda x: -abs(x["flow"]))
     out = {"date": date, "items": items, "error": None if items else "暂无 4 维采集数据"}
     return out
+
+
+@router.get("/board/multi-series")
+async def board_multi_series(codes: str = Query(""), start: str | None = Query(None),
+                             end: str | None = Query(None)):
+    """多日「分钟级」序列：把区间内每天的分时点首尾相接，供多日图看细节。
+
+    返回 axis 为「MM-DD HH:MM」，day_breaks 为每天的第一个标签（前端画日分隔虚线）。
+    """
+    wanted = [c.strip() for c in codes.split(",") if c.strip()]
+    if not wanted:
+        return {"axis": [], "series": [], "day_breaks": [], "error": "codes 不能为空"}
+    try:
+        dates = await asyncio.to_thread(bf.available_dates, 120)
+    except Exception as exc:  # noqa: BLE001
+        return {"axis": [], "series": [], "day_breaks": [], "error": str(exc)}
+    asc = sorted(dates)
+    end = end or (asc[-1] if asc else "")
+    start = start or (asc[-5] if len(asc) >= 5 else (asc[0] if asc else ""))
+    if start > end:
+        start, end = end, start
+    window = [d for d in asc if start <= d <= end]
+
+    from services.universe import INDICES
+    names = {i["secid"]: i["name"] for i in INDICES}
+    names[bf.EM_MARKET_CODE] = bf.EM_MARKET_NAME
+    try:
+        rank = await asyncio.to_thread(bf.read_rank, end)
+    except Exception:  # noqa: BLE001
+        rank = []
+    for r in rank:
+        names.setdefault(r["code"], r["name"])
+
+    axis: list[str] = []
+    day_breaks: list[str] = []
+    per: dict[str, list[float | None]] = {c: [] for c in wanted}
+    try:
+        for d in window:
+            bk = [c for c in wanted if c.startswith("BK")]
+            points = await asyncio.to_thread(bf.read_points, d, bk) if bk else {}
+            for code in [c for c in wanted if not c.startswith("BK")]:
+                pts = await asyncio.to_thread(bf.read_em_points, d, code)
+                points[code] = [(t, inst + large) for t, inst, large, _m, _r in pts]
+            aligned = bf.build_series(points)
+            if not aligned["axis"]:
+                continue
+            labels = [f"{d[5:]} {t}" for t in aligned["axis"]]
+            day_breaks.append(labels[0])
+            axis.extend(labels)
+            by_code = {s["code"]: s["values"] for s in aligned["series"]}
+            for c in wanted:
+                vals = by_code.get(c)
+                per[c].extend(vals if vals else [None] * len(labels))
+    except Exception as exc:  # noqa: BLE001
+        return {"axis": [], "series": [], "day_breaks": [], "error": str(exc)}
+
+    series = [{"code": c, "name": names.get(c) or c, "values": per[c]} for c in wanted]
+    return {"axis": axis, "series": series, "day_breaks": day_breaks,
+            "start": start, "end": end, "dates": window}

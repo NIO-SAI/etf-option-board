@@ -79,17 +79,36 @@ export function EmFlowPage() {
           </FrameHeader>
           <div className="flex flex-col gap-2 px-3 pb-3 text-[11px] text-muted-foreground">
             <Tabs tabs={TARGETS} value={kind} onChange={(k) => { setKind(k); setCode(""); }} />
-            <label className="flex items-center gap-1">
-              标的
-              <select
-                id="em-flow-code" name="code" aria-label="4 维资金标的"
-                value={effectiveCode}
-                onChange={(e) => setCode(e.target.value)}
-                className="min-w-0 flex-1 rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            <div className="flex flex-col gap-1">
+              <span>标的（{options.length}）</span>
+              <div
+                role="listbox"
+                aria-label="4 维资金标的"
+                className="max-h-[calc(100vh-24rem)] min-h-[180px] overflow-auto rounded-md border border-border/60"
               >
-                {options.map((o) => <option key={o.code} value={o.code}>{o.name}</option>)}
-              </select>
-            </label>
+                {options.length === 0 ? (
+                  <div className="px-2 py-3 text-center text-[11px] text-muted-foreground">暂无标的</div>
+                ) : options.map((o) => {
+                  const active = o.code === effectiveCode;
+                  return (
+                    <button
+                      key={o.code}
+                      type="button"
+                      role="option"
+                      aria-selected={active}
+                      onClick={() => setCode(o.code)}
+                      className={cn(
+                        "flex w-full items-center justify-between gap-2 border-b border-border/30 px-2 py-1 text-left text-[11px] transition-colors last:border-b-0",
+                        active ? "bg-primary/10 font-medium text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                      )}
+                    >
+                      <span className="truncate">{o.name}</span>
+                      <span className="shrink-0 text-[10px] opacity-60">{o.code.startsWith("BK") ? "行业" : o.code.startsWith("47.") ? "全A" : "指数"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"

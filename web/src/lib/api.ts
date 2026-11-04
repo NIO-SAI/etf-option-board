@@ -70,6 +70,9 @@ export const api = {
     get(`/board/detail?code=${encodeURIComponent(code)}${date ? `&date=${date}` : ""}`),
   boardMulti: (start?: string, end?: string, type = "concept") =>
     get(`/board/multi?type=${type}${start ? `&start=${start}` : ""}${end ? `&end=${end}` : ""}`),
+  boardMultiSeries: (codes: string, start?: string, end?: string) =>
+    get(`/board/multi-series?codes=${encodeURIComponent(codes)}`
+      + `${start ? `&start=${start}` : ""}${end ? `&end=${end}` : ""}`),
   boardWatch: () => get("/board/watch"),
 
   // ETF 资金流

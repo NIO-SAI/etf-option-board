@@ -83,3 +83,14 @@
 
 配套：`scripts/backfill_speed_pct.py` 回填老数据的 speed/pct（本次回填板块 1027 行、指数 11 个）；
 缓存版本升到 `v4`（否则旧缓存没有 speed 字段，涨速排序会全部相同）。
+
+## 追加（第四轮：图中悬停红绿 / 指数图例名 / 多日分钟级 / 4维改列表）
+
+| 需求 | 实现 | 验证 |
+|---|---|---|
+| 悬停在线上也红涨绿跌 | `BoardFlowChart` 绑定 ECharts `mouseover`（seriesId → hoverCode）与 `globalout` 清除；聚焦线保留 3px 宽度（opacity 0.25）保证还能命中，红绿分段 `z=10` 盖在上层 | 调用 trace 的 `onEvents.mouseover({seriesId})` → 生成 225 段（红 133 / 绿 92）；事件已绑定（`wired=true`） |
+| 指数/自定义图例中文名 | `/api/board/series` 的 meta 补 `universe.INDICES` 与全 A 名称 | 指数页 `series` 名称 = 上证指数/沪深300/创业板指…；endLabel = `A股平均股价 +507.59亿(+5.47%)` |
+| 多日图颗粒度要细 | 新增 `/api/board/multi-series`：区间内每天分钟点首尾相接（8 日 = 1801 点），返回日分隔标签 | `axis=1801`、`day_breaks=8` |
+| 3/5/8 日快捷选择 | 多日图头部新增 `3日 / 5日 / 8日` 按钮（按 available_dates 取最近 N 个交易日） | 点 8 日 → 区间 2026-10-26 ~ 11-04（8 个交易日） |
+| 日分隔参考线 | `MoneyLinesChart` 新增 `vLines`（markLine 竖虚线） | 图表 option `markLine.data` 8 条（10-26 09:30 …） |
+| 东财分时改列表 | 去掉 `<select>`，左侧改为可滚动 `role="listbox"`（名称 + 口径标签，选中高亮） | 页面无 `#em-flow-code`，存在 listbox，11 个 option，选中「上证指数」 |
