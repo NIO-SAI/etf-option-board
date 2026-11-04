@@ -281,7 +281,7 @@ export default function App() {
                   )}
                   <MiniKv k="MACD" v={ctx.macd?.cross === "golden" ? "金叉" : ctx.macd?.cross === "dead" ? "死叉" : "—"} />
                   <MiniKv k="背离15分" v={ctx.macd15?.divergence?.type === "bullish" ? "底背离" : ctx.macd15?.divergence?.type === "bearish" ? "顶背离" : "无"} />
-                  <MiniKv k="关联指数" v={`${ctx.track?.quote?.name ?? ""} ${pct(ctx.track?.quote?.pct)}`} />
+                  {!isFut && <MiniKv k="关联指数" v={`${ctx.track?.quote?.name ?? ""} ${pct(ctx.track?.quote?.pct)}`} />}
                   {isFut && (
                     <>
                       <MiniKv k="期指基差" v={strategy?.basis ? `${nf(strategy.basis.price, 2)}（${pct(strategy.basis.basis_pct)}）` : "—"} />

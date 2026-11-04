@@ -221,51 +221,27 @@ async def etf_context(code: str, klt: int = 1):
 
 
 async def _fut_context(code: str) -> dict:
-    """股指期权的「标的上下文」，字段与 `/etf/{code}` 同构，前端行情卡才能直接复用。
+    """股指期权的「标的上下文」，与 `/etf/{code}` **完全同构**。
 
-    现货是**指数**而不是 ETF：`trends/flow` 取指数自己的口径，
-    `etf.secid` 给指数 secid，Kronos 预测与详情图都按这个走。
+    现货是**指数**而不是 ETF，但取数链路可以完全复用：`ms.etf_context` 里的行情、
+    1 分钟 K、5 分钟 K、分时、资金流（含分钟序列与当日累计快照）、量能、MACD/背离
+    对指数同样成立。此前这里手写了一个子集，导致股指期权页缺「量能 / 主力5分 /
+    主力累计 / MACD / flow_day」，和 ETF 页面对不上——统一走同一条链路后不会再漂移。
     """
     from services import index_option as idxo
     fut = idxo._BY_CODE.get(code.upper())
     if not fut:
         return {"error": f"未知股指期权品种 {code}"}
     secid = fut["underlying"]
-    q, tr, fl = await asyncio.gather(
-        em.stock_get(secid, "f43,f44,f45,f46,f47,f48,f57,f58,f60,f169,f170,f171"),
-        em.trends(secid),
-        ms.flow_series(secid),
-        return_exceptions=True,
-    )
-    q = q if isinstance(q, dict) else {}
-    tr = tr if isinstance(tr, list) else []
-    flow = fl[0] if isinstance(fl, tuple) and fl and isinstance(fl[0], list) else []
-    spot = em.num(q.get("f43")) or 0.0
-    prev = em.num(q.get("f60")) or None
-    quote = {
-        "price": spot, "pct": em.num(q.get("f170")),
-        "high": em.num(q.get("f44")), "low": em.num(q.get("f45")),
-        "open": em.num(q.get("f46")), "prev_close": prev,
-        "volume": em.num(q.get("f47")), "amount": em.num(q.get("f48")),
-    }
-    kline = await em.kline(secid, klt=1, lmt=240)
-    # 日内枢轴支撑/压力：与 ETF 行情卡同一口径（纯本地计算，不额外发请求）
-    sr = {}
-    if len(kline) >= 10:
-        sr = ms.support_resistance(
-            [b["close"] for b in kline],
-            [b["high"] for b in kline],
-            [b["low"] for b in kline],
-        )
+    ctx = await ms.etf_context(fut["code"], secid)
+    q = ctx.get("quote") or {}
     return {
         "etf": {"code": fut["code"], "name": fut["name"], "secid": secid,
                 "track": fut.get("track"), "kind": "index"},
-        "underlying": {"kind": "index", **quote},
-        "quote": quote, "trends": tr,
-        "trends_prev_close": em.trend_prev_close(secid) if prev is None else prev,
-        "flow": flow,
-        "support": sr.get("support") or [],
-        "resistance": sr.get("resistance") or [],
+        # 股指期权的「标的」就是现货指数：underlying 与 quote 同口径（含振幅）
+        "underlying": {"kind": "index", **q},
+        **ctx,
+        "quote": q,
     }
 
 
