@@ -236,9 +236,6 @@ export function BoardMultiPage() {
                   </button>
                 ))}
               </span>
-              <span className="hidden text-muted-foreground tnum sm:inline">
-                {intraday?.start ?? data?.start ?? "—"} ~ {intraday?.end ?? data?.end ?? "—"}
-              </span>
               <button
                 type="button" onClick={() => refresh()} title="刷新" aria-label="刷新"
                 className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground"
