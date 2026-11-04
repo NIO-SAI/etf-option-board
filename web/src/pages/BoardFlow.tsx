@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Loader2, Plus, RefreshCw, Search } from "lucide-react";
+import { Check, Eye, Loader2, Plus, RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
@@ -25,6 +25,8 @@ const SERIES_TTL = 90_000;
 type Bar = {
   code: string; name: string; type: string;
   flow: number; pct: number | null; watch?: boolean;
+  /** 名称的拼音首字母（后端给），用于拼音搜索 */
+  py?: string;
 };
 type CacheEntry = { points: [string, number][]; pct: number | null; name: string; at: number };
 
@@ -86,15 +88,17 @@ export function BoardFlowPage() {
 
   const allBoards: Bar[] = useMemo(
     () => (rankView?.items ?? []).map((r: any) => ({
-      code: r.code, name: r.name, type: r.type, flow: r.flow ?? 0, pct: r.pct ?? null, watch: watchSet.has(r.code),
+      code: r.code, name: r.name, type: r.type, flow: r.flow ?? 0, pct: r.pct ?? null,
+      watch: watchSet.has(r.code), py: r.py,
     })),
     [rankView, watchSet],
   );
   const indexRows: Bar[] = useMemo(
     () => (indexView?.items ?? []).map((r: any) => ({
-      code: r.code, name: r.name, type: "index", flow: r.flow ?? 0, pct: null,
+      code: r.code, name: r.name, type: "index", flow: r.flow ?? 0, pct: null, py: r.py,
+      watch: watchSet.has(r.code),
     })),
-    [indexView],
+    [indexView, watchSet],
   );
 
   /** 当前口径的原始列表（未搜索、未排序之外的过滤） */
@@ -116,7 +120,13 @@ export function BoardFlowPage() {
   const rows: Bar[] = useMemo(() => {
     const kw = search.trim();
     let list = baseRows;
-    if (kw) list = list.filter((b) => b.name.includes(kw) || b.code.includes(kw));
+    if (kw) {
+      const k = kw.toLowerCase();
+      list = list.filter((b) =>
+        b.name.includes(kw)
+        || b.code.toLowerCase().includes(k)
+        || (b.py ?? "").includes(k));
+    }
     const dir = sortDir;
     return [...list].sort((a, b) => {
       const va = sortKey === "pct" ? (a.pct ?? 0) : a.flow;
@@ -194,49 +204,53 @@ export function BoardFlowPage() {
   /** 批量操作按「资金流降序」的口径取前 N（与 stock-webui 一致） */
   const sortedBase = () => [...baseRows].sort((a, b) => b.flow - a.flow);
 
+  // 分时缓存键带日期：切日期必须重新拉（旧日期数据不能复用）
+  const keyOf = useCallback((code: string) => `${date}|${code}`, [date]);
+
   // 分时数据：按缺失/过期分块拉取（最多 60 个一批），命中缓存直接渲染
   useEffect(() => {
     if (!selectedCodes.length) return;
     const now = Date.now();
     const missing = selectedCodes.filter((c) => {
-      const e = cache.current[c];
+      const e = cache.current[keyOf(c)];
       return !e || now - e.at > SERIES_TTL;
-    }).filter((c) => !inflight.current.has(c));
+    }).filter((c) => !inflight.current.has(keyOf(c)));
     if (!missing.length) return;
 
-    let cancelled = false;
     (async () => {
       for (let i = 0; i < missing.length; i += 60) {
         const chunk = missing.slice(i, i + 60);
-        chunk.forEach((c) => inflight.current.add(c));
+        chunk.forEach((c) => inflight.current.add(keyOf(c)));
         try {
           const d = await api.boardSeries(chunk.join(","), date || undefined, type === "index" ? "index" : "concept");
           const byCode = new Map((d?.series ?? []).map((s: any) => [s.code, s]));
           chunk.forEach((c) => {
             const s: any = byCode.get(c);
-            if (!s) return;
+            // 即使没有该板块也写一条空记录：区分「没拉到」和「当日无点」，避免一直转圈
             const pts: [string, number][] = [];
-            (s.values ?? []).forEach((v: number | null, idx: number) => {
+            (s?.values ?? []).forEach((v: number | null, idx: number) => {
               if (v != null) pts.push([d.axis[idx], v]);
             });
-            cache.current[c] = { points: pts, pct: s.pct ?? null, name: s.name ?? c, at: Date.now() };
+            cache.current[keyOf(c)] = {
+              points: pts, pct: s?.pct ?? null, name: s?.name ?? c, at: Date.now(),
+            };
           });
         } catch {
           /* 单块失败静默，下一轮再试 */
         } finally {
-          chunk.forEach((c) => inflight.current.delete(c));
+          chunk.forEach((c) => inflight.current.delete(keyOf(c)));
         }
       }
-      if (!cancelled) setCacheVer((v) => v + 1);
+      // 即便本次 effect 已被新的日期/标的替换，缓存写入是按日期隔离的，仍要触发一次重渲染
+      setCacheVer((v) => v + 1);
     })();
-    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedKey, date, refreshTick]);
+  }, [selectedKey, date, refreshTick, keyOf]);
 
   // 悬停未勾选的板块：临时拉它的分时，画一条橙色虚线（不改变勾选）
   const [tempLine, setTempLine] = useState<FlowLine | null>(null);
   const ensureTemp = async (b: Bar) => {
-    const hit = cache.current[b.code];
+    const hit = cache.current[keyOf(b.code)];
     if (hit && Date.now() - hit.at < SERIES_TTL) {
       setTempLine({ code: b.code, name: b.name, points: hit.points });
       return;
@@ -249,7 +263,7 @@ export function BoardFlowPage() {
       (s.values ?? []).forEach((v: number | null, idx: number) => {
         if (v != null) pts.push([d.axis[idx], v]);
       });
-      cache.current[b.code] = { points: pts, pct: s.pct ?? null, name: s.name ?? b.code, at: Date.now() };
+      cache.current[keyOf(b.code)] = { points: pts, pct: s.pct ?? null, name: s.name ?? b.code, at: Date.now() };
       setTempLine({ code: b.code, name: b.name, points: pts });
     } catch {
       /* 忽略 */
@@ -260,7 +274,7 @@ export function BoardFlowPage() {
     void cacheVer;
     return selectedCodes
       .map((code) => {
-        const e = cache.current[code];
+        const e = cache.current[`${date}|${code}`];
         if (!e || !e.points.length) return null;
         const row = rows.find((r) => r.code === code);
         return { code, name: e.name || row?.name || code, points: e.points, pct: row?.pct ?? e.pct };
@@ -268,6 +282,14 @@ export function BoardFlowPage() {
       .filter(Boolean) as FlowLine[];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKey, cacheVer, rowsKey]);
+
+  // 底部标注：优先显示悬停中的那条线，否则显示当前条数
+  const activeLine = useMemo(
+    () => lines.find((l) => l.code === hoverCode) ?? lines[0] ?? null,
+    [lines, hoverCode],
+  );
+  const activeLast = activeLine?.points.length
+    ? activeLine.points[activeLine.points.length - 1][1] : null;
 
   const toggleCustom = async (b: Bar) => {
     if (watchBusy[b.code]) return;
@@ -376,7 +398,6 @@ export function BoardFlowPage() {
                       tabIndex={0}
                       onClick={() => toggle(b.code)}
                       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(b.code); } }}
-                      onDoubleClick={() => setDetailCode({ code: b.code, name: b.name })}
                       onMouseEnter={() => { setHoverCode(on ? b.code : null); if (!on) void ensureTemp(b); }}
                       onMouseLeave={() => { setHoverCode(null); setTempLine(null); }}
                       className={cn(
@@ -384,7 +405,7 @@ export function BoardFlowPage() {
                         "hover:bg-muted/60",
                         on && "bg-primary/5",
                       )}
-                      title="单击勾选 · 双击看详情"
+                      title="单击勾选 / 取消"
                     >
                       <input type="checkbox" checked={on} readOnly aria-label={`勾选${b.name}`}
                         className="size-3 shrink-0 accent-primary" />
@@ -394,12 +415,23 @@ export function BoardFlowPage() {
                           <span className="ml-1 text-[10px] text-muted-foreground">({b.code.split(".")[1]})</span>
                         )}
                       </span>
-                      <span className={cn("w-[3.6em] shrink-0 text-right tnum", clsUpDown(b.pct))}>
+                      <span className={cn("w-[3.6em] shrink-0 text-right text-[10px] tnum", clsUpDown(b.pct))}>
                         {b.pct == null ? "--" : fmtPct(b.pct, 2)}
                       </span>
-                      <span className={cn("shrink-0 whitespace-nowrap text-right tnum", b.flow >= 0 ? "text-up" : "text-down")}>
+                      <span className={cn("shrink-0 whitespace-nowrap text-right text-[10px] tnum", b.flow >= 0 ? "text-up" : "text-down")}>
                         {signedYi(b.flow)}
                       </span>
+                      {b.code.startsWith("BK") && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setDetailCode({ code: b.code, name: b.name }); }}
+                          title="查看板块详情"
+                          aria-label={`查看${b.name}详情`}
+                          className="inline-flex size-5 shrink-0 items-center justify-center rounded border border-border bg-card text-muted-foreground transition-colors hover:border-primary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <Eye className="size-3" aria-hidden />
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); void toggleCustom(b); }}
@@ -486,9 +518,13 @@ export function BoardFlowPage() {
               <EmptyState title="未选择板块" hint="请在左侧勾选，或点「流入Top10」批量激活"
                 className="flex-1" />
             ) : !lines.length ? (
-              <div className="flex flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="size-3.5 animate-spin" aria-hidden /> 加载分时数据…
-              </div>
+              selectedCodes.every((c) => cache.current[`${date}|${c}`]) ? (
+                <EmptyState title="所选板块暂无分时数据" hint="换一天或换一批板块试试" className="flex-1" />
+              ) : (
+                <div className="flex flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden /> 加载分时数据…
+                </div>
+              )
             ) : (
               <div className="min-h-0 flex-1">
                 <BoardFlowChart id="board-flow-lines" lines={lines} hoverCode={hoverCode}
@@ -496,8 +532,17 @@ export function BoardFlowPage() {
               </div>
             )}
             <div className="mt-1 flex items-center justify-between px-2 text-[10px] text-muted-foreground">
-              <span>{lines.length}/{selectedCodes.length} 条线 · 悬停左侧名称预览，双击看详情</span>
-              <span>主力净流入（累计，亿元）</span>
+              <span>{lines.length}/{selectedCodes.length} 条线 · 悬停左侧名称预览，行尾按钮看详情</span>
+              <span>
+                主力净流入（累计，亿元）
+                {activeLine && (
+                  <> · <span className="text-foreground/80">{activeLine.name}</span>{" "}
+                    <span className={cn("tnum", (activeLast ?? 0) >= 0 ? "text-up" : "text-down")}>
+                      {signedYi(activeLast)}
+                    </span>
+                  </>
+                )}
+              </span>
             </div>
           </div>
         </FramePanel>
@@ -551,6 +596,7 @@ function BoardDetailDrawer({
     <Drawer
       open={!!selected}
       onClose={onClose}
+      widthClass="w-[50vw] min-w-[420px] max-w-[1000px]"
       title={selected ? `${selected.name} ${selected.code}` : ""}
       subtitle={d && !loading
         ? `${date} · ${d.type === "industry" ? "行业" : d.type === "index" ? "指数" : "概念"} · 主力净流入 ${signedYi(d.flow)}${d.pct != null ? ` · 涨跌幅 ${fmtPct(d.pct)}` : ""}`

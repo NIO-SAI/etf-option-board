@@ -390,6 +390,12 @@ def prune(today: dt.date | None = None) -> dict:
 # --------------------------------------------------------------------------
 # 自选板块（JSON，命中 .gitignore 的 data/*.json）
 # --------------------------------------------------------------------------
+def _is_index_code(code: str) -> bool:
+    """指数 / 全 A 的 secid（1.000300、47.800000）。"""
+    head, _, tail = str(code or "").partition(".")
+    return head.isdigit() and tail.isdigit()
+
+
 def load_watch() -> list[dict]:
     try:
         with open(_WATCH_FILE, encoding="utf-8") as f:
@@ -402,7 +408,8 @@ def load_watch() -> list[dict]:
     out = []
     for it in raw if isinstance(raw, list) else []:
         code = str((it or {}).get("code") or "").strip()
-        if code.startswith("BK"):
+        # 板块 BKxxxx 与指数 secid（1.000300 / 47.800000）都允许进自定义
+        if code.upper().startswith("BK") or _is_index_code(code):
             out.append({"code": code, "name": str((it or {}).get("name") or code).strip()})
     return out
 

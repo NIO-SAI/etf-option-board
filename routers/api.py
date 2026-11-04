@@ -6,6 +6,7 @@ import asyncio
 import datetime as dt
 import json
 import os
+import re
 
 import logging
 
@@ -13,6 +14,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from services import (alerts, board_collector as bcol, boardflow as bf, decision,
+                      pinyin as pinyin_svc,
                       deploy as deploy_svc, em, index_levels, kronos, llm,
                       market_service as ms, monitor, option_playbook as playbook,
                       option_service as osvc, reversal, strategy, user_settings as usv,
@@ -655,6 +657,7 @@ async def board_rank(type: str = Query("concept",
 
     for r in rows:
         r["watch"] = r["code"] in watch_codes
+        r["py"] = pinyin_svc.initials(r.get("name") or "")
         if r.get("prev_rank") is not None:
             r["rank_delta"] = int(r["prev_rank"]) - int(r["rank"]) if r.get("rank") else None
         else:
@@ -673,14 +676,20 @@ async def board_rank(type: str = Query("concept",
 
 @router.get("/board/watch")
 async def board_watch():
-    return {"items": await asyncio.to_thread(bf.load_watch)}
+    items = await asyncio.to_thread(bf.load_watch)
+    for it in items:
+        it["py"] = pinyin_svc.initials(it.get("name") or "")
+    return {"items": items}
 
 
 @router.post("/board/watch")
 async def board_watch_add(code: str = Query(...), name: str = Query("")):
-    """加入自选板块（幂等）。"""
-    if not code.startswith("BK"):
-        return {"error": "板块代码必须是 BK 开头"}
+    """加入自选板块（幂等）。板块 BKxxxx 与指数 secid（1.000300 / 47.800000）都可以加。"""
+    code = (code or "").strip()
+    is_board = code.upper().startswith("BK")
+    is_index = bool(re.fullmatch(r"\d+\.\d+", code))
+    if not (is_board or is_index):
+        return {"error": "代码必须是 BK 板块或指数 secid"}
     items, ok = await asyncio.to_thread(
         bf.update_watch, {"code": code, "name": (name or code).strip()}, None)
     if not ok:
@@ -922,6 +931,7 @@ async def etf_flow_rank(scope: str = Query("all", description="all / watch"),
         rows = sorted(rows, key=lambda r: -abs(float(r.get("flow") or 0)))[:30]
     for r in rows:
         r["watch"] = r["code"] in watch_codes
+        r["py"] = pinyin_svc.initials(r.get("name") or "")
     out = {"date": date, "scope": scope, "items": rows, "watch_count": len(watch_codes),
            "is_today": date == dt.date.today().isoformat(),
            "trading": bf.in_session(dt.datetime.now())}
@@ -1156,8 +1166,10 @@ async def board_index_rank(date: str | None = Query(None)):
     for r in rows:
         if r.get("kind") == "industry":
             continue
-        items.append({"code": r["code"], "name": names.get(r["code"]) or r.get("name") or r["code"],
-                      "type": "index", "flow": r["inst"] + r["large"], "pct": None})
+        nm = names.get(r["code"]) or r.get("name") or r["code"]
+        items.append({"code": r["code"], "name": nm, "type": "index",
+                      "flow": r["inst"] + r["large"], "pct": None,
+                      "py": pinyin_svc.initials(nm)})
     items.sort(key=lambda x: -abs(x["flow"]))
     out = {"date": date, "items": items, "error": None if items else "暂无 4 维采集数据"}
     return out

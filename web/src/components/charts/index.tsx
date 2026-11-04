@@ -835,6 +835,9 @@ export function FlowHistoryChart({
   return <ReactECharts key={id} option={option} notMerge style={{ height }} />;
 }
 
+/** 是否整点/半点（用于分时图的刻度与竖向参照线）。 */
+const isHalfHour = (v: string) => /^\d{2}:(00|30)$/.test(v || "");
+
 /** 资金分时色板（与 stock-webui 的 DISTINCT_COLORS 同思路：相邻颜色区分度足够）。 */
 const FLOW_COLORS = [
   "#ef4444", "#3b82f6", "#f59e0b", "#10b981", "#a855f7", "#ec4899",
@@ -878,10 +881,12 @@ export function BoardFlowChart({
 
     const many = lines.length > 40;
     const series = lines.map((l, i) => {
-      const color = FLOW_COLORS[i % FLOW_COLORS.length];
+      const baseColor = FLOW_COLORS[i % FLOW_COLORS.length];
       const dim = hoverCode && hoverCode !== l.code;
       const focus = hoverCode === l.code;
       const last = l.points.length ? l.points[l.points.length - 1][1] : null;
+      // 悬停时用红/绿表达涨跌（红=净流入、绿=净流出），其余时候用调色板区分线条
+      const color = focus ? ((last ?? 0) >= 0 ? "#ef4444" : "#22c55e") : baseColor;
       const pctStr = typeof l.pct === "number" ? `(${l.pct >= 0 ? "+" : ""}${l.pct.toFixed(2)}%)` : "";
       const label = `${l.name}  ${last == null ? "—" : signedYi(last)}${pctStr}`;
       return {
@@ -937,7 +942,12 @@ export function BoardFlowChart({
       legend: { show: false },
       tooltip: {
         trigger: "axis",
-        axisPointer: { type: "line" },
+        axisPointer: {
+          type: "cross",
+          lineStyle: { color: "rgba(228,228,231,0.55)", type: "dashed", width: 1 },
+          crossStyle: { color: "rgba(228,228,231,0.55)", type: "dashed", width: 1 },
+          label: { backgroundColor: "#3f3f46", color: "#f4f4f5", fontSize: 10 },
+        },
         backgroundColor: "rgba(24,24,27,0.95)",
         borderColor: "rgba(255,255,255,0.12)",
         textStyle: { color: "#e4e4e7", fontSize: 11 },
@@ -961,9 +971,15 @@ export function BoardFlowChart({
         data: times,
         boundaryGap: false,
         axisLine: { lineStyle: { color: "#52525b" } },
+        // 只在整点/半点显示刻度，并在这些位置画一条竖向虚线做参照
         axisLabel: {
           color: "#71717a", fontSize: 10, hideOverlap: true,
-          interval: Math.max(1, Math.floor(times.length / 12)),
+          interval: (_i: number, v: string) => isHalfHour(v),
+        },
+        splitLine: {
+          show: true,
+          interval: (_i: number, v: string) => isHalfHour(v),
+          lineStyle: { color: "rgba(255,255,255,0.12)", type: "dashed" },
         },
       },
       yAxis: {
