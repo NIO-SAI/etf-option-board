@@ -23,6 +23,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DATA_DIR = os.path.join(_ROOT, "data")
 _DB_FILE = os.path.join(_DATA_DIR, "board_flow.db")
 _WATCH_FILE = os.path.join(_DATA_DIR, "board_watch.json")
+_ETF_WATCH_FILE = os.path.join(_DATA_DIR, "etf_watch.json")
 
 # 保留窗口（交易日）
 KEEP_POINT_DAYS = 30
@@ -60,6 +61,34 @@ CREATE TABLE IF NOT EXISTS flow_points (
     PRIMARY KEY (date, code, time)
 );
 CREATE INDEX IF NOT EXISTS idx_points_date ON flow_points(date, code, time);
+CREATE TABLE IF NOT EXISTS etf_boards (
+    code TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'sector'
+);
+CREATE TABLE IF NOT EXISTS etf_rank_snapshots (
+    date TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    flow REAL NOT NULL,
+    pct REAL NOT NULL DEFAULT 0,
+    rank INTEGER,
+    ts TEXT,
+    PRIMARY KEY (date, code)
+);
+CREATE TABLE IF NOT EXISTS etf_flow_points (
+    date TEXT NOT NULL,
+    code TEXT NOT NULL,
+    time TEXT NOT NULL,
+    main REAL NOT NULL,
+    super_ REAL NOT NULL DEFAULT 0,
+    large REAL NOT NULL DEFAULT 0,
+    medium REAL NOT NULL DEFAULT 0,
+    small REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (date, code, time)
+);
+CREATE INDEX IF NOT EXISTS idx_etf_points_date ON etf_flow_points(date, code, time);
 """
 
 
@@ -438,3 +467,182 @@ def aggregate_daily(rows: Iterable[dict], dates: list[str]) -> list[dict]:
         if i is not None:
             item["values"][i] = flow
     return sorted(acc.values(), key=lambda x: (-x["total"], x["code"]))
+
+
+# --------------------------------------------------------------------------
+# ETF 资金流：口径分类 + 存储（与板块共用同一个 SQLite，仍由采集器单写）
+# --------------------------------------------------------------------------
+_ETF_EXCLUDE = ("债", "货币", "现金", "短融", "添益", "日利", "快线", "国债", "政金",
+                "恒生", "港股", "纳指", "标普", "日经", "中概", "跨境", "黄金", "原油",
+                "商品", "REIT", "证金", "标普", "美国", "德国", "法国", "亚太")
+_ETF_BROAD = ("沪深300", "上证50", "中证500", "中证1000", "中证2000", "中证A500", "中证A50",
+              "中证800", "中证100", "创业板", "科创50", "科创板50", "科创100", "上证180",
+              "深证100", "双创", "北证50", "上证综指", "中证全指")
+_ETF_SECTOR = ("半导体", "芯片", "医药", "医疗", "生物", "证券", "银行", "保险", "军工", "国防",
+               "新能源", "光伏", "电池", "锂", "汽车", "有色", "稀土", "煤炭", "钢铁", "化工",
+               "消费", "食品", "酒", "家电", "地产", "农业", "养殖", "传媒", "游戏", "通信",
+               "计算机", "软件", "人工智能", "机器人", "电子", "电力", "环保", "基建", "旅游",
+               "教育", "科技", "信息", "机械", "建材", "运输", "物流", "零售", "纺织")
+
+
+def classify_etf(name: str) -> str | None:
+    """ETF 口径分类：broad（宽基）/ sector（行业）/ None（不采）。
+
+    纯函数、按关键词判定；跨境与固收类一律排除（与看板的「境内股票 ETF」定位一致）。
+    """
+    n = str(name or "")
+    if not n or any(k in n for k in _ETF_EXCLUDE):
+        return None
+    if any(k in n for k in _ETF_BROAD):
+        return "broad"
+    if any(k in n for k in _ETF_SECTOR):
+        return "sector"
+    return None
+
+
+def select_etf_universe(rows: Iterable[dict], core_codes: Iterable[str] = (),
+                        broad_n: int = 30, sector_n: int = 30) -> list[dict]:
+    """从「按成交额降序」的 ETF 列表里挑采集范围：必采核心 + 宽基 Top N + 行业 Top N。
+
+    返回 [{code, secid, name, type, amount}]；核心标的即使不在 Top 里也一定保留。
+    """
+    cores = {str(c) for c in core_codes or ()}
+    out: list[dict] = []
+    seen: set[str] = set()
+    broad = sector = 0
+    for r in rows or []:
+        code = str(r.get("code") or "")
+        name = str(r.get("name") or "")
+        secid = str(r.get("secid") or "")
+        if not code or not name or not secid or code in seen:
+            continue
+        kind = classify_etf(name)
+        take = code in cores
+        if not take and kind == "broad" and broad < broad_n:
+            take, broad = True, broad + 1
+        elif not take and kind == "sector" and sector < sector_n:
+            take, sector = True, sector + 1
+        if not take:
+            continue
+        seen.add(code)
+        out.append({"code": code, "secid": secid, "name": name,
+                    "type": kind or ("broad" if code in cores else "sector"),
+                    "amount": float(r.get("amount") or 0)})
+    # 核心标的若没出现在列表里（接口没翻到），由调用方另行补齐
+    return out
+
+
+def parse_etf_quote(code: str, data: dict | None) -> dict | None:
+    """把 getZJLXData 的快照归一成内部结构；缺主字段直接丢弃（避免写入全 0 假数据）。"""
+    if not isinstance(data, dict):
+        return None
+    def num(key):
+        v = data.get(key)
+        if isinstance(v, bool) or v in (None, "", "-"):
+            return 0.0
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+    if data.get("f137") in (None, "", "-"):
+        return None
+    return {"code": code, "name": str(data.get("f58") or code),
+            "flow": num("f137"), "pct": num("f170"),
+            "super": num("f140"), "large": num("f143"),
+            "medium": num("f146"), "small": num("f149")}
+
+
+def save_etf_cycle(date: str, hhmm: str, rows: list[dict]) -> int:
+    """写入一轮 ETF 资金流（幂等 upsert）。"""
+    if not rows:
+        return 0
+    ts = f"{date} {hhmm}"
+    ranked = sorted(rows, key=lambda r: -float(r.get("flow") or 0))
+    with _db() as conn:
+        conn.executemany(
+            "INSERT INTO etf_boards(code,name,type) VALUES(?,?,?) "
+            "ON CONFLICT(code) DO UPDATE SET name=excluded.name, type=excluded.type",
+            [(r["code"], r["name"], r["type"]) for r in ranked])
+        conn.executemany(
+            "INSERT INTO etf_rank_snapshots(date,code,name,type,flow,pct,rank,ts) "
+            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(date,code) DO UPDATE SET "
+            "name=excluded.name, type=excluded.type, flow=excluded.flow, "
+            "pct=excluded.pct, rank=excluded.rank, ts=excluded.ts",
+            [(date, r["code"], r["name"], r["type"], float(r["flow"]), float(r["pct"]),
+              i, ts) for i, r in enumerate(ranked, start=1)])
+        conn.executemany(
+            "INSERT INTO etf_flow_points(date,code,time,main,super_,large,medium,small) "
+            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(date,code,time) DO UPDATE SET "
+            "main=excluded.main, super_=excluded.super_, large=excluded.large, "
+            "medium=excluded.medium, small=excluded.small",
+            [(date, r["code"], hhmm, float(r["flow"]), float(r.get("super") or 0),
+              float(r.get("large") or 0), float(r.get("medium") or 0),
+              float(r.get("small") or 0)) for r in ranked])
+    return len(ranked)
+
+
+def read_etf_rank(date: str) -> list[dict]:
+    with _db() as conn:
+        cur = conn.execute(
+            "SELECT code,name,type,flow,pct,rank,ts FROM etf_rank_snapshots WHERE date=? ORDER BY flow DESC",
+            (date,))
+        cols = [c[0] for c in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def read_etf_points(date: str, codes: list[str]) -> dict[str, list[tuple[str, float, dict]]]:
+    """取 ETF 资金分时点：{code: [(time, main, 四维dict)]}。"""
+    codes = [c for c in (codes or []) if c]
+    if not codes:
+        return {}
+    marks = ",".join("?" for _ in codes)
+    with _db() as conn:
+        cur = conn.execute(
+            f"SELECT code,time,main,super_,large,medium,small FROM etf_flow_points "
+            f"WHERE date=? AND code IN ({marks}) ORDER BY time", [date, *codes])
+        out: dict[str, list] = {c: [] for c in codes}
+        for code, t, main, sup, large, medium, small in cur.fetchall():
+            out.setdefault(str(code), []).append(
+                (str(t), float(main), {"super": float(sup), "large": float(large),
+                                       "medium": float(medium), "small": float(small)}))
+    return out
+
+
+# --------------------------------------------------------------------------
+# ETF 自选
+# --------------------------------------------------------------------------
+def load_etf_watch() -> list[dict]:
+    try:
+        with open(_ETF_WATCH_FILE, encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as exc:
+        log.warning("读取自选 ETF 失败，按空处理: %s", exc)
+        return []
+    out = []
+    for it in raw if isinstance(raw, list) else []:
+        code = str((it or {}).get("code") or "").strip()
+        if code.isdigit() and len(code) == 6:
+            out.append({"code": code, "name": str((it or {}).get("name") or code).strip()})
+    return out
+
+
+def update_etf_watch(add: dict | None = None, remove: str | None = None) -> list[dict]:
+    with _LOCK:
+        items = load_etf_watch()
+        if remove:
+            items = [it for it in items if it["code"] != remove]
+        if add and add.get("code"):
+            code = str(add["code"])
+            if not any(it["code"] == code for it in items):
+                items.append({"code": code, "name": str(add.get("name") or code)})
+        tmp = f"{_ETF_WATCH_FILE}.{os.getpid()}.{threading.get_ident()}.tmp"
+        try:
+            os.makedirs(_DATA_DIR, exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(items, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, _ETF_WATCH_FILE)
+        except OSError as exc:
+            log.warning("写入自选 ETF 失败: %s", exc)
+        return items

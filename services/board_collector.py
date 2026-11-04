@@ -109,6 +109,10 @@ async def run_forever() -> None:
         try:
             if bf.in_session(dt.datetime.now()):
                 await _cycle()
+                try:
+                    await _etf_cycle()
+                except Exception as exc:  # noqa: BLE001 — ETF 失败不拖累板块
+                    log.warning("ETF 资金流采集失败: %s", exc)
                 await asyncio.sleep(_CYCLE_SEC)
             else:
                 await asyncio.sleep(_IDLE_SEC)
@@ -118,3 +122,75 @@ async def run_forever() -> None:
         except Exception as exc:  # noqa: BLE001
             log.warning("板块采集循环异常: %s", exc)
             await asyncio.sleep(_IDLE_SEC)
+
+
+# --------------------------------------------------------------------------
+# ETF 资金流（9 只期权标的 + 宽基 Top30 + 行业 Top30，30 秒一轮）
+# --------------------------------------------------------------------------
+_ETF_FS = "b:MK0021,b:MK0022,b:MK0023,b:MK0024"
+_etf_universe: list[dict] = []
+_etf_universe_date: str | None = None
+_ETF_CONCURRENCY = 8
+
+
+async def _build_etf_universe(date: str) -> list[dict]:
+    """每日重建一次采集范围（成交额排序 Top 200 → 分类挑 Top30/30 + 核心 9 只）。"""
+    from services.universe import ETFS
+
+    rows: list[dict] = []
+    for pn in (1, 2):
+        part = await em.clist(_ETF_FS, "f12,f13,f14,f6", pn=pn, pz=100, fid="f6", po=1, ttl=1800.0)
+        if not part:
+            break
+        for it in part:
+            code = str(it.get("f12") or "")
+            name = str(it.get("f14") or "")
+            mk = str(it.get("f13") if it.get("f13") is not None else "")
+            if not code or not name:
+                continue
+            secid = f"{mk}.{code}" if mk in ("0", "1") else ""
+            rows.append({"code": code, "name": name, "secid": secid,
+                         "amount": it.get("f6") or 0})
+        if len(part) < 100:
+            break
+    picked = bf.select_etf_universe(rows, [e["code"] for e in ETFS])
+    have = {p["code"] for p in picked}
+    # 核心标的即使被分类过滤掉，也必须采（页面上要能跟期权看板对照）
+    for e in ETFS:
+        if e["code"] not in have:
+            picked.append({"code": e["code"], "secid": e["secid"], "name": e["name"],
+                           "type": "broad", "amount": 0})
+    log.info("ETF 采集范围：%d 只（列表 %d 行）", len(picked), len(rows))
+    return picked
+
+
+async def _fetch_etf(item: dict) -> dict | None:
+    q = await em.stock_get(item["secid"], "f57,f58,f137,f140,f143,f146,f149,f170", ttl=20.0)
+    row = bf.parse_etf_quote(item["code"], q)
+    if row:
+        row["type"] = item.get("type") or "sector"
+    return row
+
+
+async def _etf_cycle() -> None:
+    global _etf_universe, _etf_universe_date
+    now = dt.datetime.now()
+    date, hhmm = now.strftime("%Y-%m-%d"), now.strftime("%H:%M")
+    if _etf_universe_date != date or not _etf_universe:
+        _etf_universe = await _build_etf_universe(date)
+        _etf_universe_date = date
+    if not _etf_universe:
+        return
+    sem = asyncio.Semaphore(_ETF_CONCURRENCY)
+
+    async def one(item):
+        async with sem:
+            try:
+                return await _fetch_etf(item)
+            except Exception:  # noqa: BLE001 — 单只失败跳过
+                return None
+
+    results = await asyncio.gather(*(one(it) for it in _etf_universe))
+    rows = [r for r in results if r]
+    if rows:
+        await asyncio.to_thread(bf.save_etf_cycle, date, hhmm, rows)

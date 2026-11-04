@@ -69,6 +69,19 @@ export const api = {
   boardMulti: (start?: string, end?: string, type = "concept") =>
     get(`/board/multi?type=${type}${start ? `&start=${start}` : ""}${end ? `&end=${end}` : ""}`),
   boardWatch: () => get("/board/watch"),
+
+  // ETF 资金流
+  etfFlowRank: (scope = "all", date?: string) =>
+    get(`/etf-flow/rank?scope=${scope}${date ? `&date=${date}` : ""}`),
+  etfFlowSeries: (codes: string, date?: string) =>
+    get(`/etf-flow/series?codes=${encodeURIComponent(codes)}${date ? `&date=${date}` : ""}`),
+  etfFlow4dim: (code: string, date?: string) =>
+    get(`/etf-flow/4dim?code=${encodeURIComponent(code)}${date ? `&date=${date}` : ""}`),
+  etfFlowWatchAdd: async (code: string, name: string) =>
+    (await fetch(`${BASE}/etf-flow/watch?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`,
+      { method: "POST" })).json(),
+  etfFlowWatchRemove: async (code: string) =>
+    (await fetch(`${BASE}/etf-flow/watch?code=${encodeURIComponent(code)}`, { method: "DELETE" })).json(),
   boardWatchAdd: async (code: string, name: string) =>
     (await fetch(`${BASE}/board/watch?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`,
       { method: "POST" })).json(),

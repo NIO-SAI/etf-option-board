@@ -885,3 +885,121 @@ async def board_multi(start: str | None = Query(None, description="YYYY-MM-DD"),
     return {"start": start, "end": end, "type": btype, "dates": window,
             "items": items, "available_dates": asc,
             "error": None if items else "该区间没有数据（可能还没采集到这些交易日）"}
+
+
+# --------------------------------------------------------------------------
+# ETF 资金流（本地库只读）
+# --------------------------------------------------------------------------
+@router.get("/etf-flow/rank")
+async def etf_flow_rank(scope: str = Query("all", description="all / watch"),
+                        date: str | None = Query(None)):
+    if not date:
+        try:
+            dates = await asyncio.to_thread(bf.available_dates, 1)
+        except Exception:  # noqa: BLE001
+            dates = []
+        date = dates[0] if dates else dt.date.today().isoformat()
+    try:
+        rows = await asyncio.to_thread(bf.read_etf_rank, date)
+    except Exception as exc:  # noqa: BLE001
+        return {"date": date, "items": [], "error": f"ETF 资金流读取失败: {exc}"}
+
+    watch = await asyncio.to_thread(bf.load_etf_watch)
+    watch_codes = {w["code"] for w in watch}
+    if scope == "watch":
+        rows = [r for r in rows if r["code"] in watch_codes]
+    for r in rows:
+        r["watch"] = r["code"] in watch_codes
+    out = {"date": date, "scope": scope, "items": rows, "watch_count": len(watch_codes),
+           "is_today": date == dt.date.today().isoformat(),
+           "trading": bf.in_session(dt.datetime.now())}
+    if not rows:
+        out["error"] = ("还没有自选 ETF，点列表右侧星标即可加入" if scope == "watch" and not watch_codes
+                        else "暂无 ETF 采集数据（交易时段每 30 秒采集一次）")
+    return out
+
+
+@router.get("/etf-flow/series")
+async def etf_flow_series(codes: str = Query(""), date: str | None = Query(None)):
+    if not date:
+        try:
+            dates = await asyncio.to_thread(bf.available_dates, 1)
+        except Exception:  # noqa: BLE001
+            dates = []
+        date = dates[0] if dates else dt.date.today().isoformat()
+    wanted = [c.strip() for c in codes.split(",") if c.strip()]
+    try:
+        rank = await asyncio.to_thread(bf.read_etf_rank, date)
+    except Exception as exc:  # noqa: BLE001
+        return {"date": date, "axis": [], "series": [], "error": str(exc)}
+    meta = {r["code"]: r for r in rank}
+    if not wanted:
+        wanted = [r["code"] for r in rank[:8]]
+
+    try:
+        raw = await asyncio.to_thread(bf.read_etf_points, date, wanted)
+    except Exception as exc:  # noqa: BLE001
+        return {"date": date, "axis": [], "series": [], "error": str(exc)}
+
+    aligned = bf.build_series({code: [(t, main) for t, main, _ in pts] for code, pts in raw.items()})
+    for s in aligned["series"]:
+        s["name"] = (meta.get(s["code"]) or {}).get("name") or s["code"]
+    points_n = sum(len(v) for v in raw.values())
+    out = {"date": date, "axis": aligned["axis"], "series": aligned["series"], "points": points_n}
+    if points_n < 2:
+        out["error"] = "当日分时点不足（服务启动后从下一分钟开始累积）"
+    return out
+
+
+@router.get("/etf-flow/4dim")
+async def etf_flow_4dim(code: str = Query(...), date: str | None = Query(None)):
+    """单只 ETF 的 4 维资金累计曲线（机构/大单/中户/散户）。"""
+    if not date:
+        try:
+            dates = await asyncio.to_thread(bf.available_dates, 1)
+        except Exception:  # noqa: BLE001
+            dates = []
+        date = dates[0] if dates else dt.date.today().isoformat()
+    try:
+        raw = await asyncio.to_thread(bf.read_etf_points, date, [code])
+    except Exception as exc:  # noqa: BLE001
+        return {"date": date, "code": code, "axis": [], "dims": {}, "error": str(exc)}
+    pts = raw.get(code) or []
+
+    def aligned(vals):
+        out = bf.build_series({code: vals})
+        return out["axis"], (out["series"][0]["values"] if out["series"] else [])
+
+    axis, main_vals = aligned([(t, m) for t, m, _ in pts])
+    dims = {"main": main_vals}
+    for key in ("super", "large", "medium", "small"):
+        _, dims[key] = aligned([(t, d.get(key) or 0) for t, _, d in pts])
+    if not axis:
+        dims = {}
+    out = {"date": date, "code": code, "axis": axis, "dims": dims}
+    if len(axis) < 2:
+        out["error"] = "当日分时点不足（服务启动后从下一分钟开始累积）"
+    return out
+
+
+@router.get("/etf-flow/watch")
+async def etf_flow_watch():
+    return {"items": await asyncio.to_thread(bf.load_etf_watch)}
+
+
+@router.post("/etf-flow/watch")
+async def etf_flow_watch_add(code: str = Query(...), name: str = Query("")):
+    if not (code.isdigit() and len(code) == 6):
+        return {"error": "ETF 代码必须是 6 位数字"}
+    items = await asyncio.to_thread(bf.update_etf_watch, {"code": code, "name": name or code}, None)
+    if not any(it["code"] == code for it in items):
+        return {"error": "自选 ETF 写入失败"}
+    return {"items": items}
+
+
+@router.delete("/etf-flow/watch")
+async def etf_flow_watch_remove(code: str = Query(...)):
+    items = await asyncio.to_thread(bf.update_etf_watch, None, code)
+    if any(it["code"] == code for it in items):
+        return {"error": "自选 ETF 写入失败"}
+    return {"items": items}

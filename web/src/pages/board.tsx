@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Activity, Wallet } from "lucide-react";
+import { Activity } from "lucide-react";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { EmptyState } from "@/components/ui/misc";
@@ -29,16 +29,6 @@ function BoardPlaceholder({
         </FramePanel>
       </Frame>
     </main>
-  );
-}
-
-export function EtfFlowPage() {
-  return (
-    <BoardPlaceholder
-      title="ETF资金流"
-      subtitle="ETF 资金流排行、分时与 4 维资金拆解"
-      icon={<Wallet className="size-4" />}
-    />
   );
 }
 
