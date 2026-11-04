@@ -634,7 +634,10 @@ async def board_rank(type: str = Query("concept",
     btype = type if type in ("concept", "industry", "watch", "all") else "concept"
     want_watch = btype == "watch"
     if not date:
-        dates = await asyncio.to_thread(bf.available_dates, 1)
+        try:
+            dates = await asyncio.to_thread(bf.available_dates, 1)
+        except Exception:  # noqa: BLE001 — 库未初始化时按今日空态返回
+            dates = []
         date = dates[0] if dates else dt.date.today().isoformat()
 
     watch = await asyncio.to_thread(bf.load_watch)
@@ -678,18 +681,16 @@ async def board_watch_add(code: str = Query(...), name: str = Query("")):
     """加入自选板块（幂等）。"""
     if not code.startswith("BK"):
         return {"error": "板块代码必须是 BK 开头"}
-    items = await asyncio.to_thread(bf.load_watch)
+    items = await asyncio.to_thread(bf.update_watch, {"code": code, "name": (name or code).strip()}, None)
     if not any(it["code"] == code for it in items):
-        items.append({"code": code, "name": (name or code).strip()})
-        if not await asyncio.to_thread(bf.save_watch, items):
-            return {"error": "自选板块写入失败"}
+        return {"error": "自选板块写入失败"}
     return {"items": items}
 
 
 @router.delete("/board/watch")
 async def board_watch_remove(code: str = Query(...)):
-    items = [it for it in await asyncio.to_thread(bf.load_watch) if it["code"] != code]
-    if not await asyncio.to_thread(bf.save_watch, items):
+    items = await asyncio.to_thread(bf.update_watch, None, code)
+    if any(it["code"] == code for it in items):
         return {"error": "自选板块写入失败"}
     return {"items": items}
 
@@ -700,7 +701,10 @@ async def board_series(codes: str = Query("", description="逗号分隔的板块
                        type: str = Query("concept", description="codes 缺省时按此口径取前 8")):
     """板块当日资金分时（多线，已按统一时间轴对齐）。只读本地库。"""
     if not date:
-        dates = await asyncio.to_thread(bf.available_dates, 1)
+        try:
+            dates = await asyncio.to_thread(bf.available_dates, 1)
+        except Exception:  # noqa: BLE001
+            dates = []
         date = dates[0] if dates else dt.date.today().isoformat()
 
     wanted = [c.strip() for c in codes.split(",") if c.strip()]

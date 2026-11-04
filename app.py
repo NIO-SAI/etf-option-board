@@ -31,6 +31,11 @@ WEB_DIST = os.path.join(os.path.dirname(__file__), "web", "dist")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 板块库先建表（同步）：否则冷启动瞬间的 /api/board/* 会撞 no such table
+    try:
+        await asyncio.to_thread(board_collector.init)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("板块库初始化失败: %s", exc)
     log.info("启动：预热 Kronos（后台）")
     task_k = asyncio.create_task(kronos.warmup())
     task_m = asyncio.create_task(monitor.run_forever())

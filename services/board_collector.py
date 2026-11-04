@@ -29,6 +29,12 @@ _prev_date: str | None = None
 _pruned_date: str | None = None
 
 
+def init() -> None:
+    """建表 + 首次裁剪（由 app 在启动时同步调用一次）。"""
+    bf.init_db()
+    bf.prune()
+
+
 def state() -> dict:
     """采集器状态（健康接口用）。"""
     return dict(_state)
@@ -94,8 +100,7 @@ async def run_forever() -> None:
     log.info("板块资金采集器启动")
     # 启动时先建表/裁剪一次，避免查询报 no such table
     try:
-        await asyncio.to_thread(bf.init_db)
-        await asyncio.to_thread(bf.prune)
+        await asyncio.to_thread(init)
         _pruned_date = dt.date.today().isoformat()
     except Exception as exc:  # noqa: BLE001
         log.warning("板块库初始化失败: %s", exc)

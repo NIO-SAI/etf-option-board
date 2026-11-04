@@ -147,13 +147,24 @@ def assign_ranks_by_type(rows: Iterable[dict], prev: dict[str, int] | None = Non
     return out
 
 
+def _in_auction_time(t: str) -> bool:
+    """HH:MM 是否落在连续竞价时段（过滤盘后 15:0x、跨午夜 00:00 之类脏点）。"""
+    try:
+        hm = int(t[:2]) * 60 + int(t[3:5])
+    except (TypeError, ValueError):
+        return False
+    return _window(hm, _SESSION_AM) or _window(hm, _SESSION_PM)
+
+
 def build_series(points_by_code: dict[str, list[tuple[str, float]]]) -> dict:
     """把各板块的 (时间, 累计净流入) 点拼成同一条时间轴（前值填充 + 缺失留空）。
 
     纯函数：入参是已按日期取出的点，不做同日校验以外的任何 I/O。
     某板块在轴上出现前的时点为 None（前端断线而不是画到 0）。
     """
-    pts = {code: sorted(v or [], key=lambda x: str(x[0])) for code, v in (points_by_code or {}).items()}
+    pts = {code: sorted([(str(t), float(v)) for t, v in (rows or []) if _in_auction_time(str(t))],
+                        key=lambda x: x[0])
+           for code, rows in (points_by_code or {}).items()}
     axis = sorted({str(t) for rows in pts.values() for t, _ in rows})
     series = []
     for code, rows in pts.items():
@@ -340,8 +351,23 @@ def load_watch() -> list[dict]:
     return out
 
 
+def update_watch(add: dict | None = None, remove: str | None = None) -> list[dict]:
+    """一次性完成「读—改—写」（加锁 + 原子替换），避免并发丢失更新。"""
+    with _LOCK:
+        items = load_watch()
+        if remove:
+            items = [it for it in items if it["code"] != remove]
+        if add and add.get("code"):
+            code = str(add["code"])
+            if not any(it["code"] == code for it in items):
+                items.append({"code": code, "name": str(add.get("name") or code)})
+        save_watch(items)
+        return items
+
+
 def save_watch(items: list[dict]) -> bool:
-    tmp = _WATCH_FILE + ".tmp"
+    # 唯一临时名：多进程/并发写不会互相覆盖半截文件
+    tmp = f"{_WATCH_FILE}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         os.makedirs(_DATA_DIR, exist_ok=True)
         with open(tmp, "w", encoding="utf-8") as f:

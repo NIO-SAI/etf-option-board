@@ -57,7 +57,7 @@ export const api = {
   reversalSignals: (code: string) => get(`/reversal/signals?code=${code}`),
   monitorCycle: async () => (await fetch(`${BASE}/monitor/cycle`, { method: "POST" })).json(),
 
-  // 板块资金（读本地库，采集由后端随机进行）
+  // 板块资金（读本地库，采集由后端定时进行）
   boardHealth: () => get("/board/health"),
   boardRank: (type = "concept", date?: string) =>
     get(`/board/rank?type=${type}${date ? `&date=${date}` : ""}`),

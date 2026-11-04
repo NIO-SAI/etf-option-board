@@ -39,10 +39,18 @@ export function usePolling<T>(
     // 若在 run() 里读 cacheRef.current 就会拿到**新**合约的键，把旧数据写进新
     // 合约的缓存（污染后切回去一直是错的）。同理旧请求也不能再 setData。
     const c = cacheRef.current;
+    // 放行本轮手动刷新（refresh() 的 await 不能因为「本轮不发请求」而永久挂起）
+    const drain = () => {
+      if (!alive) return;
+      const rs = waiters.current;
+      waiters.current = [];
+      rs.forEach((f) => f());
+    };
     const run = async () => {
       // 页面切到后台时不发请求（浏览器会节流定时器，这里直接跳过）；
       // 切回前台由 visibilitychange 立即补一次。
       if (typeof document !== "undefined" && document.hidden) {
+        drain();
         timer = setTimeout(run, 20_000);
         return;
       }
@@ -55,7 +63,8 @@ export function usePolling<T>(
           setCacheAt({ ts: hit.ts, day: hit.day });
           // 缓存还新鲜（不到一个轮询周期）：本轮先不请求，等下一次再拉。
           // 切换标的/合约时靠它省掉大量回切请求。
-          if (Date.now() - hit.ts < intervalMs) {
+          // 手动刷新（有 waiter）时不走这条捷径，否则星标/自选之类的写操作要等一整个轮询周期
+          if (Date.now() - hit.ts < intervalMs && waiters.current.length === 0) {
             first = false;
             timer = setTimeout(run, intervalMs);
             return;

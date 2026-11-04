@@ -149,3 +149,16 @@ class TestBuildSeries:
     def test_empty_input(self):
         assert bf.build_series({}) == {"axis": [], "series": []}
         assert bf.build_series({"BK1": []})["series"][0]["values"] == []
+
+
+class TestBuildSeriesSessionTrim:
+    def test_drops_off_session_times(self):
+        pts = {"BK1": [("09:29", 1.0), ("09:30", 2.0), ("12:00", 9.0),
+                       ("15:00", 3.0), ("15:06", 7.0), ("00:00", 5.0)]}
+        out = bf.build_series(pts)
+        assert out["axis"] == ["09:30", "15:00"]
+        assert out["series"][0]["values"] == [2.0, 3.0]
+        assert out["series"][0]["last"] == 3.0
+
+    def test_all_off_session_yields_empty(self):
+        assert bf.build_series({"BK1": [("15:06", 1.0)]})["axis"] == []

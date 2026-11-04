@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { LineChart, Loader2, RefreshCw, Star } from "lucide-react";
+import { toast } from "sonner";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
@@ -60,11 +61,8 @@ export function BoardFlowPage() {
     return list;
   }, [rows, sort]);
 
-  // 曲线固定取「主力净流入前 8」，与表格排序解耦：换排序不再触发请求
-  const chartCodes = useMemo(() => {
-    const pool = [...rows].sort((a, b) => (b.flow ?? 0) - (a.flow ?? 0)).slice(0, CHART_LINES);
-    return pool.map((r) => r.code);
-  }, [rows]);
+  // 曲线取当前排序下的前 8（工单 03：点表头换排序，曲线跟着换）
+  const chartCodes = useMemo(() => sorted.slice(0, CHART_LINES).map((r) => r.code), [sorted]);
   const codesKey = chartCodes.join(",");
 
   const { data: series, refresh: refreshSeries } = usePolling(
@@ -79,9 +77,11 @@ export function BoardFlowPage() {
     if (busy) return;
     setBusy(r.code);
     try {
-      if (r.watch) await api.boardWatchRemove(r.code);
-      else await api.boardWatchAdd(r.code, r.name);
+      const res = r.watch ? await api.boardWatchRemove(r.code) : await api.boardWatchAdd(r.code, r.name);
+      if (res?.error) throw new Error(res.error);
       await Promise.all([refresh(), refreshSeries()]);
+    } catch (e: any) {
+      toast("自选操作失败", { description: String(e?.message || e) });
     } finally {
       setBusy(null);
     }
@@ -134,20 +134,7 @@ export function BoardFlowPage() {
             </label>
             {data?.is_today === false && <Badge variant="warning-light">历史</Badge>}
             <span>共 {rows.length} 个板块</span>
-            <span className="flex items-center gap-1">
-              · 排序
-              {([["flow", "主力净流入"], ["pct", "涨跌幅"], ["name", "名称"]] as [SortKey, string][]).map(([k, label]) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => setSort(k)}
-                  className={cn("rounded px-1.5 py-0.5 transition-colors",
-                    sort === k ? "bg-muted text-foreground" : "hover:text-foreground")}
-                >
-                  {label}
-                </button>
-              ))}
-            </span>
+            <span>· 点表头排序</span>
           </div>
 
           <div className="max-h-[calc(100vh-13rem)] overflow-auto border-t border-border/60">
@@ -167,9 +154,9 @@ export function BoardFlowPage() {
                 <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                   <tr className="text-left text-[11px] text-muted-foreground">
                     <th className="w-10 px-2 py-1.5 font-normal">#</th>
-                    <th className="px-2 py-1.5 font-normal">板块</th>
-                    <th className="px-2 py-1.5 text-right font-normal">主力净流入</th>
-                    <th className="px-2 py-1.5 text-right font-normal">涨跌幅</th>
+                    <SortTh label="板块" k="name" sort={sort} onSort={setSort} />
+                    <SortTh label="主力净流入" k="flow" sort={sort} onSort={setSort} align="right" />
+                    <SortTh label="涨跌幅" k="pct" sort={sort} onSort={setSort} align="right" />
                     <th className="w-16 px-2 py-1.5 text-right font-normal">名次</th>
                     <th className="w-10 px-2 py-1.5" />
                   </tr>
@@ -217,7 +204,7 @@ export function BoardFlowPage() {
         <FramePanel dense>
           <FrameHeader className="flex-row items-center justify-between">
             <div className="flex min-w-0 items-baseline gap-2">
-              <FrameTitle className="text-sm">主力净流入 · 前 {CHART_LINES}</FrameTitle>
+              <FrameTitle className="text-sm">资金分时 · 前 {CHART_LINES}</FrameTitle>
               <span className="truncate text-[10px] text-muted-foreground">
                 {data?.date ?? ""} · 累计净流入（{series?.points ?? 0} 个分时点）
               </span>
@@ -262,6 +249,28 @@ export function BoardFlowPage() {
         </FramePanel>
       </Frame>
     </main>
+  );
+}
+
+/** 可点表头：点一次按该列排序，当前列显示箭头。 */
+function SortTh({ label, k, sort, onSort, align = "left" }: {
+  label: string; k: SortKey; sort: SortKey; onSort: (k: SortKey) => void; align?: "left" | "right";
+}) {
+  const active = sort === k;
+  return (
+    <th className={cn("px-2 py-1.5 font-normal", align === "right" ? "text-right" : "text-left")}>
+      <button
+        type="button"
+        onClick={() => onSort(k)}
+        aria-pressed={active}
+        className={cn("inline-flex items-center gap-0.5 transition-colors hover:text-foreground",
+          active ? "text-foreground" : "")}
+        title={`按${label}排序`}
+      >
+        {label}
+        <span aria-hidden className={cn("text-[9px]", active ? "opacity-100" : "opacity-0")}>▼</span>
+      </button>
+    </th>
   );
 }
 
