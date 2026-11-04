@@ -711,7 +711,7 @@ export function MoneyLinesChart({
       type: "category",
       data: axis,
       boundaryGap: false,
-      axisLine: { onZero: false, lineStyle: { color: AXIS, width: 1 } },
+      axisLine: { show: false },
       axisLabel: {
         color: AXIS, fontSize: 10, hideOverlap: true,
         // 多日模式：底部只按「日」显示（MM-DD）；单日模式：每半小时（09:30/10:00/10:30…）
@@ -1074,8 +1074,8 @@ export function BoardFlowChart({
         type: "category",
         data: times,
         boundaryGap: false,
-        // onZero 默认 true：x 轴线会被画在 y=0 处，看起来像一条黑粗线；贴底 1px
-        axisLine: { onZero: false, lineStyle: { color: "#52525b", width: 1 } },
+        // 不需要底部轴线（横线很显眼）：刻度文字保留，轴线整条隐藏
+        axisLine: { show: false },
         // 多日模式：只在每天起点显示 MM-DD；单日模式：只显示整点/半点
         axisLabel: {
           color: "#71717a", fontSize: 10, hideOverlap: true,
