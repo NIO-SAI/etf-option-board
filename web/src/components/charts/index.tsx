@@ -2,7 +2,7 @@ import ReactECharts from "echarts-for-react";
 import { Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { alignToAxis, minuteOf, sameDayAs, trimSession } from "@/lib/series";
-import { signedMoney } from "@/lib/format";
+import { signedMoney, signedYi } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const AXIS = "#71717a";
@@ -832,5 +832,161 @@ export function FlowHistoryChart({
   }), [dates, values]);
 
   if (!dates.length) return null;
+  return <ReactECharts key={id} option={option} notMerge style={{ height }} />;
+}
+
+/** 资金分时色板（与 stock-webui 的 DISTINCT_COLORS 同思路：相邻颜色区分度足够）。 */
+const FLOW_COLORS = [
+  "#ef4444", "#3b82f6", "#f59e0b", "#10b981", "#a855f7", "#ec4899",
+  "#14b8a6", "#f97316", "#6366f1", "#84cc16", "#06b6d4", "#e11d48",
+  "#8b5cf6", "#22c55e", "#eab308", "#0ea5e9", "#d946ef", "#64748b",
+];
+
+export type FlowLine = {
+  code: string;
+  name: string;
+  points: [string, number][];
+  pct?: number | null;
+  checked?: boolean;
+};
+
+/** 板块资金分时：多条线叠加，线末标签显示「名称 + 资金 + 涨跌幅」，悬停时其余线变淡。 */
+export function BoardFlowChart({
+  id, lines, hoverCode, temp, height = 420,
+}: {
+  id: string;
+  lines: FlowLine[];
+  hoverCode?: string | null;
+  temp?: FlowLine | null;
+  height?: number | string;
+}) {
+  const option = useMemo(() => {
+    const timeSet = new Set<string>();
+    lines.forEach((l) => l.points.forEach(([t]) => timeSet.add(t)));
+    if (temp) temp.points.forEach(([t]) => timeSet.add(t));
+    const times = [...timeSet].sort();
+
+    const toValues = (pts: [string, number][]) => {
+      const map = new Map(pts);
+      let last: number | null = null;
+      return times.map((t) => {
+        const v = map.get(t);
+        if (v !== undefined) last = v;
+        return last == null ? null : Math.round((last / 1e8) * 100) / 100;
+      });
+    };
+
+    const many = lines.length > 40;
+    const series = lines.map((l, i) => {
+      const color = FLOW_COLORS[i % FLOW_COLORS.length];
+      const dim = hoverCode && hoverCode !== l.code;
+      const focus = hoverCode === l.code;
+      const last = l.points.length ? l.points[l.points.length - 1][1] : null;
+      const pctStr = typeof l.pct === "number" ? `(${l.pct >= 0 ? "+" : ""}${l.pct.toFixed(2)}%)` : "";
+      const label = `${l.name}  ${last == null ? "—" : signedYi(last)}${pctStr}`;
+      return {
+        id: l.code,
+        name: l.name,
+        type: "line" as const,
+        data: toValues(l.points),
+        showSymbol: false,
+        smooth: 0.15,
+        lineStyle: { width: focus ? 3 : 1.5, color, opacity: dim ? 0.16 : 1 },
+        itemStyle: { color },
+        emphasis: { focus: "series" as const, lineStyle: { width: 3.4 } },
+        blur: { lineStyle: { opacity: 0.08 }, label: { opacity: 0.1 }, endLabel: { opacity: 0.1 } },
+        endLabel: {
+          show: !many,
+          formatter: () => label,
+          color,
+          fontSize: 10,
+          fontWeight: "bold" as const,
+          distance: 6,
+        },
+        labelLayout: { moveOverlap: "shiftY" as const },
+        z: focus ? 4 : 3,
+      };
+    });
+
+    if (temp) {
+      const color = "#ff5722";
+      series.push({
+        id: "_temp_hover",
+        name: temp.name,
+        type: "line" as const,
+        data: toValues(temp.points),
+        showSymbol: false,
+        smooth: 0.15,
+        lineStyle: { width: 2.6, color, type: "dashed" as const, opacity: 1 },
+        itemStyle: { color },
+        emphasis: { disabled: true as any },
+        blur: { lineStyle: { opacity: 1 } },
+        endLabel: {
+          show: true,
+          formatter: () => `${temp.name}  ${signedYi(temp.points.length ? temp.points[temp.points.length - 1][1] : null)}`,
+          color, fontSize: 10, fontWeight: "bold" as const, distance: 6,
+        },
+        z: 6,
+      } as any);
+    }
+
+    return {
+      animation: true,
+      animationDuration: 260,
+      animationDurationUpdate: 160,
+      legend: { show: false },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "line" },
+        backgroundColor: "rgba(24,24,27,0.95)",
+        borderColor: "rgba(255,255,255,0.12)",
+        textStyle: { color: "#e4e4e7", fontSize: 11 },
+        formatter: (ps: any[]) => {
+          const rows = (ps ?? []).filter((p) => p.value != null)
+            .sort((a, b) => (b.value as number) - (a.value as number));
+          if (!rows.length) return "";
+          const hovered = hoverCode ? rows.find((r) => r.seriesId === hoverCode) : null;
+          const list = hovered ? [hovered, ...rows.filter((r) => r !== hovered)] : rows;
+          const head = `<div style="margin-bottom:4px">${rows[0].axisValue}</div>`;
+          return head + list.slice(0, 12).map((p) =>
+            `<div style="display:flex;justify-content:space-between;gap:14px;${hovered === p ? "font-weight:700" : ""}">
+               <span>${p.marker}${p.seriesName}</span>
+               <span style="color:${(p.value as number) >= 0 ? "#f87171" : "#4ade80"}">${(p.value as number) >= 0 ? "+" : ""}${p.value}亿</span>
+             </div>`).join("") + (rows.length > 12 ? `<div style="opacity:.6">…共 ${rows.length} 条</div>` : "");
+        },
+      },
+      grid: { top: 30, right: many ? 40 : 190, bottom: 34, left: 56 },
+      xAxis: {
+        type: "category",
+        data: times,
+        boundaryGap: false,
+        axisLine: { lineStyle: { color: "#52525b" } },
+        axisLabel: {
+          color: "#71717a", fontSize: 10, hideOverlap: true,
+          interval: Math.max(1, Math.floor(times.length / 12)),
+        },
+      },
+      yAxis: {
+        type: "value",
+        scale: true,
+        name: "亿元",
+        nameTextStyle: { color: "#71717a", fontSize: 10 },
+        axisLabel: {
+          color: "#71717a", fontSize: 10,
+          formatter: (v: number) => `${v >= 0 ? "+" : ""}${Math.round(v)}`,
+        },
+        splitLine: { lineStyle: { color: "rgba(255,255,255,0.08)", type: "dashed" } },
+      },
+      series,
+    };
+  }, [lines, hoverCode, temp]);
+
+  const times = useMemo(() => {
+    const s = new Set<string>();
+    lines.forEach((l) => l.points.forEach(([t]) => s.add(t)));
+    return s.size;
+  }, [lines]);
+
+  if (!times) return null;
   return <ReactECharts key={id} option={option} notMerge style={{ height }} />;
 }

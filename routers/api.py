@@ -721,7 +721,13 @@ async def board_series(codes: str = Query("", description="逗号分隔的板块
         wanted = [r["code"] for r in pool[:8]]
 
     try:
-        points = await asyncio.to_thread(bf.read_points, date, wanted)
+        bk_codes = [c for c in wanted if c.startswith("BK")]
+        idx_codes = [c for c in wanted if not c.startswith("BK")]
+        points = await asyncio.to_thread(bf.read_points, date, bk_codes) if bk_codes else {}
+        # 指数 / 全 A：库里只有 4 维点，主力口径用「机构 + 大单」合成
+        for code in idx_codes:
+            pts = await asyncio.to_thread(bf.read_em_points, date, code)
+            points[code] = [(t, inst + large) for t, inst, large, _m, _r in pts]
     except Exception as exc:  # noqa: BLE001
         return {"date": date, "axis": [], "series": [], "error": f"分时数据读取失败: {exc}"}
 
@@ -731,6 +737,8 @@ async def board_series(codes: str = Query("", description="逗号分隔的板块
         s["name"] = r.get("name") or s["code"]
         s["type"] = r.get("type")
         s["watch"] = s["code"] in watch
+        s["pct"] = r.get("pct")
+        s["final_flow"] = s.get("last")
     points_n = sum(len(v) for v in points.values())
     out = {"date": date, "axis": aligned["axis"], "series": aligned["series"],
            "codes": wanted, "points": points_n}
@@ -1122,4 +1130,34 @@ async def em_flow_series(target_type: str = Query("index", description="index / 
            "name": meta.get("name") or code}
     if not axis:
         out["error"] = "当日 4 维分时点不足（服务启动后从下一分钟开始累积）"
+    return out
+
+
+@router.get("/board/index-rank")
+async def board_index_rank(date: str | None = Query(None)):
+    """指数/全 A 排行（由 4 维资金表的「机构 + 大单」合成主力净流入）。"""
+    from services.universe import INDICES
+
+    if not date:
+        try:
+            dates = await asyncio.to_thread(bf.available_dates, 1, "em")
+        except Exception:  # noqa: BLE001
+            dates = []
+        date = dates[0] if dates else dt.date.today().isoformat()
+
+    names = {i["secid"]: i["name"] for i in INDICES}
+    names[bf.EM_MARKET_CODE] = bf.EM_MARKET_NAME
+    try:
+        rows = await asyncio.to_thread(bf.latest_em_flows, date)
+    except Exception as exc:  # noqa: BLE001
+        return {"date": date, "items": [], "error": str(exc)}
+
+    items = []
+    for r in rows:
+        if r.get("kind") == "industry":
+            continue
+        items.append({"code": r["code"], "name": names.get(r["code"]) or r.get("name") or r["code"],
+                      "type": "index", "flow": r["inst"] + r["large"], "pct": None})
+    items.sort(key=lambda x: -abs(x["flow"]))
+    out = {"date": date, "items": items, "error": None if items else "暂无 4 维采集数据"}
     return out

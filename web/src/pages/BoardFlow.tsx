@@ -1,124 +1,442 @@
-import { useEffect, useMemo, useState } from "react";
-import { LineChart, Loader2, RefreshCw, Star } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
-import { Drawer, EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
-import { FlowDetailChart, FlowHistoryChart, MoneyLinesChart } from "@/components/charts";
+import { Drawer, EmptyState, Skeleton } from "@/components/ui/misc";
+import { BoardFlowChart, FlowDetailChart, FlowHistoryChart, MoneyLinesChart, type FlowLine } from "@/components/charts";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
-import { clsUpDown, hhmmss, pct, signedYi } from "@/lib/format";
+import { clsUpDown, pct as fmtPct, signedYi } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-type SortKey = "flow" | "pct" | "name";
+/** 与 stock-webui 一致的五个口径 */
 const TYPES = [
   { key: "concept", label: "概念" },
   { key: "industry", label: "行业" },
-  { key: "watch", label: "自选" },
+  { key: "index", label: "指数" },
+  { key: "hot", label: "热门" },
+  { key: "custom", label: "自定义" },
 ];
-const CHART_LINES = 8;
+type SortKey = "flow" | "pct";
+const SERIES_TTL = 90_000;
 
-/** 概念资金分时（工单 02/03）：排行表 + 当日多板块资金曲线 + 历史日期回看。 */
+type Bar = {
+  code: string; name: string; type: string;
+  flow: number; pct: number | null; watch?: boolean;
+};
+type CacheEntry = { points: [string, number][]; pct: number | null; name: string; at: number };
+
+/** 板块资金分时：复刻 stock-webui /board-flow 的列表 + 叠加曲线交互。 */
 export function BoardFlowPage() {
   const [type, setType] = useState("concept");
-  const [sort, setSort] = useState<SortKey>("flow");
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("flow");
+  const [sortDir, setSortDir] = useState(-1);
   const [date, setDate] = useState("");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [showChart, setShowChart] = useStoredBool("board.flow-chart", true);
-  const [selected, setSelected] = useState<{ code: string; name: string } | null>(null);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [hoverCode, setHoverCode] = useState<string | null>(null);
+  const [detailCode, setDetailCode] = useState<{ code: string; name: string } | null>(null);
+  const [cacheVer, setCacheVer] = useState(0);
+  // 手动刷新时递增：清空分时缓存后要让拉取 effect 重新跑（deps 里没有缓存内容）
+  const [refreshTick, setRefreshTick] = useState(0);
+  const cache = useRef<Record<string, CacheEntry>>({});
+  const inflight = useRef<Set<string>>(new Set());
+  // 用户在哪些口径上手动改过勾选（决定是否还套用默认 Top10+Bottom5）
+  const touched = useRef<Record<string, boolean>>({});
 
-  // 采集状态：决定轮询频率（盘中 30s / 非交易 300s）
   const { data: health } = usePolling(() => api.boardHealth(), 60_000, [], { kind: "ctx", code: "board-health" });
   const trading = !!health?.trading;
   const interval = trading ? 30_000 : 300_000;
 
-  // 可回看的日期（历史回看用，很少变）
   const { data: datesView } = usePolling(() => api.boardDates(60), 600_000, [], { kind: "ctx", code: "board-dates" });
   const dates: string[] = datesView?.dates ?? [];
 
-  // 一次把概念+行业+自选全拿回来，切标签/排序都在本地重排，不再发请求
-  const { data, refresh, error } = usePolling(
+  const { data: rankView, refresh: refreshRank } = usePolling(
     () => api.boardRank("all", date || undefined),
     interval,
     [interval, date],
     { kind: "brank", code: `all:${date || "latest"}` },
   );
-
-  // 顶栏刷新按钮 → 本页也刷一次
-  useEffect(() => onGlobalRefresh(() => { void refresh(); }), [refresh]);
-
-  const all: any[] = data?.items ?? [];
-  const rows = useMemo(() => {
-    if (type === "watch") return all.filter((r) => r.watch);
-    return all.filter((r) => r.type === type);
-  }, [all, type]);
-
-  const sorted = useMemo(() => {
-    const list = [...rows];
-    if (sort === "pct") list.sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0));
-    else if (sort === "name") list.sort((a, b) => String(a.name).localeCompare(String(b.name), "zh"));
-    else list.sort((a, b) => (b.flow ?? 0) - (a.flow ?? 0));
-    return list;
-  }, [rows, sort]);
-
-  // 曲线取当前排序下的前 8（工单 03：点表头换排序，曲线跟着换）
-  const chartCodes = useMemo(() => sorted.slice(0, CHART_LINES).map((r) => r.code), [sorted]);
-  const codesKey = chartCodes.join(",");
-
-  const { data: series, refresh: refreshSeries } = usePolling(
-    () => (codesKey ? api.boardSeries(codesKey, date || undefined, type) : Promise.resolve({ axis: [], series: [] } as any)),
+  const { data: indexView, refresh: refreshIndex } = usePolling(
+    () => api.boardIndexRank(date || undefined),
     interval,
-    [codesKey, date, interval],
-    { kind: "bseries", code: `${type}:${codesKey}`, extra: date || null },
+    [interval, date],
+    { kind: "brank", code: `index:${date || "latest"}` },
+  );
+  const { data: watchView } = usePolling(() => api.boardWatch(), 300_000, [], { kind: "ctx", code: "board-watch" });
+
+  const refresh = useCallback(() => {
+    cache.current = {};
+    void refreshRank();
+    void refreshIndex();
+    setRefreshTick((t) => t + 1);
+  }, [refreshRank, refreshIndex]);
+
+  useEffect(() => onGlobalRefresh(() => refresh()), [refresh]);
+
+  const allBoards: Bar[] = useMemo(
+    () => (rankView?.items ?? []).map((r: any) => ({
+      code: r.code, name: r.name, type: r.type, flow: r.flow ?? 0, pct: r.pct ?? null, watch: r.watch,
+    })),
+    [rankView],
+  );
+  const indexRows: Bar[] = useMemo(
+    () => (indexView?.items ?? []).map((r: any) => ({
+      code: r.code, name: r.name, type: "index", flow: r.flow ?? 0, pct: null,
+    })),
+    [indexView],
   );
 
-  // 详情抽屉：一次请求拿全六块，重复打开同一板块当日走缓存
-  // 抽屉不轮询：打开时取一次（成分股/研报是对上游的实时请求，重复拉会违背「读接口只读」）
-  const { data: detail } = usePolling(
-    () => (selected ? api.boardDetail(selected.code, date || undefined) : Promise.resolve(null)),
-    3_600_000,
-    [selected?.code, date],
-    { kind: "bdetail", code: selected?.code ?? "none", extra: date || null },
-  );
+  /** 当前口径的原始列表（未搜索、未排序之外的过滤） */
+  const baseRows: Bar[] = useMemo(() => {
+    if (type === "index") return indexRows;
+    if (type === "hot") {
+      return [...allBoards].sort((a, b) => Math.abs(b.flow) - Math.abs(a.flow)).slice(0, 100);
+    }
+    if (type === "custom") {
+      const byCode = new Map([...allBoards, ...indexRows].map((b) => [b.code, b] as const));
+      return (watchView?.items ?? [])
+        .map((w: any) => byCode.get(w.code) ?? { code: w.code, name: w.name, type: "concept", flow: 0, pct: null, watch: true })
+        .map((b: any) => ({ ...b, watch: true }));
+    }
+    return allBoards.filter((b) => b.type === type);
+  }, [type, allBoards, indexRows, watchView]);
 
-  const last = health?.last;
-  const toggleWatch = async (r: any) => {
-    if (busy) return;
-    setBusy(r.code);
+  /** 搜索 + 排序后的可见列表 */
+  const rows: Bar[] = useMemo(() => {
+    const kw = search.trim();
+    let list = baseRows;
+    if (kw) list = list.filter((b) => b.name.includes(kw) || b.code.includes(kw));
+    const dir = sortDir;
+    return [...list].sort((a, b) => {
+      const va = sortKey === "pct" ? (a.pct ?? 0) : a.flow;
+      const vb = sortKey === "pct" ? (b.pct ?? 0) : b.flow;
+      return (va - vb) * dir;
+    });
+  }, [baseRows, search, sortKey, sortDir]);
+
+  const rowsKey = rows.map((r) => r.code).join(",");
+  const baseKey = useMemo(() => baseRows.map((r) => r.code).sort().join(","), [baseRows]);
+
+  // 默认勾选：概念/行业 = 流入 Top10 + 流出末 5；指数/热门/自定义 = 全选。
+  // 只在「集合本身」变化时重置（排序/搜索不算），且手动改过就只做存在性过滤。
+  useEffect(() => {
+    if (!rows.length) return;
+    const codes = new Set(rows.map((r) => r.code));
+    if (touched.current[type]) {
+      setSelected((prev) => Object.fromEntries(
+        Object.keys(prev).filter((c) => codes.has(c)).map((c) => [c, true])));
+      return;
+    }
+    let saved: string[] = [];
     try {
-      const res = r.watch ? await api.boardWatchRemove(r.code) : await api.boardWatchAdd(r.code, r.name);
-      if (res?.error) throw new Error(res.error);
-      await Promise.all([refresh(), refreshSeries()]);
-    } catch (e: any) {
-      toast("自选操作失败", { description: String(e?.message || e) });
-    } finally {
-      setBusy(null);
+      saved = JSON.parse(localStorage.getItem(`board.flow.sel.${type}`) || "[]");
+    } catch {
+      saved = [];
+    }
+    const kept = (saved || []).filter((c) => codes.has(c));
+    if (kept.length) {
+      setSelected(Object.fromEntries(kept.map((c) => [c, true])));
+      return;
+    }
+    if (type === "index" || type === "hot" || type === "custom") {
+      setSelected(Object.fromEntries(rows.map((r) => [r.code, true])));
+      return;
+    }
+    const pos = rows.filter((r) => r.flow >= 0).slice(0, 10);
+    const neg = rows.filter((r) => r.flow < 0).slice(-5);
+    setSelected(Object.fromEntries([...pos, ...neg].map((r) => [r.code, true])));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseKey, type]);
+
+  const selectedCodes = useMemo(
+    () => rows.filter((r) => selected[r.code]).map((r) => r.code),
+    [rows, selected],
+  );
+  const selectedKey = selectedCodes.join(",");
+
+  const persist = (next: Record<string, boolean>) => {
+    touched.current[type] = true;
+    setSelected(next);
+    try {
+      localStorage.setItem(`board.flow.sel.${type}`, JSON.stringify(
+        Object.keys(next).filter((c) => next[c])));
+    } catch { /* 隐私模式忽略 */ }
+  };
+
+  const toggle = (code: string) => {
+    const next = { ...selected };
+    if (next[code]) delete next[code];
+    else next[code] = true;
+    persist(next);
+  };
+
+  const batch = (mode: "pos10" | "neg10" | "all" | "none" | "invert") => {
+    const cur = sortedBase();
+    let next: Record<string, boolean> = {};
+    if (mode === "all") cur.forEach((b) => (next[b.code] = true));
+    else if (mode === "pos10") cur.filter((b) => b.flow >= 0).slice(0, 10).forEach((b) => (next[b.code] = true));
+    else if (mode === "neg10") cur.filter((b) => b.flow < 0).slice(-10).forEach((b) => (next[b.code] = true));
+    else if (mode === "invert") cur.forEach((b) => { if (!selected[b.code]) next[b.code] = true; });
+    persist(next);
+  };
+
+  /** 批量操作按「资金流降序」的口径取前 N（与 stock-webui 一致） */
+  const sortedBase = () => [...baseRows].sort((a, b) => b.flow - a.flow);
+
+  // 分时数据：按缺失/过期分块拉取（最多 60 个一批），命中缓存直接渲染
+  useEffect(() => {
+    if (!selectedCodes.length) return;
+    const now = Date.now();
+    const missing = selectedCodes.filter((c) => {
+      const e = cache.current[c];
+      return !e || now - e.at > SERIES_TTL;
+    }).filter((c) => !inflight.current.has(c));
+    if (!missing.length) return;
+
+    let cancelled = false;
+    (async () => {
+      for (let i = 0; i < missing.length; i += 60) {
+        const chunk = missing.slice(i, i + 60);
+        chunk.forEach((c) => inflight.current.add(c));
+        try {
+          const d = await api.boardSeries(chunk.join(","), date || undefined, type === "index" ? "index" : "concept");
+          const byCode = new Map((d?.series ?? []).map((s: any) => [s.code, s]));
+          chunk.forEach((c) => {
+            const s: any = byCode.get(c);
+            if (!s) return;
+            const pts: [string, number][] = [];
+            (s.values ?? []).forEach((v: number | null, idx: number) => {
+              if (v != null) pts.push([d.axis[idx], v]);
+            });
+            cache.current[c] = { points: pts, pct: s.pct ?? null, name: s.name ?? c, at: Date.now() };
+          });
+        } catch {
+          /* 单块失败静默，下一轮再试 */
+        } finally {
+          chunk.forEach((c) => inflight.current.delete(c));
+        }
+      }
+      if (!cancelled) setCacheVer((v) => v + 1);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey, date, refreshTick]);
+
+  // 悬停未勾选的板块：临时拉它的分时，画一条橙色虚线（不改变勾选）
+  const [tempLine, setTempLine] = useState<FlowLine | null>(null);
+  const ensureTemp = async (b: Bar) => {
+    const hit = cache.current[b.code];
+    if (hit && Date.now() - hit.at < SERIES_TTL) {
+      setTempLine({ code: b.code, name: b.name, points: hit.points });
+      return;
+    }
+    try {
+      const d = await api.boardSeries(b.code, date || undefined, type === "index" ? "index" : "concept");
+      const s: any = (d?.series ?? [])[0];
+      if (!s) return;
+      const pts: [string, number][] = [];
+      (s.values ?? []).forEach((v: number | null, idx: number) => {
+        if (v != null) pts.push([d.axis[idx], v]);
+      });
+      cache.current[b.code] = { points: pts, pct: s.pct ?? null, name: s.name ?? b.code, at: Date.now() };
+      setTempLine({ code: b.code, name: b.name, points: pts });
+    } catch {
+      /* 忽略 */
     }
   };
 
+  const lines: FlowLine[] = useMemo(() => {
+    void cacheVer;
+    return selectedCodes
+      .map((code) => {
+        const e = cache.current[code];
+        if (!e || !e.points.length) return null;
+        const row = rows.find((r) => r.code === code);
+        return { code, name: e.name || row?.name || code, points: e.points, pct: row?.pct ?? e.pct };
+      })
+      .filter(Boolean) as FlowLine[];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey, cacheVer, rowsKey]);
+
+  const toggleCustom = async (b: Bar) => {
+    try {
+      const res = b.watch ? await api.boardWatchRemove(b.code) : await api.boardWatchAdd(b.code, b.name);
+      if (res?.error) throw new Error(res.error);
+      toast(b.watch ? `已从自定义移除：${b.name}` : `已添加到自定义：${b.name}`);
+    } catch (e: any) {
+      toast("自定义操作失败", { description: String(e?.message ?? e) });
+    }
+  };
+
+  const last = health?.last;
+  const updatedAt = date ? `${date} 历史数据` : `更新于 ${last?.last_ts?.slice(11) ?? "—"}`;
+
   return (
-    <main className="grid gap-3 p-3 xl:grid-cols-[minmax(0,560px)_minmax(0,1fr)]">
-      <Frame spacing="sm">
+    <main className="grid gap-3 p-3 xl:grid-cols-[320px_minmax(0,1fr)]">
+      {/* 左：板块列表 + 批量控制 */}
+      <Frame spacing="sm" className="self-start xl:sticky xl:top-[52px]">
         <FramePanel dense>
-          <FrameHeader className="flex-row items-center justify-between gap-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <FrameTitle className="text-sm">概念资金分时</FrameTitle>
-              <Tabs tabs={TYPES} value={type} onChange={setType} />
+          <FrameHeader className="flex-row items-center justify-between py-1.5">
+            <FrameTitle className="text-sm">板块列表</FrameTitle>
+            <span className="text-[11px] text-muted-foreground tnum">
+              共 {rows.length} 个 · 已选 {selectedCodes.length}
+            </span>
+          </FrameHeader>
+
+          <div className="flex flex-col gap-2 px-2 pb-2">
+            <label className="relative block">
+              <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" aria-hidden />
+              <input
+                id="board-flow-search"
+                name="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="搜索..."
+                aria-label="搜索板块"
+                className="w-full rounded-md border border-border bg-card py-1 pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+            </label>
+
+            <div className="flex items-center gap-1 text-[11px]">
+              <span className="text-muted-foreground">排序</span>
+              {(["pct", "flow"] as SortKey[]).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => {
+                    if (sortKey === k) setSortDir((d) => -d);
+                    else { setSortKey(k); setSortDir(-1); }
+                  }}
+                  aria-pressed={sortKey === k}
+                  className={cn("rounded px-1.5 py-0.5 transition-colors",
+                    sortKey === k ? "bg-primary/15 text-primary" : "bg-muted/40 text-muted-foreground hover:text-foreground")}
+                >
+                  {k === "pct" ? "涨幅" : "资金"}{sortKey === k ? (sortDir === -1 ? "↓" : "↑") : ""}
+                </button>
+              ))}
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <span className="text-[11px] text-muted-foreground tnum">
-                {last?.last_ts ? `最后采集 ${hhmmss(new Date(last.last_ts.replace(" ", "T")))}` : "尚未采集"}
-              </span>
-              {trading ? (
-                <Badge variant="success-light" title="交易时段：每 30 秒采集一次">交易中</Badge>
+
+            <div className="flex flex-wrap gap-1 text-[11px]">
+              {([["pos10", "流入Top10"], ["neg10", "流出Top10"], ["all", "全选"], ["none", "清空"], ["invert", "反选"]] as const).map(([k, label]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => batch(k)}
+                  className="rounded border border-border px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="max-h-[calc(100vh-19rem)] min-h-[240px] overflow-auto border-t border-border/60">
+              {!rankView ? (
+                <div className="flex flex-col gap-1 p-2">
+                  {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-6 w-full" />)}
+                </div>
+              ) : rows.length === 0 ? (
+                <EmptyState title={type === "custom" ? "还没有自定义板块" : "无匹配板块"}
+                  hint={type === "custom" ? "在其他列表点右侧 + 加入自定义" : undefined} />
               ) : (
-                <Badge variant="outline" title="非交易时段不再采集，展示最近一轮数据">休市</Badge>
+                rows.map((b) => {
+                  const on = !!selected[b.code];
+                  return (
+                    <div
+                      key={b.code}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => toggle(b.code)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(b.code); } }}
+                      onDoubleClick={() => setDetailCode({ code: b.code, name: b.name })}
+                      onMouseEnter={() => { setHoverCode(on ? b.code : null); if (!on) void ensureTemp(b); }}
+                      onMouseLeave={() => { setHoverCode(null); setTempLine(null); }}
+                      className={cn(
+                        "flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-[11px] transition-colors",
+                        "hover:bg-muted/60",
+                        on && "bg-primary/5",
+                      )}
+                      title="单击勾选 · 双击看详情"
+                    >
+                      <input type="checkbox" checked={on} readOnly aria-label={`勾选${b.name}`}
+                        className="size-3 shrink-0 accent-primary" />
+                      <span className={cn("min-w-0 flex-1 truncate", on ? "font-medium text-foreground" : "text-foreground/80")}>
+                        {b.name}
+                        {type === "index" && !b.code.startsWith("47.") && (
+                          <span className="ml-1 text-[10px] text-muted-foreground">({b.code.split(".")[1]})</span>
+                        )}
+                      </span>
+                      <span className={cn("w-[3.6em] shrink-0 text-right tnum", clsUpDown(b.pct))}>
+                        {b.pct == null ? "--" : fmtPct(b.pct, 2)}
+                      </span>
+                      <span className={cn("shrink-0 whitespace-nowrap text-right tnum", b.flow >= 0 ? "text-up" : "text-down")}>
+                        {signedYi(b.flow)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); void toggleCustom(b); }}
+                        title={b.watch ? "从自定义列表移除" : "添加到自定义列表"}
+                        aria-label={b.watch ? "移除自定义" : "添加自定义"}
+                        className={cn("shrink-0 rounded px-1 text-[10px] leading-4 transition-colors",
+                          b.watch ? "text-warning hover:text-destructive" : "text-muted-foreground hover:text-primary")}
+                      >
+                        {b.watch ? "✓" : "+"}
+                      </button>
+                    </div>
+                  );
+                })
               )}
+            </div>
+          </div>
+        </FramePanel>
+      </Frame>
+
+      {/* 右：分时图 */}
+      <Frame spacing="sm" className="flex min-h-0 flex-col xl:sticky xl:top-[52px] xl:h-[calc(100vh-104px)]">
+        <FramePanel dense className="flex min-h-0 flex-1 flex-col">
+          <FrameHeader className="flex-row flex-wrap items-center justify-between gap-2 py-1.5">
+            <div className="flex items-center gap-2">
+              <FrameTitle className="text-sm">板块资金分时</FrameTitle>
+              {date && date !== health?.last?.date && <Badge variant="warning-light">历史</Badge>}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <div className="flex items-center gap-0.5 rounded-md bg-muted/60 p-0.5">
+                {TYPES.map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => { setType(t.key); setSearch(""); }}
+                    aria-pressed={type === t.key}
+                    className={cn("rounded px-2 py-0.5 transition-colors",
+                      type === t.key ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground")}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+              <select
+                id="board-flow-date" name="date" aria-label="选择日期"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <option value="">最新（{rankView?.date ?? "—"}）</option>
+                {dates.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
               <button
                 type="button"
-                onClick={() => void refresh()}
-                title="立即刷新（读本地库）"
+                onClick={() => setDate("")}
+                className="rounded border border-border px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                今日
+              </button>
+              <span className="hidden text-muted-foreground tnum sm:inline">{updatedAt}</span>
+              <button
+                type="button"
+                onClick={() => refresh()}
+                title="刷新"
                 aria-label="刷新"
                 className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
@@ -127,176 +445,82 @@ export function BoardFlowPage() {
             </div>
           </FrameHeader>
 
-          <div className="flex flex-wrap items-center gap-2 px-3 pb-2 text-[11px] text-muted-foreground">
-            <label className="flex items-center gap-1">
-              日期
-              <select
-                id="board-flow-date"
-                name="date"
-                aria-label="回看日期"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                <option value="">最新（{data?.date ?? "—"}）</option>
-                {dates.map((d) => <option key={d} value={d}>{d}</option>)}
-              </select>
-            </label>
-            {data?.is_today === false && <Badge variant="warning-light">历史</Badge>}
-            <span>共 {rows.length} 个板块</span>
-            <span>· 点表头排序</span>
-          </div>
-
-          <div className="max-h-[calc(100vh-13rem)] overflow-auto border-t border-border/60">
-            {error ? (
-              <EmptyState title="接口失败" hint={String(error)} />
-            ) : !data ? (
-              <div className="flex flex-col gap-1 p-3">
-                {Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-7 w-full" />)}
+          <div className="flex min-h-0 flex-1 flex-col px-1 pb-1">
+            {!selectedCodes.length ? (
+              <EmptyState title="未选择板块" hint="请在左侧勾选，或点「流入Top10」批量激活"
+                className="flex-1" />
+            ) : !lines.length ? (
+              <div className="flex flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="size-3.5 animate-spin" aria-hidden /> 加载分时数据…
               </div>
-            ) : sorted.length === 0 ? (
-              <EmptyState title={type === "watch" ? "还没有自选板块" : "暂无采集数据"}
-                hint={type === "watch"
-                  ? "在概念/行业列表里点右侧星标即可加入自选"
-                  : (data.error ?? "交易时段每 30 秒采集一次，稍等再看")} />
             ) : (
-              <table className="w-full border-collapse text-xs">
-                <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
-                  <tr className="text-left text-[11px] text-muted-foreground">
-                    <th className="w-10 px-2 py-1.5 font-normal">#</th>
-                    <SortTh label="板块" k="name" sort={sort} onSort={setSort} />
-                    <SortTh label="主力净流入" k="flow" sort={sort} onSort={setSort} align="right" />
-                    <SortTh label="涨跌幅" k="pct" sort={sort} onSort={setSort} align="right" />
-                    <th className="w-16 px-2 py-1.5 text-right font-normal">名次</th>
-                    <th className="w-10 px-2 py-1.5" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {sorted.map((r, i) => (
-                    <tr key={r.code}
-                      onClick={() => setSelected({ code: r.code, name: r.name })}
-                      className={cn("cursor-pointer border-t border-border/40 hover:bg-muted/40",
-                        chartCodes.includes(r.code) && "bg-muted/20")}>
-                      <td className="px-2 py-1 tnum text-muted-foreground">{i + 1}</td>
-                      <td className="px-2 py-1">
-                        <span className="font-medium">{r.name}</span>
-                        <span className="ml-1.5 text-[10px] text-muted-foreground">{r.code}</span>
-                      </td>
-                      <td className={cn("px-2 py-1 text-right tnum", (r.flow ?? 0) >= 0 ? "text-up" : "text-down")}>
-                        {signedYi(r.flow)}
-                      </td>
-                      <td className={cn("px-2 py-1 text-right tnum", clsUpDown(r.pct))}>{pct(r.pct)}</td>
-                      <td className="px-2 py-1 text-right tnum">
-                        <RankDelta delta={r.rank_delta} rank={r.rank} />
-                      </td>
-                      <td className="px-2 py-1 text-center">
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); void toggleWatch(r); }}
-                          aria-label={r.watch ? "移出自选" : "加入自选"}
-                          title={r.watch ? "移出自选" : "加入自选"}
-                          className={cn("rounded p-0.5 transition-colors hover:text-warning",
-                            r.watch ? "text-warning" : "text-muted-foreground/50")}
-                        >
-                          {busy === r.code
-                            ? <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                            : <Star className="size-3.5" fill={r.watch ? "currentColor" : "none"} aria-hidden />}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="min-h-0 flex-1">
+                <BoardFlowChart id="board-flow-lines" lines={lines} hoverCode={hoverCode}
+                  temp={tempLine} height="100%" />
+              </div>
             )}
-          </div>
-        </FramePanel>
-      </Frame>
-
-      <Frame spacing="sm" className="self-start xl:sticky xl:top-[52px]">
-        <FramePanel dense>
-          <FrameHeader className="flex-row items-center justify-between">
-            <div className="flex min-w-0 items-baseline gap-2">
-              <FrameTitle className="text-sm">资金分时 · 前 {CHART_LINES}</FrameTitle>
-              <span className="truncate text-[10px] text-muted-foreground">
-                {data?.date ?? ""} · 累计净流入（{series?.points ?? 0} 个分时点）
-              </span>
+            <div className="mt-1 flex items-center justify-between px-2 text-[10px] text-muted-foreground">
+              <span>{lines.length}/{selectedCodes.length} 条线 · 悬停左侧名称预览，双击看详情</span>
+              <span>主力净流入（累计，亿元）</span>
             </div>
-            <button
-              type="button"
-              onClick={() => setShowChart((v) => !v)}
-              aria-pressed={showChart}
-              disabled={!series?.axis?.length}
-              title={showChart ? "隐藏曲线" : "显示曲线"}
-              className={cn("inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-1.5 py-1 text-[11px] transition-colors",
-                showChart ? "text-foreground" : "text-muted-foreground",
-                !series?.axis?.length && "cursor-not-allowed opacity-50")}
-            >
-              <LineChart className="size-3" aria-hidden /> 曲线
-            </button>
-          </FrameHeader>
-
-          <div className="px-2 pb-2">
-            {!series ? (
-              <Skeleton className="h-[320px] w-full" />
-            ) : !series.axis?.length ? (
-              <EmptyState title="暂无分时数据" hint={series.error ?? "该板块当日还没有累积到分时点"} />
-            ) : showChart ? (
-              <>
-                <MoneyLinesChart id="board-flow-lines" axis={series.axis} series={series.series}
-                  height={340} maxLines={CHART_LINES} />
-                <div className="flex flex-wrap gap-x-3 gap-y-1 px-1 pt-1 text-[10px] text-muted-foreground">
-                  {series.series.slice(0, CHART_LINES).map((s: any) => (
-                    <span key={s.code} className="inline-flex items-center gap-1">
-                      <span className={cn("inline-block size-1.5 rounded-full", s.watch ? "bg-warning" : "bg-primary/70")} />
-                      {s.name}
-                      <span className="tnum text-foreground/80">{signedYi(s.last)}</span>
-                    </span>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <EmptyState title="曲线已隐藏" hint="点右上角「曲线」重新显示" />
-            )}
           </div>
         </FramePanel>
       </Frame>
 
       <BoardDetailDrawer
-        selected={selected}
-        date={date || data?.date || ""}
-        detail={detail}
-        onClose={() => setSelected(null)}
+        selected={detailCode}
+        date={date || rankView?.date || ""}
+        onClose={() => setDetailCode(null)}
       />
     </main>
   );
 }
 
-/** 板块详情抽屉：六块内容各自独立降级，任一块失败不影响其它块。 */
+/* ------------------------------------------------------------------ */
+/* 详情抽屉（双击板块打开）：六块内容各自降级                          */
+/* ------------------------------------------------------------------ */
 function BoardDetailDrawer({
-  selected, date, detail, onClose,
+  selected, date, onClose,
 }: {
   selected: { code: string; name: string } | null;
   date: string;
-  detail: any;
   onClose: () => void;
 }) {
-  const errors = detail?.errors ?? {};
-  const series = detail?.series;
-  const vs = detail?.vs_index;
-  const history = detail?.history ?? [];
-  const stocks = detail?.stocks ?? [];
-  const heat = detail?.report_heat;
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!selected) { setData(null); return; }
+    let alive = true;
+    setLoading(true);
+    api.boardDetail(selected.code, date || undefined).then((d) => {
+      if (alive) setData(d);
+    }).catch(() => {
+      if (alive) setData({ error: "详情加载失败" });
+    }).finally(() => {
+      if (alive) setLoading(false);
+    });
+    return () => { alive = false; };
+  }, [selected?.code, date]);
+
+  const d = data;
+  const errors = d?.errors ?? {};
+  const series = d?.series;
+  const vs = d?.vs_index;
+  const history = d?.history ?? [];
+  const stocks = d?.stocks ?? [];
+  const heat = d?.report_heat;
 
   return (
     <Drawer
       open={!!selected}
       onClose={onClose}
       title={selected ? `${selected.name} ${selected.code}` : ""}
-      subtitle={detail
-        ? `${date} · ${detail.type === "industry" ? "行业" : "概念"} · 主力净流入 ${signedYi(detail.flow)} · 涨跌幅 ${pct(detail.pct)}`
+      subtitle={d && !loading
+        ? `${date} · ${d.type === "industry" ? "行业" : d.type === "index" ? "指数" : "概念"} · 主力净流入 ${signedYi(d.flow)}${d.pct != null ? ` · 涨跌幅 ${fmtPct(d.pct)}` : ""}`
         : `${date} · 加载中…`}
     >
-      {!detail ? (
+      {!d || loading ? (
         <div className="flex flex-col gap-2">
           {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}
         </div>
@@ -304,7 +528,7 @@ function BoardDetailDrawer({
         <div className="flex flex-col gap-3">
           <Section title="当日资金分时" hint={errors.series ?? (series?.axis?.length ? "累计折线 + 每分钟增量柱" : undefined)}>
             {series?.axis?.length ? (
-              <FlowDetailChart id={`bd-${detail.code}`} axis={series.axis} values={series.values} />
+              <FlowDetailChart id={`bd-${d.code}`} axis={series.axis} values={series.values} />
             ) : (
               <EmptyState title="暂无分时数据" hint={errors.series ?? "该板块当日还没有累积到分时点"} />
             )}
@@ -329,7 +553,7 @@ function BoardDetailDrawer({
                         <span className="ml-1 text-[10px] text-muted-foreground">{s.code}</span>
                       </td>
                       <td className="px-1 py-0.5 text-right tnum">{s.price ? s.price.toFixed(2) : "—"}</td>
-                      <td className={cn("px-1 py-0.5 text-right tnum", clsUpDown(s.pct))}>{pct(s.pct)}</td>
+                      <td className={cn("px-1 py-0.5 text-right tnum", clsUpDown(s.pct))}>{s.pct == null ? "—" : fmtPct(s.pct)}</td>
                       <td className={cn("px-1 py-0.5 text-right tnum", (s.flow ?? 0) >= 0 ? "text-up" : "text-down")}>
                         {signedYi(s.flow)}
                       </td>
@@ -344,7 +568,7 @@ function BoardDetailDrawer({
 
           <Section title="近 20 个交易日资金流" hint={errors.history ?? `覆盖 ${history.length} 个交易日`}>
             {history.length ? (
-              <FlowHistoryChart id={`bh-${detail.code}`} dates={history.map((h: any) => h.date)}
+              <FlowHistoryChart id={`bh-${d.code}`} dates={history.map((h: any) => h.date)}
                 values={history.map((h: any) => h.flow)} />
             ) : (
               <EmptyState title="暂无历史数据" hint="库里还没有该板块的每日快照" />
@@ -353,9 +577,9 @@ function BoardDetailDrawer({
 
           <Section title="与上证指数资金走势对比" hint={errors.vs_index ?? vs?.index_day}>
             {vs?.axis?.length ? (
-              <MoneyLinesChart id={`bv-${detail.code}`} axis={vs.axis} maxLines={2}
+              <MoneyLinesChart id={`bv-${d.code}`} axis={vs.axis} maxLines={2}
                 series={[
-                  { code: detail.code, name: detail.name ?? "板块", values: vs.board },
+                  { code: d.code, name: d.name ?? "板块", values: vs.board },
                   { code: "1.000001", name: "上证指数", values: vs.index },
                 ]} height={200} />
             ) : (
@@ -397,58 +621,4 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
       <div className="p-2">{children}</div>
     </section>
   );
-}
-
-/** 可点表头：点一次按该列排序，当前列显示箭头。 */
-function SortTh({ label, k, sort, onSort, align = "left" }: {
-  label: string; k: SortKey; sort: SortKey; onSort: (k: SortKey) => void; align?: "left" | "right";
-}) {
-  const active = sort === k;
-  return (
-    <th className={cn("px-2 py-1.5 font-normal", align === "right" ? "text-right" : "text-left")}>
-      <button
-        type="button"
-        onClick={() => onSort(k)}
-        aria-pressed={active}
-        className={cn("inline-flex items-center gap-0.5 transition-colors hover:text-foreground",
-          active ? "text-foreground" : "")}
-        title={`按${label}排序`}
-      >
-        {label}
-        <span aria-hidden className={cn("text-[9px]", active ? "opacity-100" : "opacity-0")}>▼</span>
-      </button>
-    </th>
-  );
-}
-
-/** 名次变化：正数=上升，负数=下降，新上榜显示「新」。 */
-function RankDelta({ delta, rank }: { delta: number | null; rank: number | null }) {
-  if (rank == null) return <span className="text-muted-foreground">—</span>;
-  if (delta == null) return <span className="text-muted-foreground" title="上一轮不在榜内">新</span>;
-  if (delta === 0) return <span className="text-muted-foreground">持平</span>;
-  return (
-    <span className={delta > 0 ? "text-up" : "text-down"}>
-      {delta > 0 ? `↑${delta}` : `↓${-delta}`}
-    </span>
-  );
-}
-
-/** 布尔偏好持久化（曲线显隐跨刷新保留）。 */
-function useStoredBool(key: string, initial: boolean) {
-  const [on, setOn] = useState<boolean>(() => {
-    try {
-      const v = localStorage.getItem(key);
-      return v == null ? initial : v === "1";
-    } catch {
-      return initial;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(key, on ? "1" : "0");
-    } catch {
-      /* 隐私模式忽略 */
-    }
-  }, [key, on]);
-  return [on, setOn] as const;
 }

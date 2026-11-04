@@ -732,6 +732,19 @@ def read_em_points(date: str, code: str) -> list[tuple[str, float, float, float,
         return [(str(t), float(a), float(b), float(c), float(d)) for t, a, b, c, d in cur.fetchall()]
 
 
+def latest_em_flows(date: str) -> list[dict]:
+    """每个目标在当日最后一刻的 4 维快照（指数/全A 排行用）。"""
+    with _db() as conn:
+        cur = conn.execute(
+            "SELECT p.code, p.name, p.kind, p.inst, p.large, p.medium, p.retail "
+            "FROM em_flow_points p JOIN ("
+            "  SELECT code, MAX(time) AS t FROM em_flow_points WHERE date=? GROUP BY code"
+            ") m ON p.code=m.code AND p.time=m.t"
+            " WHERE p.date=?", (date, date))
+        return [{"code": c, "name": n, "kind": k, "inst": float(i), "large": float(l),
+                 "medium": float(md), "retail": float(r)} for c, n, k, i, l, md, r in cur.fetchall()]
+
+
 def read_em_meta(date: str, code: str) -> dict:
     """4 维目标的名称与口径（供详情标题用）。"""
     with _db() as conn:
