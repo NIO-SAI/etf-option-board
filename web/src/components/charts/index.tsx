@@ -711,7 +711,7 @@ export function MoneyLinesChart({
       type: "category",
       data: axis,
       boundaryGap: false,
-      axisLine: { lineStyle: { color: AXIS } },
+      axisLine: { onZero: false, lineStyle: { color: AXIS, width: 1 } },
       axisLabel: {
         color: AXIS, fontSize: 10, hideOverlap: true,
         // 多日模式：底部只按「日」显示（MM-DD），时间刻度交给日分隔虚线
@@ -1003,6 +1003,17 @@ export function BoardFlowChart({
       flush(times.length - 1);
     }
 
+    // 日分隔竖虚线：挂在第一条线，避免重复绘制（必须在 memo 内，保持对象稳定不闪烁）
+    if (vLines?.length && series.length) {
+      series[0].markLine = {
+        symbol: "none",
+        silent: true,
+        label: { show: false },
+        lineStyle: { color: "rgba(228,228,231,0.55)", type: [5, 4], width: 1.5 },
+        data: vLines.map((v) => ({ xAxis: v })),
+      };
+    }
+
     if (temp) {
       const color = "#ff5722";
       series.push({
@@ -1026,7 +1037,8 @@ export function BoardFlowChart({
     }
 
     return {
-      animation: true,
+      // 多日图（带日分隔线）频繁重渲染时开动画会让竖虚线闪烁
+      animation: !vLines?.length,
       animationDuration: 260,
       animationDurationUpdate: 160,
       legend: { show: false },
@@ -1060,7 +1072,8 @@ export function BoardFlowChart({
         type: "category",
         data: times,
         boundaryGap: false,
-        axisLine: { lineStyle: { color: "#52525b" } },
+        // onZero 默认 true：x 轴线会被画在 y=0 处，看起来像一条黑粗线；贴底 1px
+        axisLine: { onZero: false, lineStyle: { color: "#52525b", width: 1 } },
         // 多日模式：只在每天起点显示 MM-DD；单日模式：只显示整点/半点
         axisLabel: {
           color: "#71717a", fontSize: 10, hideOverlap: true,
@@ -1090,16 +1103,7 @@ export function BoardFlowChart({
     };
   }, [lines, hoverCode, temp, vLines]);
 
-  // 日分隔竖虚线（多日图）：挂在第一条线，避免重复绘制
-  if (vLines?.length && option.series.length) {
-    (option.series[0] as any).markLine = {
-      symbol: "none",
-      silent: true,
-      label: { show: false },
-      lineStyle: { color: "rgba(228,228,231,0.55)", type: [5, 4], width: 1.5 },
-      data: vLines.map((v) => ({ xAxis: v })),
-    };
-  }
+
 
   const times = useMemo(() => {
     const s = new Set<string>();

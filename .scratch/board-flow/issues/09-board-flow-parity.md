@@ -173,3 +173,13 @@
 验证：`code=510300` 返回 `source=em_kline`、240 个点、五档齐全
 （主力 +1052.8万 / 超大单 -9.33亿 / 大单 +9.44亿 / 中单 +1.05亿 / 小单 -1.15亿）；
 ETF 页「4 维拆解」渲染 5 条曲线（主力/超大单/大单/中单/小单），axis=240。
+
+## 追加（第十三轮：多日图黑线 / 竖虚线闪烁）
+
+| 现象 | 根因 | 修复 |
+|---|---|---|
+| 图中间一条黑粗横线 | ECharts `xAxis.axisLine.onZero` 默认 true，y 轴 `scale:true` 含 0 时把 **x 轴线画在 y=0 处**（看起来像黑粗线） | `onZero:false` + `width:1`，轴线回到贴底 1px；`MoneyLinesChart` 同步修复 |
+| 日分隔竖虚线不停闪 | ① markLine 在 `useMemo` 外每次渲染重建对象；② 多日图每次重渲染都从 0 播放动画（animation true）；③ 多日页 `chartLines` 每次渲染新建数组，导致 option 重算 | markLine 移入 memo；多日模式 `animation:false`；`chartLines` 用 `useMemo` 固定引用 |
+
+验证：option `xAxis.axisLine = { onZero:false, width:1 }`、`animation:false`、markLine 5 条；
+页面无控制台报错，`pytest` 464 passed。

@@ -115,19 +115,22 @@ export function BoardMultiPage() {
     { kind: "bseries", code: `multi:${codesKey}`, extra: `${start || "auto"}:${end || "auto"}` },
   );
 
-  const chartAxis: string[] = intraday?.axis ?? [];
-  const chartLines: FlowLine[] = (intraday?.series ?? []).map((s: any) => {
-    const pts: [string, number][] = [];
-    (s.values ?? []).forEach((v: number | null, i: number) => {
-      if (v != null) pts.push([chartAxis[i], v]);
+  // 必须 memo：每次渲染新建数组会让图表 option 重算并 setOption，竖虚线会闪
+  const chartLines: FlowLine[] = useMemo(() => {
+    const axis: string[] = intraday?.axis ?? [];
+    return (intraday?.series ?? []).map((s: any) => {
+      const pts: [string, number][] = [];
+      (s.values ?? []).forEach((v: number | null, i: number) => {
+        if (v != null) pts.push([axis[i], v]);
+      });
+      return {
+        code: s.code,
+        name: s.name,
+        points: pts,
+        pct: rows.find((r) => r.code === s.code)?.pct ?? null,
+      };
     });
-    return {
-      code: s.code,
-      name: s.name,
-      points: pts,
-      pct: rows.find((r) => r.code === s.code)?.pct ?? null,
-    };
-  });
+  }, [intraday, rows]);
 
   const toggle = (code: string) => {
     touched.current = true;
