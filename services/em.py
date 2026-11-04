@@ -1450,3 +1450,43 @@ def num(x, default=0.0) -> float:
         return float(v)
     except (TypeError, ValueError):
         return default
+
+
+# --------------------------------------------------------------------------
+# 板块成分股 / 研报热度（板块资金详情抽屉用）
+# --------------------------------------------------------------------------
+async def board_stocks(bk_code: str, limit: int = 50, ttl: float = 30.0) -> list[dict]:
+    """板块成分股的主力净流入排行（降序）。
+
+    字段：f2 最新价、f3 涨跌幅、f12 代码、f14 名称、f20 市值、f62 主力净流入。
+    emdatah5 主源与 push2 兜底由 `clist` 负责；失败返回空列表，不抛异常。
+    """
+    if not str(bk_code).startswith("BK"):
+        return []
+    rows = await clist(f"b:{bk_code}", "f2,f3,f12,f14,f20,f62", pz=100, fid="f62", ttl=ttl)
+    out: list[dict] = []
+    for it in rows[:max(1, limit)]:
+        code = str(it.get("f12") or "")
+        name = str(it.get("f14") or "")
+        if not code or not name:
+            continue
+        out.append({
+            "code": code, "name": name,
+            "price": _numf(it.get("f2")), "pct": _numf(it.get("f3")),
+            "flow": _numf(it.get("f62")), "mv": _numf(it.get("f20")),
+        })
+    return out
+
+
+async def report_hits(stock_code: str, days: int = 90, ttl: float = 3600.0) -> int:
+    """个股近 N 天研报数（东财 reportapi 的 hits），失败返回 0。"""
+    end = time.strftime("%Y-%m-%d")
+    begin = time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
+    d = await get_json("https://reportapi.eastmoney.com/report/list",
+                       {"cb": "", "pageSize": 1, "pageNo": 1, "code": stock_code,
+                        "reportType": 1, "qType": 0, "beginTime": begin, "endTime": end},
+                       ttl=ttl, referer="https://data.eastmoney.com/report/")
+    try:
+        return int((d or {}).get("hits") or 0)
+    except (TypeError, ValueError):
+        return 0

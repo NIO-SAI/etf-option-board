@@ -746,3 +746,108 @@ async def board_dates(limit: int = Query(60, ge=1, le=240)):
     except Exception:  # noqa: BLE001
         dates = []
     return {"dates": dates, "today": dt.date.today().isoformat()}
+
+
+@router.get("/board/detail")
+async def board_detail(code: str = Query(..., description="BK 板块代码"),
+                       date: str | None = Query(None)):
+    """板块详情抽屉：一次拿全六块（分时、成分股、近 20 日、对标指数、研报热度）。
+
+    各块失败互不影响：失败的块返回 null 并在 errors 里标注原因，前端逐块降级。
+    """
+    code = (code or "").strip().upper()
+    if not code.startswith("BK"):
+        return {"error": "code 必须是 BK 板块代码", "code": code}
+
+    if not date:
+        try:
+            dates = await asyncio.to_thread(bf.available_dates, 1)
+        except Exception:  # noqa: BLE001
+            dates = []
+        date = dates[0] if dates else dt.date.today().isoformat()
+
+    out: dict = {"code": code, "date": date, "errors": {}}
+
+    # 1) 元信息（名称/口径/涨跌幅/主力净流入）—— 来自当日排行快照
+    try:
+        rows = await asyncio.to_thread(bf.read_rank, date)
+        row = next((r for r in rows if r["code"] == code), None)
+        if row:
+            out.update({"name": row["name"], "type": row["type"],
+                        "flow": row["flow"], "pct": row["pct"], "rank": row["rank"]})
+    except Exception as exc:  # noqa: BLE001
+        out["errors"]["meta"] = str(exc)
+
+    # 2) 当日分时（本地库）
+    try:
+        points = await asyncio.to_thread(bf.read_points, date, [code])
+        aligned = bf.build_series(points)
+        out["series"] = {"axis": aligned["axis"],
+                         "values": (aligned["series"][0]["values"] if aligned["series"] else [])}
+        if len(aligned["axis"]) < 2:
+            out["errors"]["series"] = "当日分时点不足（服务启动后从下一分钟开始累积）"
+    except Exception as exc:  # noqa: BLE001
+        out["series"] = None
+        out["errors"]["series"] = str(exc)
+
+    # 3) 近 20 个交易日资金流（本地库）
+    try:
+        out["history"] = await asyncio.to_thread(bf.read_history, code, 20)
+    except Exception as exc:  # noqa: BLE001
+        out["history"] = None
+        out["errors"]["history"] = str(exc)
+
+    # 4+5) 成分股资金排行与环境指数分时并发抓（两者互不依赖，串行会白白多等一个往返）
+    today = dt.date.today().isoformat()
+
+    async def _no_index():
+        return None
+
+    idx_task = em.fflow("1.000001") if date == today else _no_index()
+    gathered = await asyncio.gather(em.board_stocks(code, limit=20), idx_task, return_exceptions=True)
+    stocks_res, idx = gathered[0], gathered[1]
+
+    if isinstance(stocks_res, Exception):
+        out["stocks"] = []
+        out["errors"]["stocks"] = str(stocks_res)
+        stocks: list[dict] = []
+    else:
+        stocks = stocks_res or []
+        out["stocks"] = stocks
+        if not stocks:
+            out["errors"]["stocks"] = "成分股接口未返回数据"
+
+    if date != today:
+        out["vs_index"] = None
+        out["errors"]["vs_index"] = "历史日期不回补指数分时"
+    elif isinstance(idx, Exception):
+        out["vs_index"] = None
+        out["errors"]["vs_index"] = str(idx)
+    else:
+        mapping: dict[str, float] = {}
+        for line in (idx or {}).get("klines") or []:
+            parts = line.split(",")
+            if len(parts) >= 2 and len(parts[0]) >= 16:
+                mapping[parts[0][-5:]] = float(parts[1] or 0)
+        s_axis = (out.get("series") or {}).get("axis") or []
+        # 板块当日还没累积点时，退化成只用指数时间轴（板块一侧留空）
+        axis = s_axis or sorted(mapping)
+        out["vs_index"] = {"name": "上证指数", "axis": axis,
+                           "board": (out.get("series") or {}).get("values") or [None] * len(axis),
+                           "index": bf.align_against(axis, mapping),
+                           "index_day": (idx or {}).get("day")}
+        if not mapping:
+            out["errors"]["vs_index"] = "指数分时暂无数据"
+
+    # 6) 研报热度：成分股前 3 的近 90 天研报数（并发，失败按 0 计）
+    try:
+        top = stocks[:3]
+        hits = await asyncio.gather(*(em.report_hits(s["code"]) for s in top), return_exceptions=True)
+        items = [{"code": s["code"], "name": s["name"],
+                  "hits": (h if isinstance(h, int) else 0)} for s, h in zip(top, hits)]
+        out["report_heat"] = {"days": 90, "count": sum(i["hits"] for i in items), "top": items}
+    except Exception as exc:  # noqa: BLE001
+        out["report_heat"] = None
+        out["errors"]["report_heat"] = str(exc)
+
+    return out

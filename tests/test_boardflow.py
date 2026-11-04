@@ -162,3 +162,12 @@ class TestBuildSeriesSessionTrim:
 
     def test_all_off_session_yields_empty(self):
         assert bf.build_series({"BK1": [("15:06", 1.0)]})["axis"] == []
+
+
+class TestAlignAgainst:
+    def test_alignment_fills_missing_with_none(self):
+        axis = ["09:31", "09:32", "09:33"]
+        assert bf.align_against(axis, {"09:32": 5.0}) == [None, 5.0, None]
+
+    def test_empty_axis(self):
+        assert bf.align_against([], {"09:31": 1.0}) == []

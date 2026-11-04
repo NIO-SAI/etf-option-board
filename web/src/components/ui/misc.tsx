@@ -161,3 +161,54 @@ export function Dialog({
     document.body,
   );
 }
+
+/** 右侧抽屉：点板块从右边滑出，不遮挡列表（详情/筛选类内容优先用它而不是居中弹窗）。 */
+export function Drawer({
+  open, onClose, title, subtitle, children, widthClass = "w-[min(96vw,620px)]",
+}: {
+  open: boolean;
+  onClose: () => void;
+  title?: React.ReactNode;
+  subtitle?: React.ReactNode;
+  children: React.ReactNode;
+  widthClass?: string;
+}) {
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return ReactDOM.createPortal(
+    <div className="fixed inset-0 z-[100]" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" onClick={onClose} />
+      <aside
+        className={cn(
+          "drawer-enter absolute right-0 top-0 flex h-full flex-col border-l border-border bg-card shadow-2xl",
+          widthClass,
+        )}
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-border/60 px-4 py-2.5">
+          <div className="min-w-0">
+            {title && <div className="truncate text-sm font-semibold">{title}</div>}
+            {subtitle && <div className="mt-0.5 text-[11px] text-muted-foreground">{subtitle}</div>}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭"
+            className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            ✕
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-auto p-3">{children}</div>
+      </aside>
+    </div>,
+    document.body,
+  );
+}

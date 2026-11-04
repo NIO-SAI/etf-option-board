@@ -377,3 +377,19 @@ def save_watch(items: list[dict]) -> bool:
     except OSError as exc:
         log.warning("写入自选板块失败: %s", exc)
         return False
+
+
+def read_history(code: str, days: int = 20) -> list[dict]:
+    """某板块近 N 个交易日的资金流（来自每日最后一轮排行快照）。"""
+    with _db() as conn:
+        cur = conn.execute(
+            "SELECT date, flow, pct, rank FROM rank_snapshots WHERE code=? ORDER BY date DESC LIMIT ?",
+            (code, max(1, int(days))))
+        rows = [{"date": d, "flow": float(f), "pct": float(p or 0), "rank": r}
+                for d, f, p, r in cur.fetchall()]
+    return list(reversed(rows))
+
+
+def align_against(axis: list[str], mapping: dict[str, float]) -> list[float | None]:
+    """把另一条序列（时间→值）对齐到给定时间轴，缺失点补 None。纯函数。"""
+    return [mapping.get(t) for t in (axis or [])]

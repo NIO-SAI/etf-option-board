@@ -731,3 +731,102 @@ export function MoneyLinesChart({
   if (!axis.length) return null;
   return <ReactECharts key={id} option={option} notMerge style={{ height }} />;
 }
+
+/** 板块资金详情：累计净流入折线 + 每分钟增量柱（同一时间轴，单位元）。 */
+export function FlowDetailChart({
+  id, axis, values, height = 220,
+}: {
+  id: string;
+  axis: string[];
+  values: (number | null)[];
+  height?: number;
+}) {
+  const deltas = useMemo(() => (values || []).map((v, i) => {
+    if (v == null) return null;
+    const prev = i > 0 ? values[i - 1] : null;
+    return prev == null ? 0 : v - prev;
+  }), [values]);
+
+  const option = useMemo(() => ({
+    animation: false,
+    grid: { left: 54, right: 10, top: 10, bottom: 22 },
+    tooltip: {
+      trigger: "axis",
+      backgroundColor: "rgba(24,24,27,0.95)",
+      borderColor: "rgba(255,255,255,0.12)",
+      textStyle: { color: "#e4e4e7", fontSize: 11 },
+      formatter: (ps: any[]) => {
+        if (!ps?.length) return "";
+        const rows = ps.map((p) => `<div style="display:flex;justify-content:space-between;gap:12px">
+          <span>${p.marker}${p.seriesName}</span><span>${signedMoney(p.value)}</span></div>`).join("");
+        return `<div style="margin-bottom:4px">${ps[0].axisValue}</div>${rows}`;
+      },
+    },
+    xAxis: {
+      type: "category", data: axis, boundaryGap: true,
+      axisLine: { lineStyle: { color: AXIS } },
+      axisLabel: {
+        color: AXIS, fontSize: 10, hideOverlap: true,
+        formatter: (v: string) => (["09:30", "10:30", "11:30", "14:00", "15:00"].includes(v) ? v : ""),
+      },
+    },
+    yAxis: {
+      type: "value", scale: true,
+      axisLabel: { color: AXIS, fontSize: 10, formatter: (v: number) => signedMoney(v) },
+      splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
+    },
+    series: [
+      {
+        name: "每分钟增量", type: "bar", data: deltas, barMaxWidth: 8,
+        itemStyle: { color: (p: any) => ((p.value ?? 0) >= 0 ? "rgba(239,68,68,0.55)" : "rgba(22,163,74,0.55)") },
+      },
+      {
+        name: "累计净流入", type: "line", data: values, showSymbol: false,
+        lineStyle: { width: 1.8, color: UP }, itemStyle: { color: UP },
+      },
+    ],
+  }), [axis, values, deltas]);
+
+  if (!axis.length) return null;
+  return <ReactECharts key={id} option={option} notMerge style={{ height }} />;
+}
+
+/** 近 N 日资金流柱状图（红=流入、绿=流出）。 */
+export function FlowHistoryChart({
+  id, dates, values, height = 150,
+}: {
+  id: string;
+  dates: string[];
+  values: number[];
+  height?: number;
+}) {
+  const option = useMemo(() => ({
+    animation: false,
+    grid: { left: 54, right: 8, top: 8, bottom: 20 },
+    tooltip: {
+      trigger: "axis",
+      backgroundColor: "rgba(24,24,27,0.95)",
+      borderColor: "rgba(255,255,255,0.12)",
+      textStyle: { color: "#e4e4e7", fontSize: 11 },
+      formatter: (ps: any[]) => ps?.length
+        ? `${ps[0].axisValue}<br/>${signedMoney(ps[0].value)}` : "",
+    },
+    xAxis: {
+      type: "category", data: dates,
+      axisLine: { lineStyle: { color: AXIS } },
+      axisLabel: { color: AXIS, fontSize: 9, hideOverlap: true, formatter: (v: string) => v?.slice(5) },
+    },
+    yAxis: {
+      type: "value", scale: true,
+      axisLabel: { color: AXIS, fontSize: 9, formatter: (v: number) => signedMoney(v) },
+      splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
+    },
+    series: [{
+      type: "bar", data: values, barMaxWidth: 14,
+      itemStyle: { color: (p: any) => ((p.value ?? 0) >= 0 ? UP : DOWN) },
+    }],
+  }), [dates, values]);
+
+  if (!dates.length) return null;
+  return <ReactECharts key={id} option={option} notMerge style={{ height }} />;
+}

@@ -192,3 +192,10 @@
   pointer-events: none;
   background: color-mix(in oklab, var(--primary) 12%, transparent);
 }
+
+/* 右侧抽屉入场动画（纯 CSS，避免为一次过渡引入动画库） */
+@keyframes drawer-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.drawer-enter { animation: drawer-in 160ms ease-out; }
