@@ -973,6 +973,13 @@ async def etf_flow_series(codes: str = Query(""), date: str | None = Query(None)
         return {"date": date, "axis": [], "series": [], "error": str(exc)}
 
     aligned = bf.build_series({code: [(t, main) for t, main, _ in pts] for code, pts in raw.items()})
+    # ETF 历史点较稀疏（采集有跳点），补成完整分钟轴：半小时刻度/竖线才能落在整点上
+    dense_axis = bf.densify_axis(aligned["axis"])
+    if dense_axis and dense_axis != aligned["axis"]:
+        for s in aligned["series"]:
+            pts = [(t, main) for t, main, _ in raw.get(s["code"], [])]
+            s["values"] = bf.align_to_axis(pts, dense_axis)
+        aligned["axis"] = dense_axis
     for s in aligned["series"]:
         s["name"] = (meta.get(s["code"]) or {}).get("name") or s["code"]
     points_n = sum(len(v) for v in raw.values())

@@ -833,3 +833,41 @@ def save_em_config(config: dict) -> bool:
     except OSError as exc:
         log.warning("写入 4 维行业配置失败: %s", exc)
         return False
+
+
+def session_minutes() -> list[str]:
+    """连续竞价时段的完整分钟轴（09:30–11:30、13:00–15:00，含两端共 242 个点）。"""
+    out: list[str] = []
+    for start_h, start_m in ((9, 30), (13, 0)):
+        h, m = start_h, start_m
+        while (h, m) <= ((11, 30) if start_h == 9 else (15, 0)):
+            out.append(f"{h:02d}:{m:02d}")
+            m += 1
+            if m == 60:
+                h, m = h + 1, 0
+    return out
+
+
+def densify_axis(times: list[str]) -> list[str]:
+    """把稀疏时间轴补成完整分钟轴（只在首末点之间补，不凭空延长）。纯函数。"""
+    if not times:
+        return []
+    full = session_minutes()
+    try:
+        a = full.index(times[0])
+        b = full.index(times[-1])
+    except ValueError:
+        return list(times)
+    return full[a:b + 1] if a <= b else list(times)
+
+
+def align_to_axis(points: list[tuple[str, float]], axis: list[str]) -> list[float | None]:
+    """把稀疏点按「最近前值」填到给定时间轴。纯函数。"""
+    lookup = {str(t): v for t, v in points or []}
+    out: list[float | None] = []
+    last: float | None = None
+    for t in axis:
+        if t in lookup:
+            last = lookup[t]
+        out.append(last)
+    return out

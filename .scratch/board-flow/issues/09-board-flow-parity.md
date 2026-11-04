@@ -183,3 +183,13 @@ ETF 页「4 维拆解」渲染 5 条曲线（主力/超大单/大单/中单/小�
 
 验证：option `xAxis.axisLine = { onZero:false, width:1 }`、`animation:false`、markLine 5 条；
 页面无控制台报错，`pytest` 464 passed。
+
+## 追加（第十四轮：半小时竖虚线 / ETF 刻度补全）
+
+| 需求 | 实现 | 验证 |
+|---|---|---|
+| 三个分时图（板块分时 / ETF / 东财）加半小时竖虚线 | `MoneyLinesChart` 单日模式新增 `splitLine`：仅整点/半点画虚线（多日模式用日分隔线，不重复）；`BoardFlowChart` 原本已有，保留 | 三页 option `splitLine.interval` 探针：10:00→true、10:29→false、14:30→true |
+| ETF 缺 10:00 / 11:00 / 14:30 刻度 | 根因是 ETF 分钟点稀疏（09:58 后直接 10:01），整点不存在；接口把轴补成完整 242 分钟（`densify_axis` + 前值填充） | axis 160 → 242；10:00/11:00/14:30 均在轴内并显示 |
+| 标签规则 | 单日模式统一「每半小时」显示（09:30、10:00、10:30…），不再只显示 5 个固定时刻 | 4 维/东财标签实测 10:00 / 11:00 / 14:30 均显示 |
+
+新增纯函数与单测：`session_minutes`（242 点）、`densify_axis`、`align_to_axis`。

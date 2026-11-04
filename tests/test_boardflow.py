@@ -301,3 +301,20 @@ class TestAggregateDailyPct:
         out = bf.aggregate_daily(rows, ["2026-11-01", "2026-11-02"])
         assert out[0]["pct"] == 4.7      # 区间涨跌幅之和
         assert out[0]["total"] == 3.0
+
+
+class TestDensifyAxis:
+    def test_fills_missing_minutes_between_first_and_last(self):
+        axis = bf.densify_axis(["09:58", "09:59", "10:01", "10:02"])
+        assert axis == ["09:58", "09:59", "10:00", "10:01", "10:02"]
+
+    def test_skips_lunch_break(self):
+        axis = bf.densify_axis(["11:29", "13:01"])
+        assert axis[-2:] == ["13:00", "13:01"]
+        assert "12:00" not in axis
+
+    def test_session_minutes_count(self):
+        assert len(bf.session_minutes()) == 242
+
+    def test_align_forward_fills(self):
+        assert bf.align_to_axis([("09:58", 1.0), ("10:00", 3.0)], ["09:58", "09:59", "10:00"]) == [1.0, 1.0, 3.0]

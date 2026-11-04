@@ -714,11 +714,19 @@ export function MoneyLinesChart({
       axisLine: { onZero: false, lineStyle: { color: AXIS, width: 1 } },
       axisLabel: {
         color: AXIS, fontSize: 10, hideOverlap: true,
-        // 多日模式：底部只按「日」显示（MM-DD），时间刻度交给日分隔虚线
+        // 多日模式：底部只按「日」显示（MM-DD）；单日模式：每半小时（09:30/10:00/10:30…）
         formatter: vLines?.length
           ? (v: string) => (vLines.includes(v) ? v.slice(0, 5) : "")
-          : (v: string) => (["09:30", "10:30", "11:30", "14:00", "15:00"].includes(v) ? v : ""),
+          : (v: string) => (isHalfHour(v) ? v : ""),
       },
+      // 单日模式：每个整点/半点画一条竖向虚线做参照（多日图用日分隔线，不重复画）
+      splitLine: vLines?.length
+        ? { show: false }
+        : {
+            show: true,
+            interval: (_i: number, v: string) => isHalfHour(v),
+            lineStyle: { color: "rgba(255,255,255,0.16)", type: [4, 4], width: 1 },
+          },
     },
     yAxis: {
       type: "value",
