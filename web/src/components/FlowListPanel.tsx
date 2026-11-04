@@ -158,11 +158,11 @@ export function FlowListPanel({
                       )}
                     </span>
                     {showPct && (
-                      <span className={cn("w-[3.6em] shrink-0 text-right text-[10px] tnum", clsUpDown(b.pct))}>
+                      <span className={cn("w-[4.2em] shrink-0 text-right text-[10px] tabular-nums", clsUpDown(b.pct))}>
                         {b.pct == null ? "--" : fmtPct(b.pct, 2)}
                       </span>
                     )}
-                    <span className={cn("shrink-0 whitespace-nowrap text-right text-[10px] tnum",
+                    <span className={cn("w-[7.2em] shrink-0 whitespace-nowrap text-right text-[10px] tabular-nums",
                       b.flow >= 0 ? "text-up" : "text-down")}>
                       {signedWanGrouped(b.flow)}
                     </span>

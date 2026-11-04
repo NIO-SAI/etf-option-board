@@ -1061,10 +1061,13 @@ export function BoardFlowChart({
         data: times,
         boundaryGap: false,
         axisLine: { lineStyle: { color: "#52525b" } },
-        // 只在整点/半点显示刻度，并在这些位置画一条竖向虚线做参照
+        // 多日模式：只在每天起点显示 MM-DD；单日模式：只显示整点/半点
         axisLabel: {
           color: "#71717a", fontSize: 10, hideOverlap: true,
-          interval: (_i: number, v: string) => isHalfHour(v),
+          formatter: vLines?.length
+            ? (v: string) => (vLines.includes(v) ? v.slice(0, 5) : "")
+            : undefined,
+          interval: vLines?.length ? 0 : (_i: number, v: string) => isHalfHour(v),
         },
         splitLine: {
           show: true,

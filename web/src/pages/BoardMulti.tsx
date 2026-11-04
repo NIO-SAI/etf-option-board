@@ -197,7 +197,7 @@ export function BoardMultiPage() {
   const dates = intraday?.dates ?? data?.dates ?? [];
 
   return (
-    <main className="grid gap-3 p-3 xl:grid-cols-[320px_minmax(0,1fr)]">
+    <main className="grid gap-3 p-3 xl:grid-cols-[360px_minmax(0,1fr)]">
       <FlowListPanel
         title="板块列表"
         countText={`共 ${rows.length} 个 · 已选 ${selectedCodes.length}`}
