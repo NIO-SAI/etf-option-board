@@ -3,26 +3,30 @@ import { RefreshCw } from "lucide-react";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
+import { FlowListPanel, type BatchMode, type SortKey } from "@/components/FlowListPanel";
 import { MoneyLinesChart } from "@/components/charts";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
-import { clsUpDown, pct, signedYi } from "@/lib/format";
+import { signedYi } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const TYPES = [
   { key: "concept", label: "概念" },
   { key: "industry", label: "行业" },
 ];
+/** 图上最多画 6 条；勾选数量不限制 */
 const MAX_LINES = 6;
 
-/** 主力资金多日图（工单 05）：区间累计排行 + 多板块走势对比。 */
+/** 主力资金多日图：左侧列表（搜索/排序/批量勾选）+ 右侧分钟级累计资金曲线。 */
 export function BoardMultiPage() {
   const [type, setType] = useState("concept");
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("flow");
+  const [sortDir, setSortDir] = useState(-1);
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
-  const [picked, setPicked] = useState<string[]>([]);
-  // 用户手动改过选择后，轮询刷新不再自动回填默认前 3
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
   const touched = useRef(false);
 
   const { data: health } = usePolling(() => api.boardHealth(), 60_000, [], { kind: "ctx", code: "board-health" });
@@ -38,27 +42,32 @@ export function BoardMultiPage() {
   useEffect(() => onGlobalRefresh(() => { void refresh(); }), [refresh]);
 
   const items: any[] = data?.items ?? [];
-  const dates: string[] = data?.dates ?? [];
+  const rows = useMemo(() => {
+    const kw = search.trim().toLowerCase();
+    let list = items;
+    if (kw) list = list.filter((i) => i.name.includes(search.trim()) || i.code.toLowerCase().includes(kw));
+    return [...list].sort((a, b) => {
+      const va = sortKey === "pct" ? (a.pct ?? 0) : a.total;
+      const vb = sortKey === "pct" ? (b.pct ?? 0) : b.total;
+      return (va - vb) * sortDir;
+    });
+  }, [items, search, sortKey, sortDir]);
 
-  // 默认选前 3；数据/区间变化后若原选择已不在榜内则回落到前 3
+  // 默认选前 3（手动改过就不再回填）
   useEffect(() => {
     if (!items.length || touched.current) return;
-    const codes = new Set(items.map((i) => i.code));
-    setPicked((prev) => {
-      const keep = prev.filter((c) => codes.has(c));
-      if (keep.length) return keep;
-      return items.slice(0, 3).map((i) => i.code);
+    setSelected((prev) => {
+      const codes = new Set(items.map((i) => i.code));
+      const keep = Object.keys(prev).filter((c) => codes.has(c));
+      if (keep.length) return prev;
+      return Object.fromEntries(items.slice(0, 3).map((i) => [i.code, true]));
     });
   }, [items]);
 
-  const byCode = useMemo(() => {
-    const m: Record<string, any> = {};
-    items.forEach((i) => (m[i.code] = i));
-    return m;
-  }, [items]);
+  const selectedCodes = rows.filter((r) => selected[r.code]).map((r) => r.code);
+  const chartCodes = selectedCodes.slice(0, MAX_LINES);
+  const codesKey = chartCodes.join(",");
 
-  // 曲线用「分钟级」序列（区间内每天的分时首尾相接），排行仍用日累计
-  const codesKey = picked.slice(0, MAX_LINES).join(",");
   const { data: intraday } = usePolling(
     () => (codesKey
       ? api.boardMultiSeries(codesKey, start || data?.start, end || data?.end)
@@ -72,185 +81,140 @@ export function BoardMultiPage() {
     code: s.code, name: s.name, values: s.values,
   }));
 
-  /** 快捷区间：最近 N 个交易日 */
-  const quickRange = (n: number) => {
-    const asc = [...(data?.available_dates ?? [])].sort();
-    if (!asc.length) return;
-    const endDate = asc[asc.length - 1];
-    const startDate = asc[Math.max(0, asc.length - n)];
-    touched.current = true;
-    setStart(startDate);
-    setEnd(endDate);
-  };
-
   const toggle = (code: string) => {
     touched.current = true;
-    setPicked((prev) => {
-      if (prev.includes(code)) return prev.filter((c) => c !== code);
-      if (prev.length >= MAX_LINES) return [...prev.slice(1), code];
-      return [...prev, code];
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (next[code]) delete next[code];
+      else next[code] = true;
+      return next;
     });
   };
 
+  const batch = (mode: BatchMode) => {
+    touched.current = true;
+    const base = [...items].sort((a, b) => b.total - a.total);
+    const next: Record<string, boolean> = {};
+    if (mode === "all") base.forEach((b) => (next[b.code] = true));
+    else if (mode === "pos10") base.filter((b) => b.total >= 0).slice(0, 10).forEach((b) => (next[b.code] = true));
+    else if (mode === "neg10") base.filter((b) => b.total < 0).slice(-10).forEach((b) => (next[b.code] = true));
+    else if (mode === "invert") base.forEach((b) => { if (!selected[b.code]) next[b.code] = true; });
+    setSelected(next);
+  };
+
+  const quickRange = (n: number) => {
+    const asc = [...(data?.available_dates ?? [])].sort();
+    if (!asc.length) return;
+    setStart(asc[Math.max(0, asc.length - n)]);
+    setEnd(asc[asc.length - 1]);
+  };
+
+  const dates = intraday?.dates ?? data?.dates ?? [];
+
   return (
-    <main className="grid gap-3 p-3 xl:grid-cols-[minmax(0,560px)_minmax(0,1fr)]">
-      <Frame spacing="sm">
-        <FramePanel dense>
-          <FrameHeader className="flex-row items-center justify-between gap-2">
+    <main className="grid gap-3 p-3 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <FlowListPanel
+        title="板块列表"
+        countText={`共 ${rows.length} 个 · 已选 ${selectedCodes.length}`}
+        rows={rows.map((r: any) => ({
+          code: r.code, name: r.name, flow: r.total, pct: r.pct ?? null, type: r.type,
+        }))}
+        selected={selected}
+        onToggle={toggle}
+        search={search}
+        onSearch={setSearch}
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onSort={(k) => {
+          if (k === sortKey) setSortDir((d) => -d);
+          else { setSortKey(k); setSortDir(-1); }
+        }}
+        sortOptions={[{ key: "pct", label: "涨幅" }, { key: "flow", label: "资金" }]}
+        onBatch={batch}
+        loading={!data}
+        emptyTitle="暂无区间数据"
+        emptyHint={data?.error ?? undefined}
+        maxHeight="calc(100vh - 20rem)"
+      />
+
+      <Frame spacing="sm" className="flex min-h-0 flex-col xl:sticky xl:top-[52px] xl:h-[calc(100vh-104px)]">
+        <FramePanel dense className="flex min-h-0 flex-1 flex-col">
+          <FrameHeader className="flex-row flex-wrap items-center justify-between gap-2 py-1.5">
             <div className="flex items-center gap-2">
               <FrameTitle className="text-sm">主力资金多日图</FrameTitle>
-              <Tabs tabs={TYPES} value={type} onChange={(k) => { setType(k); setPicked([]); touched.current = false; }} />
+              <Tabs tabs={TYPES} value={type} onChange={(k) => { setType(k); setSelected({}); setSearch(""); touched.current = false; }} />
             </div>
-            <div className="flex items-center gap-2">
-              {health?.trading ? <Badge variant="success-light">交易中</Badge> : <Badge variant="outline">休市</Badge>}
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <select
+                id="board-multi-start" name="start" aria-label="起始日期"
+                value={start} onChange={(e) => setStart(e.target.value)}
+                className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground"
+              >
+                <option value="">默认起</option>
+                {(data?.available_dates ?? []).map((d: string) => <option key={d} value={d}>{d}</option>)}
+              </select>
+              <span className="text-muted-foreground">至</span>
+              <select
+                id="board-multi-end" name="end" aria-label="结束日期"
+                value={end} onChange={(e) => setEnd(e.target.value)}
+                className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground"
+              >
+                <option value="">默认止</option>
+                {(data?.available_dates ?? []).map((d: string) => <option key={d} value={d}>{d}</option>)}
+              </select>
+              <span className="flex items-center gap-0.5 rounded-md border border-border bg-muted/40 p-0.5">
+                {[3, 5, 8].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => quickRange(n)}
+                    className={cn("rounded px-1.5 py-0.5 transition-colors",
+                      dates.length === n ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}
+                  >
+                    {n}日
+                  </button>
+                ))}
+              </span>
+              <span className="hidden text-muted-foreground tnum sm:inline">
+                {intraday?.start ?? data?.start ?? "—"} ~ {intraday?.end ?? data?.end ?? "—"}
+              </span>
               <button
-                type="button"
-                onClick={() => void refresh()}
-                title="立即刷新（读本地库）"
-                aria-label="刷新"
-                className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                type="button" onClick={() => refresh()} title="刷新" aria-label="刷新"
+                className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground"
               >
                 <RefreshCw className="size-3" aria-hidden />
               </button>
             </div>
           </FrameHeader>
 
-          <div className="flex flex-wrap items-center gap-2 px-3 pb-2 text-[11px] text-muted-foreground">
-            <label className="flex items-center gap-1">
-              起
-              <select
-                id="board-multi-start" name="start" aria-label="起始日期"
-                value={start}
-                onChange={(e) => setStart(e.target.value)}
-                className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                <option value="">默认</option>
-                {(data?.available_dates ?? []).map((d: string) => <option key={d} value={d}>{d}</option>)}
-              </select>
-            </label>
-            <label className="flex items-center gap-1">
-              止
-              <select
-                id="board-multi-end" name="end" aria-label="结束日期"
-                value={end}
-                onChange={(e) => setEnd(e.target.value)}
-                className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                <option value="">默认</option>
-                {(data?.available_dates ?? []).map((d: string) => <option key={d} value={d}>{d}</option>)}
-              </select>
-            </label>
-            <span className="flex items-center gap-0.5 rounded-md border border-border bg-muted/40 p-0.5">
-              {[3, 5, 8].map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  onClick={() => quickRange(n)}
-                  title={`最近 ${n} 个交易日`}
-                  className={cn("rounded px-1.5 py-0.5 transition-colors",
-                    dates.length === n ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}
-                >
-                  {n}日
-                </button>
-              ))}
-            </span>
-            <span>· {intraday?.start ?? data?.start ?? "—"} ~ {intraday?.end ?? data?.end ?? "—"}（{intraday?.dates?.length ?? dates.length} 个交易日）</span>
-            <span>· 已选 {picked.length}/{MAX_LINES}</span>
-          </div>
-
-          <div className="max-h-[calc(100vh-13rem)] overflow-auto border-t border-border/60">
+          <div className="flex min-h-0 flex-1 flex-col px-1 pb-1">
             {error ? (
-              <EmptyState title="接口失败" hint={String(error)} />
+              <EmptyState title="接口失败" hint={String(error)} className="flex-1" />
             ) : !data ? (
-              <div className="flex flex-col gap-1 p-3">
-                {Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-7 w-full" />)}
-              </div>
-            ) : items.length === 0 ? (
-              <EmptyState title="暂无区间数据" hint={data.error ?? "换一个日期区间试试"} />
+              <Skeleton className="m-2 h-[380px]" />
+            ) : !chartSeries.length ? (
+              <EmptyState title={selectedCodes.length ? "加载分钟级曲线…" : "还没有选中板块"}
+                hint={selectedCodes.length ? undefined : "在左侧勾选，或点「流入Top10」批量激活"}
+                className="flex-1" />
             ) : (
-              <table className="w-full border-collapse text-xs">
-                <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
-                  <tr className="text-left text-[11px] text-muted-foreground">
-                    <th className="w-8 px-2 py-1.5 font-normal">选</th>
-                    <th className="px-2 py-1.5 font-normal">板块</th>
-                    <th className="px-2 py-1.5 text-right font-normal">区间累计</th>
-                    <th className="px-2 py-1.5 text-right font-normal">上榜天数</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((r) => {
-                    const on = picked.includes(r.code);
-                    return (
-                      <tr key={r.code} onClick={() => toggle(r.code)}
-                        className={cn("cursor-pointer border-t border-border/40 hover:bg-muted/40",
-                          on && "bg-muted/20")}>
-                        <td className="px-2 py-1">
-                          <input type="checkbox" checked={on} readOnly aria-label={`选择${r.name}`} className="size-3 accent-primary" />
-                        </td>
-                        <td className="px-2 py-1">
-                          <span className="font-medium">{r.name}</span>
-                          <span className="ml-1.5 text-[10px] text-muted-foreground">{r.code}</span>
-                        </td>
-                        <td className={cn("px-2 py-1 text-right tnum", (r.total ?? 0) >= 0 ? "text-up" : "text-down")}>
-                          {signedYi(r.total)}
-                        </td>
-                        <td className="px-2 py-1 text-right tnum text-muted-foreground">{r.days}/{dates.length}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <div className="min-h-0 flex-1">
+                <MoneyLinesChart
+                  id="board-multi-lines"
+                  axis={intraday?.axis ?? []}
+                  series={chartSeries as any}
+                  height="100%"
+                  maxLines={MAX_LINES}
+                  vLines={intraday?.day_breaks ?? []}
+                  showEndLabel
+                />
+              </div>
             )}
-          </div>
-        </FramePanel>
-      </Frame>
-
-      <Frame spacing="sm" className="self-start xl:sticky xl:top-[52px]">
-        <FramePanel dense>
-          <FrameHeader className="flex-row items-center justify-between">
-            <div className="flex min-w-0 items-baseline gap-2">
-              <FrameTitle className="text-sm">
-                {picked.length === 1 ? "单板块走势" : "区间资金走势对比"}
-              </FrameTitle>
-              <span className="truncate text-[10px] text-muted-foreground">
-                分钟级曲线 · 竖虚线为交易日分隔
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-2 px-2 text-[10px] text-muted-foreground">
+              <span>区间累计资金（分钟级）· 图上最多 {MAX_LINES} 条，已选 {selectedCodes.length} 个</span>
+              <span className="flex flex-wrap gap-2">
+                {dates.map((d: string) => <span key={d} className="tnum">{d.slice(5)}</span>)}
               </span>
             </div>
-          </FrameHeader>
-          <div className="px-2 pb-2">
-            {!data ? (
-              <Skeleton className="h-[360px] w-full" />
-            ) : !chartSeries.length || !(intraday?.axis?.length) ? (
-              <EmptyState title="还没有选中板块" hint="在左侧勾选最多 6 个板块看分钟级走势对比" />
-            ) : (
-              <>
-                <MoneyLinesChart id="board-multi-lines" axis={intraday?.axis ?? []} series={chartSeries as any}
-                  height={380} maxLines={MAX_LINES} vLines={intraday?.day_breaks ?? []} />
-                <div className="flex flex-wrap gap-x-3 gap-y-1 px-1 pt-1 text-[10px] text-muted-foreground">
-                  {chartSeries.map((s) => (
-                    <span key={s.code} className="inline-flex items-center gap-1">
-                      <span className="inline-block size-1.5 rounded-full bg-primary/70" />
-                      {s.name}
-                      <span className={cn("tnum", (byCode[s.code]?.total ?? 0) >= 0 ? "text-up" : "text-down")}>
-                        {signedYi(byCode[s.code]?.total)}
-                      </span>
-                    </span>
-                  ))}
-                </div>
-                {picked.length === 1 && (
-                  <div className="mt-2 flex flex-wrap gap-3 px-1 text-[10px] text-muted-foreground">
-                    {dates.map((d, i) => (
-                      <span key={d}>
-                        {d.slice(5)}{" "}
-                        <span className={cn("tnum", clsUpDown(chartSeries[0].values[i]))}>
-                          {signedYi(chartSeries[0].values[i])}
-                        </span>
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
           </div>
         </FramePanel>
       </Frame>

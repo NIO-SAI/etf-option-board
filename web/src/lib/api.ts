@@ -82,6 +82,7 @@ export const api = {
     get(`/etf-flow/series?codes=${encodeURIComponent(codes)}${date ? `&date=${date}` : ""}`),
   etfFlow4dim: (code: string, date?: string) =>
     get(`/etf-flow/4dim?code=${encodeURIComponent(code)}${date ? `&date=${date}` : ""}`),
+  etfFlowWatch: () => get("/etf-flow/watch"),
   etfFlowWatchAdd: async (code: string, name: string) =>
     (await fetch(`${BASE}/etf-flow/watch?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`,
       { method: "POST" })).json(),

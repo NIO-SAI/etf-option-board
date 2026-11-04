@@ -669,17 +669,19 @@ export function Sparkline({ data, up, height = 24, width = 54 }: { data: number[
 
 /** 板块资金多线图：统一时间轴、前值填充后的累计净流入（元 → 亿/万显示）。 */
 export function MoneyLinesChart({
-  id, axis, series, height = 320, maxLines = 8, mode = "line", vLines,
+  id, axis, series, height = 320, maxLines = 8, mode = "line", vLines, showEndLabel = false,
 }: {
   id: string;
   axis: string[];
   series: { code: string; name: string; values: (number | null)[]; watch?: boolean }[];
-  height?: number;
+  height?: number | string;
   maxLines?: number;
   /** line=分线；stack=堆叠面积（4 维资金用） */
   mode?: "line" | "stack";
   /** 在这些 x 轴刻度上画竖向虚线（多日图用来分隔交易日） */
   vLines?: string[];
+  /** 线末显示「名称 + 最新值」标签（多日图用，参考 stock-webui 右侧示例） */
+  showEndLabel?: boolean;
 }) {
   const colors = ["#ef4444", "#f59e0b", "#a855f7", "#3b82f6", "#14b8a6", "#ec4899", "#84cc16", "#f97316"];
   const shown = (series ?? []).slice(0, maxLines);
@@ -731,8 +733,23 @@ export function MoneyLinesChart({
         ? { stack: "total", areaStyle: { opacity: 0.35 }, lineStyle: { width: 1 } }
         : { lineStyle: { width: s.watch ? 2.4 : 1.4 } }),
       data: s.values,
+      ...(showEndLabel ? {
+        endLabel: {
+          show: true,
+          distance: 6,
+          fontSize: 10,
+          fontWeight: "bold" as const,
+          color: "#a1a1aa",
+          formatter: (pp: any) => {
+            const arr = pp.value as any;
+            const v = Array.isArray(arr) ? arr[1] : arr;
+            return `${s.name}  ${signedYi(v)}`;
+          },
+        },
+        labelLayout: { moveOverlap: "shiftY" as const },
+      } : {}),
     })),
-  }), [axis, shown, mode, vLines]);
+  }), [axis, shown, mode, vLines, showEndLabel]);
 
   // 日分隔线：只在第一条 series 上挂 markLine（避免重复绘制）
   const withDays = (opt: any) => {

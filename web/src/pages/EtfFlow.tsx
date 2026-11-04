@@ -1,28 +1,37 @@
-import { useEffect, useMemo, useState } from "react";
-import { Loader2, RefreshCw, Star } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
+import { FlowListPanel, type BatchMode, type SortKey, type FlowRow } from "@/components/FlowListPanel";
 import { MoneyLinesChart } from "@/components/charts";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
-import { clsUpDown, pct, signedYi } from "@/lib/format";
+import { signedYi } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const SCOPES = [
   { key: "all", label: "全部" },
   { key: "watch", label: "自选" },
 ];
-const LINES = 8;
+const MAX_LINES = 6;
+const DIM_LABEL: Record<string, string> = {
+  main: "主力", super: "超大单", large: "大单", medium: "中单", small: "小单",
+};
 
-/** ETF 资金流（工单 06）：排行 + 分时 + 4 维拆解 + 自选。 */
+/** ETF 资金流：左侧列表（搜索/排序/批量/自选）+ 右侧多线叠加 / 4 维拆解。 */
 export function EtfFlowPage() {
   const [scope, setScope] = useState("all");
-  const [view, setView] = useState("series");
-  const [dimCode, setDimCode] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [view, setView] = useState<"series" | "4dim">("series");
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("flow");
+  const [sortDir, setSortDir] = useState(-1);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [watchItems, setWatchItems] = useState<{ code: string; name: string }[]>([]);
+  const [watchBusy, setWatchBusy] = useState<Record<string, boolean>>({});
+  const touched = useRef(false);
 
   const { data: health } = usePolling(() => api.boardHealth(), 60_000, [], { kind: "ctx", code: "board-health" });
   const interval = health?.trading ? 30_000 : 300_000;
@@ -33,176 +42,186 @@ export function EtfFlowPage() {
     [interval],
     { kind: "etfrank", code: "all" },
   );
+  const { data: watchView, refresh: refreshWatch } = usePolling(
+    () => api.etfFlowWatch(), 300_000, [], { kind: "ctx", code: "etf-watch" });
+  useEffect(() => {
+    if (Array.isArray(watchView?.items)) setWatchItems(watchView.items);
+  }, [watchView]);
+  const watchSet = useMemo(() => new Set(watchItems.map((i) => i.code)), [watchItems]);
 
   useEffect(() => onGlobalRefresh(() => { void refresh(); }), [refresh]);
 
-  const all: any[] = data?.items ?? [];
-  const rows = useMemo(() => (scope === "watch" ? all.filter((r) => r.watch) : all), [all, scope]);
+  const all: FlowRow[] = useMemo(
+    () => (data?.items ?? []).map((r: any) => ({
+      code: r.code, name: r.name, type: r.type, flow: r.flow ?? 0,
+      pct: r.pct ?? null, watch: watchSet.has(r.code),
+    })),
+    [data, watchSet],
+  );
+  const baseRows = useMemo(() => (scope === "watch" ? all.filter((r) => r.watch) : all), [all, scope]);
+  const rows = useMemo(() => {
+    const kw = search.trim().toLowerCase();
+    let list = baseRows;
+    if (kw) list = list.filter((r) => r.name.toLowerCase().includes(kw) || r.code.includes(kw));
+    return [...list].sort((a, b) => {
+      const va = sortKey === "pct" ? (a.pct ?? 0) : a.flow;
+      const vb = sortKey === "pct" ? (b.pct ?? 0) : b.flow;
+      return (va - vb) * sortDir;
+    });
+  }, [baseRows, search, sortKey, sortDir]);
 
-  const chartCodes = useMemo(() => rows.slice(0, LINES).map((r) => r.code).join(","), [rows]);
-  const { data: series, refresh: refreshSeries } = usePolling(
-    () => (chartCodes ? api.etfFlowSeries(chartCodes) : Promise.resolve({ axis: [], series: [] } as any)),
+  const baseKey = useMemo(() => baseRows.map((r) => r.code).sort().join(","), [baseRows]);
+
+  useEffect(() => {
+    if (!rows.length) return;
+    const codes = new Set(rows.map((r) => r.code));
+    if (touched.current) {
+      setSelected((prev) => Object.fromEntries(Object.keys(prev).filter((c) => codes.has(c)).map((c) => [c, true])));
+      return;
+    }
+    const pos = rows.filter((r) => r.flow >= 0).slice(0, 10);
+    const neg = rows.filter((r) => r.flow < 0).slice(-5);
+    setSelected(Object.fromEntries([...pos, ...neg].map((r) => [r.code, true])));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseKey, scope]);
+
+  const selectedCodes = rows.filter((r) => selected[r.code]).map((r) => r.code);
+  const chartCodes = selectedCodes.slice(0, MAX_LINES);
+  const codesKey = chartCodes.join(",");
+
+  const { data: series } = usePolling(
+    () => (codesKey ? api.etfFlowSeries(codesKey) : Promise.resolve(null)),
     interval,
-    [chartCodes, interval],
-    { kind: "etfseries", code: chartCodes || "none" },
+    [codesKey, interval],
+    { kind: "etfseries", code: codesKey || "none" },
   );
 
-  const selected = dimCode ?? rows[0]?.code ?? null;
-  // 点某一行 → 右侧切到「选中分时」，直接看这只 ETF 自己的资金曲线（stock-webui 的交互）
-  const { data: focus, refresh: refreshFocus } = usePolling(
-    () => (selected ? api.etfFlowSeries(selected) : Promise.resolve(null)),
-    interval,
-    [selected, interval],
-    { kind: "etfseries", code: `focus:${selected ?? "none"}` },
-  );
+  const dimCode = chartCodes[0] ?? null;
   const { data: dim4 } = usePolling(
-    () => (selected ? api.etfFlow4dim(selected) : Promise.resolve(null)),
+    () => (dimCode ? api.etfFlow4dim(dimCode) : Promise.resolve(null)),
     60_000,
-    [selected],
-    { kind: "emseries", code: selected ?? "none" },
+    [dimCode],
+    { kind: "emseries", code: dimCode ?? "none" },
   );
 
-  const toggleWatch = async (r: any) => {
-    if (busy) return;
-    setBusy(r.code);
+  const toggle = (code: string) => {
+    touched.current = true;
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (next[code]) delete next[code];
+      else next[code] = true;
+      return next;
+    });
+  };
+
+  const batch = (mode: BatchMode) => {
+    touched.current = true;
+    const base = [...baseRows].sort((a, b) => b.flow - a.flow);
+    const next: Record<string, boolean> = {};
+    if (mode === "all") base.forEach((b) => (next[b.code] = true));
+    else if (mode === "pos10") base.filter((b) => b.flow >= 0).slice(0, 10).forEach((b) => (next[b.code] = true));
+    else if (mode === "neg10") base.filter((b) => b.flow < 0).slice(-10).forEach((b) => (next[b.code] = true));
+    else if (mode === "invert") base.forEach((b) => { if (!selected[b.code]) next[b.code] = true; });
+    setSelected(next);
+  };
+
+  const toggleWatch = async (b: FlowRow) => {
+    if (watchBusy[b.code]) return;
+    const isWatched = watchSet.has(b.code);
+    setWatchBusy((m) => ({ ...m, [b.code]: true }));
+    setWatchItems((prev) => (isWatched
+      ? prev.filter((i) => i.code !== b.code)
+      : [...prev, { code: b.code, name: b.name }]));
     try {
-      const res = r.watch ? await api.etfFlowWatchRemove(r.code) : await api.etfFlowWatchAdd(r.code, r.name);
+      const res = isWatched ? await api.etfFlowWatchRemove(b.code) : await api.etfFlowWatchAdd(b.code, b.name);
       if (res?.error) throw new Error(res.error);
-      await Promise.all([refresh(), refreshSeries()]);
+      void refreshWatch();
     } catch (e: any) {
-      toast("自选操作失败", { description: String(e?.message || e) });
+      setWatchItems((prev) => (isWatched
+        ? [...prev, { code: b.code, name: b.name }]
+        : prev.filter((i) => i.code !== b.code)));
+      toast("自选操作失败", { description: String(e?.message ?? e) });
     } finally {
-      setBusy(null);
+      setWatchBusy((m) => ({ ...m, [b.code]: false }));
     }
   };
 
   const dimSeries = useMemo(() => {
     if (!dim4?.axis?.length) return [];
-    const labels: Record<string, string> = { main: "主力", super: "超大单", large: "大单", medium: "中单", small: "小单" };
     return Object.entries(dim4.dims ?? {}).map(([k, v]) => ({
-      code: k, name: labels[k] ?? k, values: v as (number | null)[],
+      code: k, name: DIM_LABEL[k] ?? k, values: v as (number | null)[],
     }));
   }, [dim4]);
 
   return (
-    <main className="grid gap-3 p-3 xl:grid-cols-[minmax(0,560px)_minmax(0,1fr)]">
-      <Frame spacing="sm">
-        <FramePanel dense>
-          <FrameHeader className="flex-row items-center justify-between gap-2">
+    <main className="grid gap-3 p-3 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <FlowListPanel
+        title="ETF 列表"
+        countText={`共 ${rows.length} 只 · 已选 ${selectedCodes.length}`}
+        rows={rows}
+        selected={selected}
+        onToggle={toggle}
+        search={search}
+        onSearch={setSearch}
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onSort={(k) => {
+          if (k === sortKey) setSortDir((d) => -d);
+          else { setSortKey(k); setSortDir(-1); }
+        }}
+        sortOptions={[{ key: "pct", label: "涨幅" }, { key: "flow", label: "资金" }]}
+        onBatch={batch}
+        onToggleWatch={toggleWatch}
+        watchBusy={watchBusy}
+        loading={!data}
+        emptyTitle={scope === "watch" ? "还没有自选 ETF" : "暂无 ETF 数据"}
+        emptyHint={scope === "watch" ? "在「全部」里点 + 加入自选" : undefined}
+        maxHeight="calc(100vh - 20rem)"
+      />
+
+      <Frame spacing="sm" className="flex min-h-0 flex-col xl:sticky xl:top-[52px] xl:h-[calc(100vh-104px)]">
+        <FramePanel dense className="flex min-h-0 flex-1 flex-col">
+          <FrameHeader className="flex-row flex-wrap items-center justify-between gap-2 py-1.5">
             <div className="flex items-center gap-2">
-              <FrameTitle className="text-sm">ETF资金流</FrameTitle>
-              <Tabs tabs={SCOPES} value={scope} onChange={setScope} />
+              <FrameTitle className="text-sm">ETF 资金流</FrameTitle>
+              <Tabs tabs={SCOPES} value={scope} onChange={(k) => { setScope(k); setSearch(""); touched.current = false; }} />
+              <Tabs
+                tabs={[{ key: "series", label: "资金分时" }, { key: "4dim", label: "4 维拆解" }]}
+                value={view}
+                onChange={(k) => setView(k as "series" | "4dim")}
+              />
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] text-muted-foreground">数据日期 {data?.date ?? "—"}</span>
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span>数据日期 {data?.date ?? "—"}</span>
               {data?.is_today === false && <Badge variant="warning-light">历史</Badge>}
               {health?.trading ? <Badge variant="success-light">交易中</Badge> : <Badge variant="outline">休市</Badge>}
               <button
-                type="button"
-                onClick={() => void refresh()}
-                title="立即刷新（读本地库）"
-                aria-label="刷新"
-                className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                type="button" onClick={() => refresh()} title="刷新" aria-label="刷新"
+                className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground"
               >
                 <RefreshCw className="size-3" aria-hidden />
               </button>
             </div>
           </FrameHeader>
 
-          <div className="max-h-[calc(100vh-11rem)] overflow-auto border-t border-border/60">
+          <div className="flex min-h-0 flex-1 flex-col px-1 pb-1">
             {error ? (
-              <EmptyState title="接口失败" hint={String(error)} />
+              <EmptyState title="接口失败" hint={String(error)} className="flex-1" />
             ) : !data ? (
-              <div className="flex flex-col gap-1 p-3">
-                {Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-7 w-full" />)}
-              </div>
-            ) : rows.length === 0 ? (
-              <EmptyState title={scope === "watch" ? "还没有自选 ETF" : "暂无 ETF 数据"}
-                hint={scope === "watch" ? "在全部列表里点右侧星标即可加入自选" : (data.error ?? "交易时段每 30 秒采集一次")} />
-            ) : (
-              <table className="w-full border-collapse text-xs">
-                <thead className="sticky top-0 z-10 bg-card/95 backdrop-blur">
-                  <tr className="text-left text-[11px] text-muted-foreground">
-                    <th className="w-10 px-2 py-1.5 font-normal">#</th>
-                    <th className="px-2 py-1.5 font-normal">ETF</th>
-                    <th className="px-2 py-1.5 text-right font-normal">主力净流入</th>
-                    <th className="px-2 py-1.5 text-right font-normal">涨跌幅</th>
-                    <th className="w-10 px-2 py-1.5" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r, i) => (
-                    <tr key={r.code}
-                      onClick={() => { setDimCode(r.code); setView("focus"); }}
-                      className={cn("cursor-pointer border-t border-border/40 hover:bg-muted/40",
-                        selected === r.code && "bg-muted/25")}>
-                      <td className="px-2 py-1 tnum text-muted-foreground">{i + 1}</td>
-                      <td className="px-2 py-1">
-                        <span className="font-medium">{r.name}</span>
-                        <span className="ml-1.5 text-[10px] text-muted-foreground">{r.code}</span>
-                        {r.type === "broad" && <Badge variant="outline" className="ml-1.5">宽基</Badge>}
-                      </td>
-                      <td className={cn("px-2 py-1 text-right tnum", (r.flow ?? 0) >= 0 ? "text-up" : "text-down")}>
-                        {signedYi(r.flow)}
-                      </td>
-                      <td className={cn("px-2 py-1 text-right tnum", clsUpDown(r.pct))}>{pct(r.pct)}</td>
-                      <td className="px-2 py-1 text-center">
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); void toggleWatch(r); }}
-                          aria-label={r.watch ? "移出自选" : "加入自选"}
-                          title={r.watch ? "移出自选" : "加入自选"}
-                          className={cn("rounded p-0.5 transition-colors hover:text-warning",
-                            r.watch ? "text-warning" : "text-muted-foreground/50")}
-                        >
-                          {busy === r.code
-                            ? <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                            : <Star className="size-3.5" fill={r.watch ? "currentColor" : "none"} aria-hidden />}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </FramePanel>
-      </Frame>
-
-      <Frame spacing="sm" className="self-start xl:sticky xl:top-[52px]">
-        <FramePanel dense>
-          <FrameHeader className="flex-row items-center justify-between">
-            <div className="flex items-center gap-2">
-              <FrameTitle className="text-sm">资金分时</FrameTitle>
-              <Tabs
-                tabs={[
-                  { key: "series", label: "前 8 分时" },
-                  { key: "focus", label: "选中分时" },
-                  { key: "4dim", label: "4 维拆解" },
-                ]}
-                value={view}
-                onChange={setView}
-              />
-            </div>
-            <span className="truncate text-[10px] text-muted-foreground">
-              {view === "series"
-                ? `${data?.date ?? ""} · ${series?.points ?? 0} 个分时点`
-                : `${rows.find((r) => r.code === selected)?.name ?? selected ?? "—"} · 累计净流入`}
-            </span>
-          </FrameHeader>
-
-          <div className="px-2 pb-2">
-            {view === "series" ? (
-              !series ? (
-                <Skeleton className="h-[340px] w-full" />
-              ) : !series.axis?.length ? (
-                <EmptyState title="暂无分时数据" hint={series.error ?? "该日还没有累积到分时点"} />
+              <Skeleton className="m-2 h-[380px]" />
+            ) : view === "series" ? (
+              !chartCodes.length ? (
+                <EmptyState title="还没有选中 ETF" hint="在左侧勾选，或点「流入Top10」批量激活" className="flex-1" />
+              ) : !series?.axis?.length ? (
+                <EmptyState title="暂无分时数据" hint={(series as any)?.error ?? "加载中…"} className="flex-1" />
               ) : (
                 <>
-                  <MoneyLinesChart id="etf-flow-lines" axis={series.axis} series={series.series as any}
-                    height={360} maxLines={LINES} />
-                  <div className="flex flex-wrap gap-x-3 gap-y-1 px-1 pt-1 text-[10px] text-muted-foreground">
-                    {series.series.slice(0, LINES).map((s: any) => (
+                  <div className="min-h-0 flex-1">
+                    <MoneyLinesChart id="etf-flow-lines" axis={series.axis} series={series.series as any}
+                      height="100%" maxLines={MAX_LINES} />
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 px-2 pb-1 text-[10px] text-muted-foreground">
+                    {series.series.slice(0, MAX_LINES).map((s: any) => (
                       <span key={s.code} className="inline-flex items-center gap-1">
                         <span className="inline-block size-1.5 rounded-full bg-primary/70" />
                         {s.name}
@@ -212,41 +231,17 @@ export function EtfFlowPage() {
                   </div>
                 </>
               )
-            ) : view === "focus" ? (
-              !selected ? (
-                <EmptyState title="选择一只 ETF" hint="点左侧任意一行看它自己的资金分时" />
-              ) : !focus ? (
-                <Skeleton className="h-[340px] w-full" />
-              ) : !focus.axis?.length ? (
-                <EmptyState title="暂无分时数据" hint={focus.error ?? "该日还没有累积到分时点"} />
-              ) : (
-                <>
-                  <MoneyLinesChart id={`etf-focus-${selected}`} axis={focus.axis}
-                    series={focus.series as any} height={360} maxLines={1} />
-                  <div className="flex flex-wrap gap-x-3 gap-y-1 px-1 pt-1 text-[10px] text-muted-foreground">
-                    {(focus.series as any[]).map((s: any) => (
-                      <span key={s.code} className="inline-flex items-center gap-1">
-                        <span className="inline-block size-1.5 rounded-full bg-primary/70" />
-                        {s.name}
-                        <span className={cn("tnum", (s.last ?? 0) >= 0 ? "text-up" : "text-down")}>
-                          {signedYi(s.last)}
-                        </span>
-                      </span>
-                    ))}
-                  </div>
-                </>
-              )
-            ) : !selected ? (
-              <EmptyState title="选择一只 ETF" hint="点左侧任意一行看它的 4 维资金结构" />
-            ) : !dim4 ? (
-              <Skeleton className="h-[340px] w-full" />
+            ) : !dimCode ? (
+              <EmptyState title="还没有选中 ETF" hint="先勾选一只，再看它的 4 维资金结构" className="flex-1" />
             ) : !dimSeries.length ? (
-              <EmptyState title="暂无 4 维数据" hint={dim4.error ?? "该日还没有累积到分时点"} />
+              <EmptyState title="暂无 4 维数据" hint={dim4?.error ?? "加载中…"} className="flex-1" />
             ) : (
               <>
-                <MoneyLinesChart id={`etf-4dim-${selected}`} axis={dim4.axis} series={dimSeries as any}
-                  height={360} maxLines={5} />
-                <div className="flex flex-wrap gap-x-3 gap-y-1 px-1 pt-1 text-[10px] text-muted-foreground">
+                <div className="min-h-0 flex-1">
+                  <MoneyLinesChart id={`etf-4dim-${dimCode}`} axis={dim4!.axis} series={dimSeries as any}
+                    height="100%" maxLines={5} />
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 px-2 pb-1 text-[10px] text-muted-foreground">
                   {dimSeries.map((s: any) => (
                     <span key={s.code} className="inline-flex items-center gap-1">
                       <span className="inline-block size-1.5 rounded-full bg-primary/70" />

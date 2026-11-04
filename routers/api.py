@@ -725,11 +725,9 @@ async def board_series(codes: str = Query("", description="逗号分隔的板块
 
     watch = {w["code"] for w in await asyncio.to_thread(bf.load_watch)}
     meta = {r["code"]: r for r in rank}
-    # 指数 / 全 A 不在板块排行里，用标的清单补中文名（否则图例只显示 secid）
-    from services.universe import INDICES
-    for it in INDICES:
-        meta.setdefault(it["secid"], {"name": it["name"], "type": "index"})
-    meta.setdefault(bf.EM_MARKET_CODE, {"name": bf.EM_MARKET_NAME, "type": "market"})
+    # 指数 / 全 A 不在板块排行里，用名称表补中文名（否则图例只显示 secid）
+    for code, name in bf.INDEX_NAMES.items():
+        meta.setdefault(code, {"name": name, "type": "index"})
     if not wanted:
         pool = [r for r in rank if r["type"] == type] or rank
         wanted = [r["code"] for r in pool[:8]]
@@ -1151,7 +1149,6 @@ async def em_flow_series(target_type: str = Query("index", description="index / 
 @router.get("/board/index-rank")
 async def board_index_rank(date: str | None = Query(None)):
     """指数/全 A 排行（由 4 维资金表的「机构 + 大单」合成主力净流入）。"""
-    from services.universe import INDICES
 
     if not date:
         try:
@@ -1160,8 +1157,7 @@ async def board_index_rank(date: str | None = Query(None)):
             dates = []
         date = dates[0] if dates else dt.date.today().isoformat()
 
-    names = {i["secid"]: i["name"] for i in INDICES}
-    names[bf.EM_MARKET_CODE] = bf.EM_MARKET_NAME
+    names = dict(bf.INDEX_NAMES)
     try:
         rows = await asyncio.to_thread(bf.latest_em_flows, date)
     except Exception as exc:  # noqa: BLE001
@@ -1201,9 +1197,7 @@ async def board_multi_series(codes: str = Query(""), start: str | None = Query(N
         start, end = end, start
     window = [d for d in asc if start <= d <= end]
 
-    from services.universe import INDICES
-    names = {i["secid"]: i["name"] for i in INDICES}
-    names[bf.EM_MARKET_CODE] = bf.EM_MARKET_NAME
+    names = dict(bf.INDEX_NAMES)
     try:
         rank = await asyncio.to_thread(bf.read_rank, end)
     except Exception:  # noqa: BLE001
@@ -1214,6 +1208,7 @@ async def board_multi_series(codes: str = Query(""), start: str | None = Query(N
     axis: list[str] = []
     day_breaks: list[str] = []
     per: dict[str, list[float | None]] = {c: [] for c in wanted}
+    offsets: dict[str, float] = {c: 0.0 for c in wanted}
     try:
         for d in window:
             bk = [c for c in wanted if c.startswith("BK")]
@@ -1230,7 +1225,18 @@ async def board_multi_series(codes: str = Query(""), start: str | None = Query(N
             by_code = {s["code"]: s["values"] for s in aligned["series"]}
             for c in wanted:
                 vals = by_code.get(c)
-                per[c].extend(vals if vals else [None] * len(labels))
+                vals = vals if vals else [None] * len(labels)
+                # 「区间累计」：把前几天每天的累计额加到当天曲线上，跨日不断层
+                offset = offsets.get(c, 0.0)
+                last = None
+                shifted = [(None if v is None else v + offset) for v in vals]
+                for v in reversed(shifted):
+                    if v is not None:
+                        last = v
+                        break
+                if last is not None:
+                    offsets[c] = last
+                per[c].extend(shifted)
     except Exception as exc:  # noqa: BLE001
         return {"axis": [], "series": [], "day_breaks": [], "error": str(exc)}
 

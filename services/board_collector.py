@@ -233,6 +233,8 @@ async def _em_cycle(now: dt.datetime) -> None:
     if mono - _em_last["index"] >= _EM_INDEX_INTERVAL:
         _em_last["index"] = mono
         targets += [(i["secid"], "index", i["name"]) for i in INDICES]
+        # 历史数据里出现过、universe 里没有的指数（中证2000），保持继续采集
+        targets.append(("2.932000", "index", "中证2000"))
         targets.append((bf.EM_MARKET_CODE, "market", bf.EM_MARKET_NAME))
 
     if mono - _em_last["industry"] >= _EM_INDUSTRY_INTERVAL:

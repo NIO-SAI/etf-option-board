@@ -77,6 +77,11 @@ export function BoardFlowPage() {
   }, [watchView]);
   const watchSet = useMemo(() => new Set(watchItems.map((i) => i.code)), [watchItems]);
 
+  // 下拉不再提供「最新」伪选项：进入时把日期固定到库内最新交易日
+  useEffect(() => {
+    if (!date && rankView?.date) setDate(rankView.date);
+  }, [date, rankView?.date]);
+
   const refresh = useCallback(() => {
     cache.current = {};
     void refreshRank();
@@ -492,7 +497,6 @@ export function BoardFlowPage() {
                 onChange={(e) => setDate(e.target.value)}
                 className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
-                <option value="">最新（{rankView?.date ?? "—"}）</option>
                 {dates.map((d) => <option key={d} value={d}>{d}</option>)}
               </select>
               <button

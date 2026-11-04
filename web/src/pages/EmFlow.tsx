@@ -14,7 +14,6 @@ import { cn } from "@/lib/utils";
 const TARGETS = [
   { key: "index", label: "指数" },
   { key: "industry", label: "行业" },
-  { key: "market", label: "全A" },
 ];
 const DIM_LABEL: Record<string, string> = {
   inst: "机构（超大单）", large: "大单", medium: "中户", retail: "散户",
@@ -37,7 +36,6 @@ export function EmFlowPage() {
   // 目标缺省：指数取第一个、行业取展示列表第一个、全A 固定
   const effectiveCode = useMemo(() => {
     if (code) return code;
-    if (kind === "market") return targets?.market?.code ?? "";
     if (kind === "index") return targets?.indices?.[0]?.code ?? "";
     return industries?.display?.[0]?.code ?? "";
   }, [code, kind, targets, industries]);
@@ -59,15 +57,12 @@ export function EmFlowPage() {
   }, [series]);
 
   const nameOf = useMemo(() => {
-    if (kind === "market") return targets?.market?.name ?? "东方财富全A";
     if (kind === "index") return targets?.indices?.find((i: any) => i.code === effectiveCode)?.name ?? effectiveCode;
     return industries?.display?.find((i: any) => i.code === effectiveCode)?.name ?? effectiveCode;
   }, [kind, effectiveCode, targets, industries]);
 
   const options: { code: string; name: string }[] =
-    kind === "market" ? (targets?.market ? [targets.market] : [])
-      : kind === "index" ? (targets?.indices ?? [])
-        : (industries?.display ?? []);
+    kind === "index" ? (targets?.indices ?? []) : (industries?.display ?? []);
 
   return (
     <main className="grid gap-3 p-3 xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
