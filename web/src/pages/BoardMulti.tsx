@@ -6,7 +6,7 @@ import { Badge } from "@/components/reui/badge";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
 import { FlowListPanel, type BatchMode, type SortKey } from "@/components/FlowListPanel";
 import { BoardDetailDrawer } from "@/components/BoardDetailDrawer";
-import { MoneyLinesChart } from "@/components/charts";
+import { BoardFlowChart, type FlowLine } from "@/components/charts";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
@@ -33,6 +33,8 @@ export function BoardMultiPage() {
   const [detailCode, setDetailCode] = useState<{ code: string; name: string } | null>(null);
   const [watchItems, setWatchItems] = useState<{ code: string; name: string }[]>([]);
   const [watchBusy, setWatchBusy] = useState<Record<string, boolean>>({});
+  const [hoverCode, setHoverCode] = useState<string | null>(null);
+  const [tempLine, setTempLine] = useState<FlowLine | null>(null);
   const touched = useRef(false);
 
   const { data: health } = usePolling(() => api.boardHealth(), 60_000, [], { kind: "ctx", code: "board-health" });
@@ -113,9 +115,19 @@ export function BoardMultiPage() {
     { kind: "bseries", code: `multi:${codesKey}`, extra: `${start || "auto"}:${end || "auto"}` },
   );
 
-  const chartSeries = (intraday?.series ?? []).map((s: any) => ({
-    code: s.code, name: s.name, values: s.values,
-  }));
+  const chartAxis: string[] = intraday?.axis ?? [];
+  const chartLines: FlowLine[] = (intraday?.series ?? []).map((s: any) => {
+    const pts: [string, number][] = [];
+    (s.values ?? []).forEach((v: number | null, i: number) => {
+      if (v != null) pts.push([chartAxis[i], v]);
+    });
+    return {
+      code: s.code,
+      name: s.name,
+      points: pts,
+      pct: rows.find((r) => r.code === s.code)?.pct ?? null,
+    };
+  });
 
   const toggle = (code: string) => {
     touched.current = true;
@@ -159,6 +171,22 @@ export function BoardMultiPage() {
     }
   };
 
+  /** 悬停未勾选的板块 → 临时拉它的区间曲线，画橙色虚线预览 */
+  const ensureTemp = async (row: any) => {
+    try {
+      const d = await api.boardMultiSeries(row.code, start || data?.start, end || data?.end);
+      const s0: any = (d?.series ?? [])[0];
+      if (!s0) return;
+      const pts: [string, number][] = [];
+      (s0.values ?? []).forEach((v: number | null, i: number) => {
+        if (v != null) pts.push([(d.axis ?? [])[i], v]);
+      });
+      setTempLine({ code: s0.code, name: s0.name ?? row.name, points: pts });
+    } catch {
+      /* 忽略 */
+    }
+  };
+
   const quickRange = (n: number) => {
     const asc = [...(data?.available_dates ?? [])].sort();
     if (!asc.length) return;
@@ -192,6 +220,15 @@ export function BoardMultiPage() {
         onDetail={(r) => setDetailCode({ code: r.code, name: r.name })}
         onToggleWatch={toggleWatch}
         watchBusy={watchBusy}
+        onHoverRow={(code) => {
+          if (!code) { setHoverCode(null); setTempLine(null); return; }
+          const on = !!selected[code];
+          setHoverCode(on ? code : null);
+          if (!on) {
+            const row = rows.find((r) => r.code === code);
+            if (row) void ensureTemp(row);
+          }
+        }}
         loading={!data}
         emptyTitle="暂无区间数据"
         emptyHint={data?.error ?? undefined}
@@ -250,20 +287,20 @@ export function BoardMultiPage() {
               <EmptyState title="接口失败" hint={String(error)} className="flex-1" />
             ) : !data ? (
               <Skeleton className="m-2 h-[380px]" />
-            ) : !chartSeries.length ? (
+            ) : !chartLines.length ? (
               <EmptyState title={selectedCodes.length ? "加载分钟级曲线…" : "还没有选中板块"}
                 hint={selectedCodes.length ? undefined : "在左侧勾选，或点「流入Top10」批量激活"}
                 className="flex-1" />
             ) : (
               <div className="min-h-0 flex-1">
-                <MoneyLinesChart
+                <BoardFlowChart
                   id="board-multi-lines"
-                  axis={intraday?.axis ?? []}
-                  series={chartSeries as any}
+                  lines={chartLines}
+                  hoverCode={hoverCode}
+                  temp={tempLine}
                   height="100%"
-                  maxLines={MAX_LINES}
+                  onHoverCode={setHoverCode}
                   vLines={intraday?.day_breaks ?? []}
-                  showEndLabel
                 />
               </div>
             )}

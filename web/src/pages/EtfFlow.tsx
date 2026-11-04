@@ -33,6 +33,9 @@ export function EtfFlowPage() {
   const [watchItems, setWatchItems] = useState<{ code: string; name: string }[]>([]);
   const [watchBusy, setWatchBusy] = useState<Record<string, boolean>>({});
   const [hoverCode, setHoverCode] = useState<string | null>(null);
+  const [tempLine, setTempLine] = useState<FlowLine | null>(null);
+  // 悬停未勾选 ETF 的临时分时（95 秒内复用，避免来回悬停重复请求）
+  const tempCache = useRef<Record<string, { line: FlowLine; at: number }>>({});
   const touched = useRef(false);
 
   const { data: health } = usePolling(() => api.boardHealth(), 60_000, [], { kind: "ctx", code: "board-health" });
@@ -167,6 +170,30 @@ export function EtfFlowPage() {
       .every((k) => !((d as any)[k] ?? []).some((v: any) => v));
   }, [dim4]);
 
+  /** 悬停未勾选的 ETF：按需拉一次它的分时，画橙色虚线预览（不改勾选） */
+  const ensureTemp = async (row: FlowRow) => {
+    const hit = tempCache.current[row.code];
+    if (hit && Date.now() - hit.at < 95_000) {
+      setTempLine(hit.line);
+      return;
+    }
+    try {
+      const d = await api.etfFlowSeries(row.code);
+      const s0: any = (d?.series ?? [])[0];
+      if (!s0) return;
+      const axis: string[] = d.axis ?? [];
+      const pts: [string, number][] = [];
+      (s0.values ?? []).forEach((v: number | null, i: number) => {
+        if (v != null) pts.push([axis[i], v]);
+      });
+      const line: FlowLine = { code: s0.code, name: s0.name ?? row.name, points: pts, pct: row.pct ?? null };
+      tempCache.current[row.code] = { line, at: Date.now() };
+      setTempLine(line);
+    } catch {
+      /* 忽略：拿不到就只高亮列表，不画虚线 */
+    }
+  };
+
   const dimSeries = useMemo(() => {
     if (!dim4?.axis?.length) return [];
     return Object.entries(dim4.dims ?? {}).map(([k, v]) => ({
@@ -194,7 +221,15 @@ export function EtfFlowPage() {
         onBatch={batch}
         onToggleWatch={toggleWatch}
         watchBusy={watchBusy}
-        onHoverRow={setHoverCode}
+        onHoverRow={(code) => {
+          if (!code) { setHoverCode(null); setTempLine(null); return; }
+          const on = !!selected[code];
+          setHoverCode(on ? code : null);
+          if (!on) {
+            const row = rows.find((r) => r.code === code);
+            if (row) void ensureTemp(row);
+          }
+        }}
         loading={!data}
         emptyTitle={scope === "watch" ? "还没有自选 ETF" : "暂无 ETF 数据"}
         emptyHint={scope === "watch" ? "在「全部」里点 + 加入自选" : undefined}
@@ -240,18 +275,7 @@ export function EtfFlowPage() {
                 <>
                   <div className="min-h-0 flex-1">
                     <BoardFlowChart id="etf-flow-lines" lines={etfLines} hoverCode={hoverCode}
-                      height="100%" onHoverCode={setHoverCode} />
-                  </div>
-                  <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 px-2 pb-1 text-[10px] text-muted-foreground">
-                    {etfLines.slice(0, 30).map((s) => (
-                      <span key={s.code} className="inline-flex items-center gap-1">
-                        <span className="inline-block size-1.5 rounded-full bg-primary/70" />
-                        {s.name}
-                        <span className="tnum text-foreground/80">
-                          {signedYi(s.points.length ? s.points[s.points.length - 1][1] : null)}
-                        </span>
-                      </span>
-                    ))}
+                      temp={tempLine} height="100%" onHoverCode={setHoverCode} />
                   </div>
                 </>
               )

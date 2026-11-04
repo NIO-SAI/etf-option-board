@@ -891,7 +891,7 @@ export type FlowLine = {
 
 /** 板块资金分时：多条线叠加，线末标签显示「名称 + 资金 + 涨跌幅」，悬停时其余线变淡。 */
 export function BoardFlowChart({
-  id, lines, hoverCode, temp, height = 420, onHoverCode,
+  id, lines, hoverCode, temp, height = 420, onHoverCode, vLines,
 }: {
   id: string;
   lines: FlowLine[];
@@ -900,6 +900,8 @@ export function BoardFlowChart({
   height?: number | string;
   /** 鼠标直接落在曲线上时也切换聚焦（红涨绿跌分段） */
   onHoverCode?: (code: string | null) => void;
+  /** 多日图：在这些刻度画竖向虚线做日分隔 */
+  vLines?: string[];
 }) {
   const option = useMemo(() => {
     const timeSet = new Set<string>();
@@ -953,33 +955,52 @@ export function BoardFlowChart({
       };
     });
 
-    // 悬停的线按「逐分钟资金变化」拆成红涨绿跌的小段（与 stock-webui 一致）。
-    // 段数过多（超长序列）时跳过，避免几百个 series 拖慢渲染。
+    // 悬停的线按「逐分钟资金变化」拆成红涨绿跌的折线（与 stock-webui 一致）。
+    // 连续同向的分钟合并成一条折线，方向反转才切段——800+ 个点也不会产生上千个 series。
     const focused = hoverCode ? lines.find((l) => l.code === hoverCode) : null;
-    if (focused && focused.points.length > 1 && focused.points.length <= 600) {
-      const idx = new Map(times.map((t, i) => [t, i] as const));
+    if (focused && focused.points.length > 1) {
       const vals = toValues(focused.points);
+      let segStart = 0;
+      let segUp: boolean | null = null;
+      const flush = (end: number) => {
+        if (segUp == null || end <= segStart) return;
+        const data: (number | null)[] = new Array(times.length).fill(null);
+        let lastIdx = -1;
+        for (let i = segStart; i <= end; i++) {
+          if (vals[i] != null) {
+            data[i] = vals[i];
+            lastIdx = i;
+          }
+        }
+        if (lastIdx < 0) return;
+        series.push({
+          id: `${focused.code}_seg_${segStart}_${end}`,
+          name: `${focused.name}_seg${segStart}`,
+          type: "line",
+          data,
+          showSymbol: false,
+          silent: true,
+          lineStyle: { width: 3.2, color: segUp ? "#ef4444" : "#22c55e", opacity: 1 },
+          itemStyle: { color: segUp ? "#ef4444" : "#22c55e" },
+          emphasis: { disabled: true },
+          z: 10,
+        });
+      };
       for (let i = 1; i < times.length; i++) {
         const cur = vals[i];
         const prev = vals[i - 1];
         if (cur == null || prev == null) continue;
         const up = cur >= prev;
-        const data: (number | null)[] = new Array(times.length).fill(null);
-        data[i - 1] = prev;
-        data[i] = cur;
-        series.push({
-          id: `${focused.code}_seg_${i}`,
-          name: `${focused.name}_seg${i}`,
-          type: "line",
-          data,
-          showSymbol: false,
-          silent: true,
-          lineStyle: { width: 3.2, color: up ? "#ef4444" : "#22c55e", opacity: 1 },
-          itemStyle: { color: up ? "#ef4444" : "#22c55e" },
-          emphasis: { disabled: true },
-          z: 10,
-        });
+        if (segUp == null) {
+          segUp = up;
+          segStart = i - 1;
+        } else if (up !== segUp) {
+          flush(i - 1);
+          segStart = i - 1;
+          segUp = up;
+        }
       }
+      flush(times.length - 1);
     }
 
     if (temp) {
@@ -1064,7 +1085,18 @@ export function BoardFlowChart({
       },
       series,
     };
-  }, [lines, hoverCode, temp]);
+  }, [lines, hoverCode, temp, vLines]);
+
+  // 日分隔竖虚线（多日图）：挂在第一条线，避免重复绘制
+  if (vLines?.length && option.series.length) {
+    (option.series[0] as any).markLine = {
+      symbol: "none",
+      silent: true,
+      label: { show: false },
+      lineStyle: { color: "rgba(228,228,231,0.55)", type: [5, 4], width: 1.5 },
+      data: vLines.map((v) => ({ xAxis: v })),
+    };
+  }
 
   const times = useMemo(() => {
     const s = new Set<string>();
