@@ -61,6 +61,9 @@ export const api = {
   boardHealth: () => get("/board/health"),
   boardRank: (type = "concept", date?: string) =>
     get(`/board/rank?type=${type}${date ? `&date=${date}` : ""}`),
+  boardSeries: (codes: string, date?: string, type = "concept") =>
+    get(`/board/series?codes=${encodeURIComponent(codes)}&type=${type}${date ? `&date=${date}` : ""}`),
+  boardDates: (limit = 60) => get(`/board/dates?limit=${limit}`),
   boardWatch: () => get("/board/watch"),
   boardWatchAdd: async (code: string, name: string) =>
     (await fetch(`${BASE}/board/watch?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`,

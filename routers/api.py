@@ -692,3 +692,53 @@ async def board_watch_remove(code: str = Query(...)):
     if not await asyncio.to_thread(bf.save_watch, items):
         return {"error": "自选板块写入失败"}
     return {"items": items}
+
+
+@router.get("/board/series")
+async def board_series(codes: str = Query("", description="逗号分隔的板块代码，缺省取当前口径前 8"),
+                       date: str | None = Query(None),
+                       type: str = Query("concept", description="codes 缺省时按此口径取前 8")):
+    """板块当日资金分时（多线，已按统一时间轴对齐）。只读本地库。"""
+    if not date:
+        dates = await asyncio.to_thread(bf.available_dates, 1)
+        date = dates[0] if dates else dt.date.today().isoformat()
+
+    wanted = [c.strip() for c in codes.split(",") if c.strip()]
+    try:
+        rank = await asyncio.to_thread(bf.read_rank, date)
+    except Exception as exc:  # noqa: BLE001
+        return {"date": date, "axis": [], "series": [], "error": f"板块库读取失败: {exc}"}
+
+    watch = {w["code"] for w in await asyncio.to_thread(bf.load_watch)}
+    meta = {r["code"]: r for r in rank}
+    if not wanted:
+        pool = [r for r in rank if r["type"] == type] or rank
+        wanted = [r["code"] for r in pool[:8]]
+
+    try:
+        points = await asyncio.to_thread(bf.read_points, date, wanted)
+    except Exception as exc:  # noqa: BLE001
+        return {"date": date, "axis": [], "series": [], "error": f"分时数据读取失败: {exc}"}
+
+    aligned = bf.build_series(points)
+    for s in aligned["series"]:
+        r = meta.get(s["code"]) or {}
+        s["name"] = r.get("name") or s["code"]
+        s["type"] = r.get("type")
+        s["watch"] = s["code"] in watch
+    points_n = sum(len(v) for v in points.values())
+    out = {"date": date, "axis": aligned["axis"], "series": aligned["series"],
+           "codes": wanted, "points": points_n}
+    if points_n < 2:
+        out["error"] = "当日分时点不足（服务启动后从下一分钟开始累积）"
+    return out
+
+
+@router.get("/board/dates")
+async def board_dates(limit: int = Query(60, ge=1, le=240)):
+    """可回看的日期（有排行快照的交易日）。"""
+    try:
+        dates = await asyncio.to_thread(bf.available_dates, limit)
+    except Exception:  # noqa: BLE001
+        dates = []
+    return {"dates": dates, "today": dt.date.today().isoformat()}

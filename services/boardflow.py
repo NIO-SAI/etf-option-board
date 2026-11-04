@@ -147,6 +147,27 @@ def assign_ranks_by_type(rows: Iterable[dict], prev: dict[str, int] | None = Non
     return out
 
 
+def build_series(points_by_code: dict[str, list[tuple[str, float]]]) -> dict:
+    """把各板块的 (时间, 累计净流入) 点拼成同一条时间轴（前值填充 + 缺失留空）。
+
+    纯函数：入参是已按日期取出的点，不做同日校验以外的任何 I/O。
+    某板块在轴上出现前的时点为 None（前端断线而不是画到 0）。
+    """
+    pts = {code: sorted(v or [], key=lambda x: str(x[0])) for code, v in (points_by_code or {}).items()}
+    axis = sorted({str(t) for rows in pts.values() for t, _ in rows})
+    series = []
+    for code, rows in pts.items():
+        lookup = {str(t): float(v) for t, v in rows}
+        vals: list[float | None] = []
+        last: float | None = None
+        for t in axis:
+            if t in lookup:
+                last = lookup[t]
+            vals.append(last)
+        series.append({"code": code, "values": vals, "last": last})
+    return {"axis": axis, "series": series}
+
+
 def prune_plan(today: dt.date, point_dates: Iterable[str], rank_dates: Iterable[str],
                keep_points: int = KEEP_POINT_DAYS, keep_rank: int = KEEP_RANK_DAYS) -> dict:
     """算出应删除的日期列表（纯函数，只返回计划，不删数据）。
@@ -238,6 +259,22 @@ def read_rank(date: str, board_type: str | None = None) -> list[dict]:
         cur = conn.execute(sql, args)
         cols = [c[0] for c in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def read_points(date: str, codes: list[str]) -> dict[str, list[tuple[str, float]]]:
+    """按日期 + 板块代码取资金分时点；空入参直接返回空。"""
+    codes = [c for c in (codes or []) if c]
+    if not codes:
+        return {}
+    marks = ",".join("?" for _ in codes)
+    with _db() as conn:
+        cur = conn.execute(
+            f"SELECT code, time, flow FROM flow_points WHERE date=? AND code IN ({marks}) ORDER BY time",
+            [date, *codes])
+        out: dict[str, list[tuple[str, float]]] = {c: [] for c in codes}
+        for code, t, flow in cur.fetchall():
+            out.setdefault(str(code), []).append((str(t), float(flow)))
+    return out
 
 
 def available_dates(limit: int = 60) -> list[str]:

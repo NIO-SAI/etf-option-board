@@ -666,3 +666,68 @@ export function Sparkline({ data, up, height = 24, width = 54 }: { data: number[
     </svg>
   );
 }
+
+/** 板块资金多线图：统一时间轴、前值填充后的累计净流入（元 → 亿/万显示）。 */
+export function MoneyLinesChart({
+  id, axis, series, height = 320, maxLines = 8,
+}: {
+  id: string;
+  axis: string[];
+  series: { code: string; name: string; values: (number | null)[]; watch?: boolean }[];
+  height?: number;
+  maxLines?: number;
+}) {
+  const colors = ["#ef4444", "#f59e0b", "#a855f7", "#3b82f6", "#14b8a6", "#ec4899", "#84cc16", "#f97316"];
+  const shown = (series ?? []).slice(0, maxLines);
+  const option = useMemo(() => ({
+    animation: false,
+    color: colors,
+    grid: { left: 54, right: 12, top: 10, bottom: 24 },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "cross" },
+      backgroundColor: "rgba(24,24,27,0.95)",
+      borderColor: "rgba(255,255,255,0.12)",
+      textStyle: { color: "#e4e4e7", fontSize: 11 },
+      formatter: (ps: any[]) => {
+        if (!ps?.length) return "";
+        const head = `<div style="margin-bottom:4px">${ps[0].axisValue}</div>`;
+        const rows = [...ps]
+          .filter((p) => p.value != null)
+          .sort((a, b) => (b.value as number) - (a.value as number))
+          .map((p) => `<div style="display:flex;justify-content:space-between;gap:12px">
+            <span>${p.marker}${p.seriesName}</span><span>${signedMoney(p.value)}</span></div>`)
+          .join("");
+        return head + rows;
+      },
+    },
+    xAxis: {
+      type: "category",
+      data: axis,
+      boundaryGap: false,
+      axisLine: { lineStyle: { color: AXIS } },
+      axisLabel: {
+        color: AXIS, fontSize: 10, hideOverlap: true,
+        formatter: (v: string) => (["09:30", "10:30", "11:30", "14:00", "15:00"].includes(v) ? v : ""),
+      },
+    },
+    yAxis: {
+      type: "value",
+      scale: true,
+      axisLabel: { color: AXIS, fontSize: 10, formatter: (v: number) => signedMoney(v) },
+      splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
+    },
+    series: shown.map((s) => ({
+      name: s.name,
+      type: "line",
+      showSymbol: false,
+      smooth: false,
+      connectNulls: false,
+      lineStyle: { width: s.watch ? 2.4 : 1.4 },
+      data: s.values,
+    })),
+  }), [axis, shown]);
+
+  if (!axis.length) return null;
+  return <ReactECharts key={id} option={option} notMerge style={{ height }} />;
+}

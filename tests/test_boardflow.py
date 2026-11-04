@@ -125,3 +125,27 @@ class TestAssignRanksByType:
     def test_missing_type_defaults_to_concept(self):
         out = bf.assign_ranks_by_type([{"code": "BK1", "flow": 1.0}])
         assert out[0]["rank"] == 1
+
+
+class TestBuildSeries:
+    def test_aligns_on_union_axis_with_forward_fill(self):
+        pts = {
+            "BK1": [("09:31", 1.0), ("09:33", 3.0)],
+            "BK2": [("09:32", -2.0)],
+        }
+        out = bf.build_series(pts)
+        assert out["axis"] == ["09:31", "09:32", "09:33"]
+        s1 = next(s for s in out["series"] if s["code"] == "BK1")
+        s2 = next(s for s in out["series"] if s["code"] == "BK2")
+        assert s1["values"] == [1.0, 1.0, 3.0]
+        assert s2["values"] == [None, -2.0, -2.0]
+        assert s1["last"] == 3.0 and s2["last"] == -2.0
+
+    def test_same_minute_last_point_wins(self):
+        out = bf.build_series({"BK1": [("09:31", 1.0), ("09:31", 2.0)]})
+        assert out["axis"] == ["09:31"]
+        assert out["series"][0]["values"] == [2.0]
+
+    def test_empty_input(self):
+        assert bf.build_series({}) == {"axis": [], "series": []}
+        assert bf.build_series({"BK1": []})["series"][0]["values"] == []

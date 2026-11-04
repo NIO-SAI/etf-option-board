@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, RefreshCw, Star } from "lucide-react";
+import { LineChart, Loader2, RefreshCw, Star } from "lucide-react";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
+import { MoneyLinesChart } from "@/components/charts";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
@@ -15,24 +16,31 @@ const TYPES = [
   { key: "industry", label: "行业" },
   { key: "watch", label: "自选" },
 ];
+const CHART_LINES = 8;
 
-/** 概念资金分时（工单 02）：先落排行表，分时曲线见工单 03。 */
+/** 概念资金分时（工单 02/03）：排行表 + 当日多板块资金曲线 + 历史日期回看。 */
 export function BoardFlowPage() {
   const [type, setType] = useState("concept");
   const [sort, setSort] = useState<SortKey>("flow");
+  const [date, setDate] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [showChart, setShowChart] = useStoredBool("board.flow-chart", true);
 
   // 采集状态：决定轮询频率（盘中 30s / 非交易 300s）
   const { data: health } = usePolling(() => api.boardHealth(), 60_000, [], { kind: "ctx", code: "board-health" });
   const trading = !!health?.trading;
   const interval = trading ? 30_000 : 300_000;
 
+  // 可回看的日期（历史回看用，很少变）
+  const { data: datesView } = usePolling(() => api.boardDates(60), 600_000, [], { kind: "ctx", code: "board-dates" });
+  const dates: string[] = datesView?.dates ?? [];
+
   // 一次把概念+行业+自选全拿回来，切标签/排序都在本地重排，不再发请求
   const { data, refresh, error } = usePolling(
-    () => api.boardRank("all"),
+    () => api.boardRank("all", date || undefined),
     interval,
-    [interval],
-    { kind: "brank", code: "all" },
+    [interval, date],
+    { kind: "brank", code: `all:${date || "latest"}` },
   );
 
   // 顶栏刷新按钮 → 本页也刷一次
@@ -52,22 +60,35 @@ export function BoardFlowPage() {
     return list;
   }, [rows, sort]);
 
+  // 曲线固定取「主力净流入前 8」，与表格排序解耦：换排序不再触发请求
+  const chartCodes = useMemo(() => {
+    const pool = [...rows].sort((a, b) => (b.flow ?? 0) - (a.flow ?? 0)).slice(0, CHART_LINES);
+    return pool.map((r) => r.code);
+  }, [rows]);
+  const codesKey = chartCodes.join(",");
+
+  const { data: series, refresh: refreshSeries } = usePolling(
+    () => (codesKey ? api.boardSeries(codesKey, date || undefined, type) : Promise.resolve({ axis: [], series: [] } as any)),
+    interval,
+    [codesKey, date, interval],
+    { kind: "bseries", code: `${type}:${codesKey}`, extra: date || null },
+  );
+
   const last = health?.last;
   const toggleWatch = async (r: any) => {
-    const key = r.code;
     if (busy) return;
-    setBusy(key);
+    setBusy(r.code);
     try {
-      if (r.watch) await api.boardWatchRemove(key);
-      else await api.boardWatchAdd(key, r.name);
-      await refresh();
+      if (r.watch) await api.boardWatchRemove(r.code);
+      else await api.boardWatchAdd(r.code, r.name);
+      await Promise.all([refresh(), refreshSeries()]);
     } finally {
       setBusy(null);
     }
   };
 
   return (
-    <main className="grid gap-3 p-3">
+    <main className="grid gap-3 p-3 xl:grid-cols-[minmax(0,560px)_minmax(0,1fr)]">
       <Frame spacing="sm">
         <FramePanel dense>
           <FrameHeader className="flex-row items-center justify-between gap-2">
@@ -97,9 +118,22 @@ export function BoardFlowPage() {
           </FrameHeader>
 
           <div className="flex flex-wrap items-center gap-2 px-3 pb-2 text-[11px] text-muted-foreground">
-            <span>数据日期 {data?.date ?? "—"}</span>
+            <label className="flex items-center gap-1">
+              日期
+              <select
+                id="board-flow-date"
+                name="date"
+                aria-label="回看日期"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <option value="">最新（{data?.date ?? "—"}）</option>
+                {dates.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </label>
             {data?.is_today === false && <Badge variant="warning-light">历史</Badge>}
-            <span>· 共 {rows.length} 个板块</span>
+            <span>共 {rows.length} 个板块</span>
             <span className="flex items-center gap-1">
               · 排序
               {([["flow", "主力净流入"], ["pct", "涨跌幅"], ["name", "名称"]] as [SortKey, string][]).map(([k, label]) => (
@@ -107,10 +141,8 @@ export function BoardFlowPage() {
                   key={k}
                   type="button"
                   onClick={() => setSort(k)}
-                  className={cn(
-                    "rounded px-1.5 py-0.5 transition-colors",
-                    sort === k ? "bg-muted text-foreground" : "hover:text-foreground",
-                  )}
+                  className={cn("rounded px-1.5 py-0.5 transition-colors",
+                    sort === k ? "bg-muted text-foreground" : "hover:text-foreground")}
                 >
                   {label}
                 </button>
@@ -144,7 +176,8 @@ export function BoardFlowPage() {
                 </thead>
                 <tbody>
                   {sorted.map((r, i) => (
-                    <tr key={r.code} className="border-t border-border/40 hover:bg-muted/40">
+                    <tr key={r.code} className={cn("border-t border-border/40 hover:bg-muted/40",
+                      chartCodes.includes(r.code) && "bg-muted/20")}>
                       <td className="px-2 py-1 tnum text-muted-foreground">{i + 1}</td>
                       <td className="px-2 py-1">
                         <span className="font-medium">{r.name}</span>
@@ -163,10 +196,8 @@ export function BoardFlowPage() {
                           onClick={() => void toggleWatch(r)}
                           aria-label={r.watch ? "移出自选" : "加入自选"}
                           title={r.watch ? "移出自选" : "加入自选"}
-                          className={cn(
-                            "rounded p-0.5 transition-colors hover:text-warning",
-                            r.watch ? "text-warning" : "text-muted-foreground/50",
-                          )}
+                          className={cn("rounded p-0.5 transition-colors hover:text-warning",
+                            r.watch ? "text-warning" : "text-muted-foreground/50")}
                         >
                           {busy === r.code
                             ? <Loader2 className="size-3.5 animate-spin" aria-hidden />
@@ -177,6 +208,55 @@ export function BoardFlowPage() {
                   ))}
                 </tbody>
               </table>
+            )}
+          </div>
+        </FramePanel>
+      </Frame>
+
+      <Frame spacing="sm" className="self-start xl:sticky xl:top-[52px]">
+        <FramePanel dense>
+          <FrameHeader className="flex-row items-center justify-between">
+            <div className="flex min-w-0 items-baseline gap-2">
+              <FrameTitle className="text-sm">主力净流入 · 前 {CHART_LINES}</FrameTitle>
+              <span className="truncate text-[10px] text-muted-foreground">
+                {data?.date ?? ""} · 累计净流入（{series?.points ?? 0} 个分时点）
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowChart((v) => !v)}
+              aria-pressed={showChart}
+              disabled={!series?.axis?.length}
+              title={showChart ? "隐藏曲线" : "显示曲线"}
+              className={cn("inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-1.5 py-1 text-[11px] transition-colors",
+                showChart ? "text-foreground" : "text-muted-foreground",
+                !series?.axis?.length && "cursor-not-allowed opacity-50")}
+            >
+              <LineChart className="size-3" aria-hidden /> 曲线
+            </button>
+          </FrameHeader>
+
+          <div className="px-2 pb-2">
+            {!series ? (
+              <Skeleton className="h-[320px] w-full" />
+            ) : !series.axis?.length ? (
+              <EmptyState title="暂无分时数据" hint={series.error ?? "该板块当日还没有累积到分时点"} />
+            ) : showChart ? (
+              <>
+                <MoneyLinesChart id="board-flow-lines" axis={series.axis} series={series.series}
+                  height={340} maxLines={CHART_LINES} />
+                <div className="flex flex-wrap gap-x-3 gap-y-1 px-1 pt-1 text-[10px] text-muted-foreground">
+                  {series.series.slice(0, CHART_LINES).map((s: any) => (
+                    <span key={s.code} className="inline-flex items-center gap-1">
+                      <span className={cn("inline-block size-1.5 rounded-full", s.watch ? "bg-warning" : "bg-primary/70")} />
+                      {s.name}
+                      <span className="tnum text-foreground/80">{signedYi(s.last)}</span>
+                    </span>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <EmptyState title="曲线已隐藏" hint="点右上角「曲线」重新显示" />
             )}
           </div>
         </FramePanel>
@@ -195,4 +275,24 @@ function RankDelta({ delta, rank }: { delta: number | null; rank: number | null 
       {delta > 0 ? `↑${delta}` : `↓${-delta}`}
     </span>
   );
+}
+
+/** 布尔偏好持久化（曲线显隐跨刷新保留）。 */
+function useStoredBool(key: string, initial: boolean) {
+  const [on, setOn] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(key);
+      return v == null ? initial : v === "1";
+    } catch {
+      return initial;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, on ? "1" : "0");
+    } catch {
+      /* 隐私模式忽略 */
+    }
+  }, [key, on]);
+  return [on, setOn] as const;
 }
