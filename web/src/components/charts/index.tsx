@@ -759,11 +759,11 @@ export function MoneyLinesChart({
     if (!opt.series?.length || !axis?.length) return opt;
     const data: any[] = [];
     if (vLines?.length) {
-      vLines.forEach((v) => data.push({ xAxis: v, lineStyle: { color: "rgba(228,228,231,0.55)", type: [5, 4], width: 1.5 } }));
+      vLines.forEach((v) => data.push({ xAxis: v, lineStyle: { color: "#9ca3af", type: [5, 4], width: 1.5 } }));
     } else {
-      axis.filter((t) => isHalfHour(t)).forEach((t) => data.push({ xAxis: t, lineStyle: { color: "rgba(228,228,231,0.4)", type: [4, 4], width: 1 } }));
+      axis.filter((t) => isHalfHour(t)).forEach((t) => data.push({ xAxis: t, lineStyle: { color: "#6b7280", type: [4, 4], width: 1 } }));
     }
-    data.push({ yAxis: 0, lineStyle: { color: "rgba(228,228,231,0.55)", type: "solid", width: 1 } });
+    data.push({ yAxis: 0, lineStyle: { color: "#9ca3af", type: "solid", width: 1 } });
     opt.series[0].markLine = { symbol: "none", silent: true, label: { show: false }, data };
     return opt;
   };
@@ -1007,12 +1007,12 @@ export function BoardFlowChart({
     if (series.length && times.length) {
       const data: any[] = [];
       if (vLines?.length) {
-        vLines.forEach((v) => data.push({ xAxis: v, lineStyle: { color: "rgba(228,228,231,0.55)", type: [5, 4], width: 1.5 } }));
+        vLines.forEach((v) => data.push({ xAxis: v, lineStyle: { color: "#9ca3af", type: [5, 4], width: 1.5 } }));
       } else {
-        times.filter((t) => isHalfHour(t)).forEach((t) => data.push({ xAxis: t, lineStyle: { color: "rgba(228,228,231,0.4)", type: [4, 4], width: 1 } }));
+        times.filter((t) => isHalfHour(t)).forEach((t) => data.push({ xAxis: t, lineStyle: { color: "#6b7280", type: [4, 4], width: 1 } }));
       }
       // 0 轴：一条 1px 直线，不带任何刻度/标签
-      data.push({ yAxis: 0, lineStyle: { color: "rgba(228,228,231,0.55)", type: "solid", width: 1 } });
+      data.push({ yAxis: 0, lineStyle: { color: "#9ca3af", type: "solid", width: 1 } });
       series[0].markLine = { symbol: "none", silent: true, label: { show: false }, data };
     }
 
@@ -1048,8 +1048,8 @@ export function BoardFlowChart({
         trigger: "axis",
         axisPointer: {
           type: "cross",
-          lineStyle: { color: "rgba(228,228,231,0.55)", type: "dashed", width: 1 },
-          crossStyle: { color: "rgba(228,228,231,0.55)", type: "dashed", width: 1 },
+          lineStyle: { color: "#9ca3af", type: "dashed", width: 1 },
+          crossStyle: { color: "#9ca3af", type: "dashed", width: 1 },
           label: { backgroundColor: "#3f3f46", color: "#f4f4f5", fontSize: 10 },
         },
         backgroundColor: "rgba(24,24,27,0.95)",

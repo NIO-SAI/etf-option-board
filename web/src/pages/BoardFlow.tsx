@@ -9,6 +9,7 @@ import { BoardDetailDrawer } from "@/components/BoardDetailDrawer";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
+import { joinCodes, parseCodes, readHashParams, writeHashParams } from "@/lib/urlState";
 import { clsUpDown, pct as fmtPct, signedWanGrouped, signedYi } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -33,12 +34,16 @@ type CacheEntry = { points: [string, number][]; pct: number | null; name: string
 
 /** 板块资金分时：复刻 stock-webui /board-flow 的列表 + 叠加曲线交互。 */
 export function BoardFlowPage() {
-  const [type, setType] = useState("concept");
+  const initial = useMemo(() => readHashParams(), []);
+  const initCodes = parseCodes(initial.codes);
+  const [type, setType] = useState(initial.type ?? "concept");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("flow");
   const [sortDir, setSortDir] = useState(-1);
-  const [date, setDate] = useState("");
-  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [date, setDate] = useState(initial.date ?? "");
+  const [selected, setSelected] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(initCodes.map((c) => [c, true])),
+  );
   const [hoverCode, setHoverCode] = useState<string | null>(null);
   const [detailCode, setDetailCode] = useState<{ code: string; name: string } | null>(null);
   const [cacheVer, setCacheVer] = useState(0);
@@ -48,6 +53,10 @@ export function BoardFlowPage() {
   const inflight = useRef<Set<string>>(new Set());
   // 用户在哪些口径上手动改过勾选（决定是否还套用默认 Top10+Bottom5）
   const touched = useRef<Record<string, boolean>>({});
+  // URL 里带了勾选就视为「用户已有选择」，不再套用默认 Top10
+  useEffect(() => {
+    if (initCodes.length) touched.current[type] = true;
+  }, []);
 
   const { data: health } = usePolling(() => api.boardHealth(), 60_000, [], { kind: "ctx", code: "board-health" });
   const trading = !!health?.trading;
@@ -320,6 +329,16 @@ export function BoardFlowPage() {
     }
   };
 
+  // 状态写回 URL（刷新/分享保持）：代码过多时不写，避免超长
+  useEffect(() => {
+    const codes = Object.keys(selected).filter((c) => selected[c]);
+    writeHashParams({
+      type,
+      date: date || undefined,
+      codes: codes.length <= 80 ? joinCodes(codes) : undefined,
+    });
+  }, [type, date, selected]);
+
   const last = health?.last;
   const updatedAt = date ? `${date} 历史数据` : `更新于 ${last?.last_ts?.slice(11) ?? "—"}`;
 
@@ -475,9 +494,6 @@ export function BoardFlowPage() {
           <FrameHeader className="flex-row flex-wrap items-center justify-between gap-2 py-1.5">
             <div className="flex items-center gap-2">
               <FrameTitle className="text-sm">板块资金分时</FrameTitle>
-              {date && date !== health?.last?.date && <Badge variant="warning-light">历史</Badge>}
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
               <div className="flex items-center gap-0.5 rounded-md bg-muted/60 p-0.5">
                 {TYPES.map((t) => (
                   <button
@@ -485,13 +501,16 @@ export function BoardFlowPage() {
                     type="button"
                     onClick={() => { setType(t.key); setSearch(""); }}
                     aria-pressed={type === t.key}
-                    className={cn("rounded px-2 py-0.5 transition-colors",
+                    className={cn("rounded px-2 py-0.5 text-[11px] transition-colors",
                       type === t.key ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground")}
                   >
                     {t.label}
                   </button>
                 ))}
               </div>
+              {date && date !== health?.last?.date && <Badge variant="warning-light">历史</Badge>}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
               <select
                 id="board-flow-date" name="date" aria-label="选择日期"
                 value={date}

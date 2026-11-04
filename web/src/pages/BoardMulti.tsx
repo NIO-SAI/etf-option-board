@@ -10,6 +10,7 @@ import { BoardFlowChart, type FlowLine } from "@/components/charts";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
+import { joinCodes, parseCodes, readHashParams, writeHashParams } from "@/lib/urlState";
 import { signedYi } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -23,7 +24,9 @@ const MAX_LINES = Number.MAX_SAFE_INTEGER;
 
 /** 主力资金多日图：左侧列表（搜索/排序/批量勾选）+ 右侧分钟级累计资金曲线。 */
 export function BoardMultiPage() {
-  const [type, setType] = useState("concept");
+  const initial = useMemo(() => readHashParams(), []);
+  const initCodes = parseCodes(initial.codes);
+  const [type, setType] = useState(initial.type ?? "concept");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("flow");
   const [sortDir, setSortDir] = useState(-1);
@@ -189,6 +192,15 @@ export function BoardMultiPage() {
       /* 忽略 */
     }
   };
+
+  // 状态写回 URL（刷新/分享保持）
+  useEffect(() => {
+    const codes = Object.keys(selected).filter((c) => selected[c]);
+    writeHashParams({
+      type, start: start || undefined, end: end || undefined,
+      codes: codes.length <= 80 ? joinCodes(codes) : undefined,
+    });
+  }, [type, start, end, selected]);
 
   const quickRange = (n: number) => {
     const asc = [...(data?.available_dates ?? [])].sort();

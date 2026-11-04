@@ -9,6 +9,7 @@ import { BoardFlowChart, MoneyLinesChart, type FlowLine } from "@/components/cha
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
+import { joinCodes, parseCodes, readHashParams, writeHashParams } from "@/lib/urlState";
 import { signedYi } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +22,34 @@ const MAX_LINES = Number.MAX_SAFE_INTEGER;
 const DIM_LABEL: Record<string, string> = {
   main: "主力", super: "超大单", large: "大单", medium: "中单", small: "小单",
 };
+
+/** 4 维资金大卡片（机构/大单/主力/中户/散户）。 */
+function DimCards({
+  cards,
+}: {
+  cards: { key: string; label: string; hint: string; value: number | null; color: string }[];
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2 px-2 pb-2 sm:grid-cols-3 xl:grid-cols-5">
+      {cards.map((c) => (
+        <div
+          key={c.key}
+          className="rounded-lg border border-border/60 bg-background/50 px-3 py-2"
+          style={{ borderLeft: `4px solid ${c.color}` }}
+        >
+          <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <span className="inline-block size-1.5 rounded-full" style={{ background: c.color }} />
+            {c.label}
+          </div>
+          <div className={cn("mt-1 text-lg font-semibold tnum", (c.value ?? 0) >= 0 ? "text-up" : "text-down")}>
+            {c.value == null ? "—" : signedYi(c.value)}
+          </div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground">{c.hint}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** 图表顶部的卡片式图例：名称 + 当前值（可换行，超过 30 条提示总数）。 */
 function LegendChips({
@@ -49,19 +78,23 @@ function LegendChips({
 
 /** ETF 资金流：左侧列表（搜索/排序/批量/自选）+ 右侧多线叠加 / 4 维拆解。 */
 export function EtfFlowPage() {
-  const [scope, setScope] = useState("all");
-  const [view, setView] = useState<"series" | "4dim">("series");
+  const initial = useMemo(() => readHashParams(), []);
+  const initCodes = parseCodes(initial.codes);
+  const [scope, setScope] = useState(initial.scope ?? "all");
+  const [view, setView] = useState<"series" | "4dim">(initial.view === "4dim" ? "4dim" : "series");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("flow");
   const [sortDir, setSortDir] = useState(-1);
-  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [selected, setSelected] = useState<Record<string, boolean>>(
+    () => Object.fromEntries(initCodes.map((c) => [c, true])),
+  );
   const [watchItems, setWatchItems] = useState<{ code: string; name: string }[]>([]);
   const [watchBusy, setWatchBusy] = useState<Record<string, boolean>>({});
   const [hoverCode, setHoverCode] = useState<string | null>(null);
   const [tempLine, setTempLine] = useState<FlowLine | null>(null);
   // 悬停未勾选 ETF 的临时分时（95 秒内复用，避免来回悬停重复请求）
   const tempCache = useRef<Record<string, { line: FlowLine; at: number }>>({});
-  const touched = useRef(false);
+  const touched = useRef(initCodes.length > 0);
 
   const { data: health } = usePolling(() => api.boardHealth(), 60_000, [], { kind: "ctx", code: "board-health" });
   const interval = health?.trading ? 30_000 : 300_000;
@@ -133,6 +166,15 @@ export function EtfFlowPage() {
     [dimCode],
     { kind: "emseries", code: dimCode ?? "none" },
   );
+
+  useEffect(() => {
+    const codes = Object.keys(selected).filter((c) => selected[c]);
+    writeHashParams({
+      scope,
+      view,
+      codes: codes.length <= 80 ? joinCodes(codes) : undefined,
+    });
+  }, [scope, view, selected]);
 
   const toggle = (code: string) => {
     touched.current = true;
@@ -218,6 +260,31 @@ export function EtfFlowPage() {
       /* 忽略：拿不到就只高亮列表，不画虚线 */
     }
   };
+
+  // 4 维大卡片：优先用分时最后一点，其次实时快照
+  const dimCards = useMemo(() => {
+    const lastOf = (key: string) => {
+      const arr = (dim4?.dims as any)?.[key] as (number | null)[] | undefined;
+      const vals = (arr ?? []).filter((v) => v != null);
+      return vals.length ? (vals[vals.length - 1] as number) : null;
+    };
+    const snap = (dim4 as any)?.snapshot ?? {};
+    const sup = lastOf("super") ?? snap.super ?? null;
+    const large = lastOf("large") ?? snap.large ?? null;
+    const medium = lastOf("medium") ?? snap.medium ?? null;
+    const small = lastOf("small") ?? snap.small ?? null;
+    return [
+      { key: "super", label: "机构净买入（超大单）", hint: "单笔 ≥ 100 万元", value: sup, color: "#ef4444" },
+      { key: "large", label: "大单净买入（大单）", hint: "单笔 20 ~ 100 万元", value: large, color: "#f59e0b" },
+      {
+        key: "main", label: "主力净买入（超大单+大单）", hint: "单笔 ≥ 20 万元合计",
+        value: sup != null && large != null ? sup + large : (lastOf("main") ?? snap.main ?? null),
+        color: "#eab308",
+      },
+      { key: "medium", label: "中户净买入（中单）", hint: "单笔 4 ~ 20 万元", value: medium, color: "#8b5cf6" },
+      { key: "small", label: "散户净买入（小单）", hint: "单笔 < 4 万元", value: small, color: "#22c55e" },
+    ];
+  }, [dim4]);
 
   const dimSeries = useMemo(() => {
     if (!dim4?.axis?.length) return [];
@@ -314,42 +381,19 @@ export function EtfFlowPage() {
               )
             ) : !dimCode ? (
               <EmptyState title="还没有选中 ETF" hint="先勾选一只，再看它的 4 维资金结构" className="flex-1" />
-            ) : (!dimSeries.length || dimsAllZero) ? (
-              (dim4 as any)?.snapshot ? (
-                <div className="flex flex-1 flex-col justify-center gap-3 p-4">
-                  <div className="text-xs text-muted-foreground">
-                    {(dim4 as any)?.error ?? "该日只有主力口径，以下为实时 4 维快照"}
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {([["super", "超大单"], ["large", "大单"], ["medium", "中单"], ["small", "小单"]] as const).map(([k, label]) => {
-                      const v = (dim4 as any).snapshot[k] ?? 0;
-                      return (
-                        <div key={k} className="rounded-lg border border-border/60 bg-background/40 px-3 py-2">
-                          <div className="text-[11px] text-muted-foreground">{label}</div>
-                          <div className={cn("text-sm font-semibold tnum", v >= 0 ? "text-up" : "text-down")}>
-                            {signedYi(v)}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : (
-                <EmptyState title="暂无 4 维数据" hint={dim4?.error ?? "加载中…"} className="flex-1" />
-              )
             ) : (
               <>
-                <LegendChips
-                  items={dimSeries.map((s: any) => ({
-                    key: s.code,
-                    name: s.name,
-                    value: s.values[s.values.length - 1] ?? null,
-                  }))}
-                />
-                <div className="min-h-0 flex-1">
-                  <MoneyLinesChart id={`etf-4dim-${dimCode}`} axis={dim4!.axis} series={dimSeries as any}
-                    height="100%" maxLines={5} />
-                </div>
+                <DimCards cards={dimCards} />
+                {dimSeries.length && !dimsAllZero ? (
+                  <div className="min-h-0 flex-1">
+                    <MoneyLinesChart id={`etf-4dim-${dimCode}`} axis={dim4!.axis} series={dimSeries as any}
+                      height="100%" maxLines={5} />
+                  </div>
+                ) : (
+                  <div className="px-2 py-3 text-[11px] text-muted-foreground">
+                    {(dim4 as any)?.error ?? "该日只有主力口径，暂无 4 维分时（显示上方实时快照）"}
+                  </div>
+                )}
               </>
             )}
           </div>

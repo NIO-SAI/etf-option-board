@@ -8,6 +8,7 @@ import { MoneyLinesChart } from "@/components/charts";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
+import { readHashParams, writeHashParams } from "@/lib/urlState";
 import { signedYi } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -21,8 +22,9 @@ const DIM_LABEL: Record<string, string> = {
 
 /** 东财资金分时（工单 07）：指数 / 行业 / 全 A 的 4 维资金曲线。 */
 export function EmFlowPage() {
-  const [kind, setKind] = useState("index");
-  const [code, setCode] = useState("");
+  const initial = useMemo(() => readHashParams(), []);
+  const [kind, setKind] = useState(initial.kind === "industry" ? "industry" : "index");
+  const [code, setCode] = useState(initial.code ?? "");
   const [mode, setMode] = useState<"line" | "stack">("line");
   const [cfgOpen, setCfgOpen] = useState(false);
 
@@ -48,6 +50,10 @@ export function EmFlowPage() {
   );
 
   useEffect(() => onGlobalRefresh(() => { void refresh(); }), [refresh]);
+
+  useEffect(() => {
+    writeHashParams({ kind, code: code || undefined });
+  }, [kind, code]);
 
   const dimSeries = useMemo(() => {
     if (!series?.axis?.length) return [];
