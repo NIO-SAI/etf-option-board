@@ -193,3 +193,10 @@ ETF 页「4 维拆解」渲染 5 条曲线（主力/超大单/大单/中单/小�
 | 标签规则 | 单日模式统一「每半小时」显示（09:30、10:00、10:30…），不再只显示 5 个固定时刻 | 4 维/东财标签实测 10:00 / 11:00 / 14:30 均显示 |
 
 新增纯函数与单测：`session_minutes`（242 点）、`densify_axis`、`align_to_axis`。
+
+## 追加（第十五轮：0 轴线与半小时竖线改为 markLine 绘制）
+
+| 需求 | 实现 | 验证 |
+|---|---|---|
+| 0 轴画一条直线、不打坐标点 | 用 `markLine { yAxis: 0 }` 画 1px 实线（silent、label 关闭），不额外画刻度/标签 | 三个页面 markLine 中均含 1 条 `yAxis:0` 直线，style `solid / 1px` |
+| 界面看不到半小时竖虚线 | 根因：`xAxis.splitLine.interval` 在 category 轴上不生效（线条没画出来）；改为 `markLine { xAxis: 时间 }` 明确绘制，并提高亮度到 40% | 概念/ETF/4 维/东财四处 markLine 中各有 10 条半小时竖线（09:30…15:00），style `dashed [4,4] / 1px` |

@@ -719,14 +719,6 @@ export function MoneyLinesChart({
           ? (v: string) => (vLines.includes(v) ? v.slice(0, 5) : "")
           : (v: string) => (isHalfHour(v) ? v : ""),
       },
-      // 单日模式：每个整点/半点画一条竖向虚线做参照（多日图用日分隔线，不重复画）
-      splitLine: vLines?.length
-        ? { show: false }
-        : {
-            show: true,
-            interval: (_i: number, v: string) => isHalfHour(v),
-            lineStyle: { color: "rgba(255,255,255,0.16)", type: [4, 4], width: 1 },
-          },
     },
     yAxis: {
       type: "value",
@@ -762,22 +754,22 @@ export function MoneyLinesChart({
     })),
   }), [axis, shown, mode, vLines, showEndLabel]);
 
-  // 日分隔线：只在第一条 series 上挂 markLine（避免重复绘制）
-  const withDays = (opt: any) => {
-    if (!vLines?.length || !opt.series?.length) return opt;
-    opt.series[0].markLine = {
-      symbol: "none",
-      silent: true,
-      // 日期只由 x 轴刻度显示；markLine 再标一次会在左下角与坐标轴标签重叠
-      label: { show: false },
-      lineStyle: { color: "rgba(228,228,231,0.55)", type: [5, 4], width: 1.5 },
-      data: vLines.map((v) => ({ xAxis: v })),
-    };
+  // 参考线：半小时竖虚线（单日）/ 日分隔线（多日）+ y=0 横线
+  const withGuides = (opt: any) => {
+    if (!opt.series?.length || !axis?.length) return opt;
+    const data: any[] = [];
+    if (vLines?.length) {
+      vLines.forEach((v) => data.push({ xAxis: v, lineStyle: { color: "rgba(228,228,231,0.55)", type: [5, 4], width: 1.5 } }));
+    } else {
+      axis.filter((t) => isHalfHour(t)).forEach((t) => data.push({ xAxis: t, lineStyle: { color: "rgba(228,228,231,0.4)", type: [4, 4], width: 1 } }));
+    }
+    data.push({ yAxis: 0, lineStyle: { color: "rgba(228,228,231,0.55)", type: "solid", width: 1 } });
+    opt.series[0].markLine = { symbol: "none", silent: true, label: { show: false }, data };
     return opt;
   };
 
   if (!axis.length) return null;
-  return <ReactECharts key={id} option={withDays(option)} notMerge style={{ height }} />;
+  return <ReactECharts key={id} option={withGuides(option)} notMerge style={{ height }} />;
 }
 
 /** 板块资金详情：累计净流入折线 + 每分钟增量柱（同一时间轴，单位元）。 */
@@ -1011,15 +1003,17 @@ export function BoardFlowChart({
       flush(times.length - 1);
     }
 
-    // 日分隔竖虚线：挂在第一条线，避免重复绘制（必须在 memo 内，保持对象稳定不闪烁）
-    if (vLines?.length && series.length) {
-      series[0].markLine = {
-        symbol: "none",
-        silent: true,
-        label: { show: false },
-        lineStyle: { color: "rgba(228,228,231,0.55)", type: [5, 4], width: 1.5 },
-        data: vLines.map((v) => ({ xAxis: v })),
-      };
+    // 参考线（挂在第一条线上）：半小时竖虚线、日分隔线、y=0 横线
+    if (series.length && times.length) {
+      const data: any[] = [];
+      if (vLines?.length) {
+        vLines.forEach((v) => data.push({ xAxis: v, lineStyle: { color: "rgba(228,228,231,0.55)", type: [5, 4], width: 1.5 } }));
+      } else {
+        times.filter((t) => isHalfHour(t)).forEach((t) => data.push({ xAxis: t, lineStyle: { color: "rgba(228,228,231,0.4)", type: [4, 4], width: 1 } }));
+      }
+      // 0 轴：一条 1px 直线，不带任何刻度/标签
+      data.push({ yAxis: 0, lineStyle: { color: "rgba(228,228,231,0.55)", type: "solid", width: 1 } });
+      series[0].markLine = { symbol: "none", silent: true, label: { show: false }, data };
     }
 
     if (temp) {
@@ -1089,11 +1083,6 @@ export function BoardFlowChart({
             ? (v: string) => (vLines.includes(v) ? v.slice(0, 5) : "")
             : undefined,
           interval: vLines?.length ? 0 : (_i: number, v: string) => isHalfHour(v),
-        },
-        splitLine: {
-          show: true,
-          interval: (_i: number, v: string) => isHalfHour(v),
-          lineStyle: { color: "rgba(255,255,255,0.12)", type: "dashed" },
         },
       },
       yAxis: {
