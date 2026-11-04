@@ -6,7 +6,7 @@
 
 ## 项目概览
 
-A 股 9 只可交易期权的宽基 ETF 的**日内决策看板**。后端 FastAPI（Python）聚合东财行情/期权链/
+A 股 6 只可交易期权的宽基 ETF 的**日内决策看板**。后端 FastAPI（Python）聚合东财行情/期权链/
 资金流/指数/外围，内置 BS 定价、Kronos 预测桥、大模型决策、实时告警；前端 REUI + React +
 Vite + Tailwind v4，深色看板，SSE 弹窗+声音告警。
 
@@ -89,7 +89,7 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   - 行情/期权链主源仍是 **`emdatah5.eastmoney.com`**（`getZJLXData`/`getZDYLBData`），
     K线/分时走**腾讯**（`ifzq.gtimg.cn`：复权 `fqkline` 被 WAF 拦时要退回不复权 `kline/kline`，否则日线/MA/关键位全空）。
   排查"没数据"按这三条链路走，别先怪没开盘。
-- **冷启动预热**：`monitor._prewarm()` 启动后台跑一次 `strategy.directions()`（12 个标的要 8s），
+- **冷启动预热**：`monitor._prewarm()` 启动后台跑一次 `strategy.directions()`（9 个标的要 6s），
   否则用户重启服务后第一次打开看板要干等十几秒。
 - 资金流分钟序列：`services/em.py::fflow` 在交易时段内每次调用都用 emdatah5 快照累积
   并落盘 `data/flow_history.jsonl`（push2 fflow 收盘后常返回空 klines，且经代理易被限流）。
@@ -106,6 +106,10 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   **两个数据源坑**：emdatah5 的 `fs=m:90+t:3` 必须编码成 `%2B`（raw `+` 被当空格会忽略过滤）；
   板块 4 维 secid 必须是 `90.BKxxxx`。
 - `services/universe.py` 维护标的/指数/外围/国家队清单；改标的只改这里。
+  **2026-11-04 起 ETF 标的收敛为 6 只**（按跟踪指数去重，删 159919/159922/588080，见
+  `docs/adr/0004-期权标的收敛为6只.md`）；下线后记得跑
+  `python3 scripts/prune_option_universe.py` 剪掉 `data/option_universe.json` 里残留的合约，
+  否则后台每分钟仍会为这些合约拉报价、写分钟线。
 - 期权链：东财 `fs=m:10`(沪)/`m:12`(深) 全量列表，按简称前缀切分。**注意前缀顺序**
   （`科创50` vs `科创板50`，`300ETF` vs `沪深300ETF`）。
 - 隐波/希腊字母由 `services/bs.py` 自算（Eastmoney 不直接给），到期日 = 到期月第 4 个星期三。
@@ -182,7 +186,7 @@ Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/do
 
 - **对话语言：中文。** 本仓库相关的回复、工单、注释一律用中文。
 - **项目定位一览**（供新会话快速上手，不必重复调研）：
-  - 是什么：9 只可交易期权宽基 ETF 的日内决策看板 —— 聚合行情/期权链/资金流/指数/外围
+  - 是什么：6 只可交易期权宽基 ETF 的日内决策看板 —— 聚合行情/期权链/资金流/指数/外围
     → 信号引擎打分 → 大模型出可执行方案 → SSE 声音+弹窗告警。
   - 规模：后端 `services/` 15 个模块约 5.3k 行；前端 `web/src` 约 3.5k 行 TS/TSX。
   - 文档地图：架构与策略逻辑 → `CONTEXT.md`；部署/命令/数据源策略 → 本文件；

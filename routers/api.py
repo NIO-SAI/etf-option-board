@@ -113,7 +113,7 @@ async def indices():
 
 @router.get("/index/levels")
 async def index_levels_view():
-    """上证指数关键位（9 只 ETF 共用一份）+ 分时，供指数弹窗。"""
+    """上证指数关键位（6 只 ETF 共用一份）+ 分时，供指数弹窗。"""
     snap, tr = await asyncio.gather(
         index_levels.snapshot(), ms.trends("1.000001"))
     day = (tr[-1].get("time") or "")[:10] if tr else None
@@ -124,7 +124,7 @@ async def index_levels_view():
 
 @router.get("/etfs")
 async def etfs_quotes():
-    """9 只 ETF + 3 只股指期权标的的轻量快照（供左侧列表快速刷新）。
+    """6 只 ETF + 3 只股指期权标的的轻量快照（供左侧列表快速刷新）。
 
     股指期权按**标的指数**取价（IO→000300、MO→000852、HO→000016），
     并把 code 改写成 IO/MO/HO——行情接口回的 f57 是纯指数代码，前端按 IO/MO/HO 索引。
@@ -144,7 +144,7 @@ async def etfs_quotes():
 
 @router.get("/directions")
 async def directions():
-    """9 只标的的实时综合方向（看多/看空/观望）+ 当日最新变盘点，供左侧列表标签。
+    """6 只 ETF + 3 只股指期权的实时综合方向（看多/看空/观望）+ 当日最新变盘点，供左侧列表标签。
 
     注意：综合方向（strategy.bias_score 多因子合力，阈值 ±15）已把「变盘点」作为加分
     因子并入（reversal.factor，±15，60 分钟衰减），二者同源；此处另返回当日最新变盘点，
@@ -171,14 +171,14 @@ async def directions():
 
 @router.get("/picks/top")
 async def picks_top(n: int = 6, force: int = 0):
-    """跨 9 只 ETF 的优选合约横评（性价比 0.6 + 波动 0.4）。"""
+    """跨 6 只 ETF 的优选合约横评（性价比 0.6 + 波动 0.4）。"""
     from services import top_picks
     return await top_picks.snapshot(n=n, force=bool(force))
 
 
 @router.get("/etfs/spark")
 async def etfs_spark():
-    """9 只标的 + 底栏两个大盘指数的日内收盘价序列（供列表迷你走势）。
+    """6 只 ETF + 3 只股指期权 + 底栏两个大盘指数的日内收盘价序列（供列表迷你走势）。
 
     板块代码（47.800005 A股平均股价）没有腾讯映射、push2 分时又被反爬打空，
     必须走 trends_or_snapshot 的 emdatah5 快照累积，否则永远是空曲线。

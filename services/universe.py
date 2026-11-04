@@ -1,22 +1,21 @@
-"""标的宇宙：9 只可交易期权的 ETF、期权链前缀、关联指数、外围市场。
+"""标的宇宙：6 只可交易期权的 ETF、期权链前缀、关联指数、外围市场。
 
 东财 secid 约定：
   上交所 1.xxxxxx   深交所 0.xxxxxx   全球指数 100.XXX
   期权市场：上交所 10，深交所 12
 """
 
-# ---- 9 只 ETF 期权标的 --------------------------------------------------
+# ---- 6 只 ETF 期权标的 --------------------------------------------------
 # prefix 为东财期权简称前缀（用于把 m:10 / m:12 全量期权列表切分为各标的的链）
+# 2026-11-04 收敛：按跟踪指数去重，各留一只代表（沪深300→510300、中证500→510500、
+# 科创50→588000），删去 159919 / 159922 / 588080。见 docs/adr/0004。
 ETFS = [
     # code,        secid,       market, name,                  option_prefix, exchange
     {"code": "510050", "secid": "1.510050", "opt_market": 10, "name": "上证50ETF华夏",     "prefix": "50ETF",       "exch": "SH", "track": "上证50"},
     {"code": "510300", "secid": "1.510300", "opt_market": 10, "name": "沪深300ETF华泰柏瑞", "prefix": "300ETF",      "exch": "SH", "track": "沪深300"},
     {"code": "510500", "secid": "1.510500", "opt_market": 10, "name": "中证500ETF南方",     "prefix": "500ETF",      "exch": "SH", "track": "中证500"},
     {"code": "588000", "secid": "1.588000", "opt_market": 10, "name": "科创50ETF华夏",      "prefix": "科创50",       "exch": "SH", "track": "科创50"},
-    {"code": "588080", "secid": "1.588080", "opt_market": 10, "name": "科创50ETF易方达",    "prefix": "科创板50",     "exch": "SH", "track": "科创50"},
-    {"code": "159919", "secid": "0.159919", "opt_market": 12, "name": "沪深300ETF嘉实",     "prefix": "沪深300ETF",   "exch": "SZ", "track": "沪深300"},
     {"code": "159915", "secid": "0.159915", "opt_market": 12, "name": "创业板ETF易方达",    "prefix": "创业板ETF",    "exch": "SZ", "track": "创业板指"},
-    {"code": "159922", "secid": "0.159922", "opt_market": 12, "name": "中证500ETF嘉实",     "prefix": "中证500ETF",   "exch": "SZ", "track": "中证500"},
     {"code": "159901", "secid": "0.159901", "opt_market": 12, "name": "深证100ETF易方达",   "prefix": "深证100ETF",   "exch": "SZ", "track": "深证100"},
 ]
 

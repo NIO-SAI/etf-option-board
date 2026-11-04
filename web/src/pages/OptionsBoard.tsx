@@ -42,7 +42,7 @@ export function OptionsBoard() {
   const { data: indices } = usePolling(() => api.indices(), 10_000);
   const { data: etfQuotes } = usePolling(() => api.etfs(), 10_000);
   const { data: directions } = usePolling(() => api.directions(), 60_000);
-  // 跨 9 只标的的合约横评（后端 30s SWR 缓存，轮询 30s 即可）
+  // 跨 6 只标的的合约横评（后端 30s SWR 缓存，轮询 30s 即可）
   const { data: topPicks, refresh: refreshPicks } = usePolling(() => api.topPicks(6), 30_000);
   const { data: spark } = usePolling(() => api.etfs_spark(), 120_000, []);
   // 到期日历：一天只变一次，10 分钟轮询足够（换来的是「当月还剩几天」永不陈旧）
@@ -112,6 +112,16 @@ export function OptionsBoard() {
   // 与 /etf/{symbol}（后端已按代码前缀分流），组件不变。
   const futOpts: any[] = universe?.fut_opts ?? [];
   const isFut = futOpts.some((f: any) => f.code === etfCode);
+
+  // 标的被下线后的兜底：localStorage 里可能还存着已删除的代码（如 159919），
+  // 直接请求会拿到 {error} 让整页空白。清单到达后校验，失效就回落默认标的。
+  const DEFAULT_ETF = "510300";
+  useEffect(() => {
+    if (!etfs.length) return;
+    if (etfs.some((e: any) => e.code === etfCode)) return;
+    if (futOpts.some((f: any) => f.code === etfCode)) return;
+    setEtfCode(DEFAULT_ETF);
+  }, [etfs, futOpts, etfCode, setEtfCode]);
   // 标的名称：先查 ETF 清单，再查股指期权清单（两者共用同一个选中状态）
   const nameOf = (code: string) =>
     etfs.find((e: any) => e.code === code)?.name
