@@ -22,6 +22,31 @@ const DIM_LABEL: Record<string, string> = {
   main: "主力", super: "超大单", large: "大单", medium: "中单", small: "小单",
 };
 
+/** 图表顶部的卡片式图例：名称 + 当前值（可换行，超过 30 条提示总数）。 */
+function LegendChips({
+  items, more = 0,
+}: {
+  items: { key: string; name: string; value: number | null }[];
+  more?: number;
+}) {
+  if (!items.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1.5 text-[10px] text-muted-foreground">
+      {items.map((it) => (
+        <span key={it.key}
+          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-1.5 py-0.5">
+          <span className="inline-block size-1.5 rounded-full bg-primary/70" />
+          <span className="text-foreground/90">{it.name}</span>
+          <span className={cn("tnum", (it.value ?? 0) >= 0 ? "text-up" : "text-down")}>
+            {signedYi(it.value)}
+          </span>
+        </span>
+      ))}
+      {more > 0 && <span>…共 {items.length + more} 条</span>}
+    </div>
+  );
+}
+
 /** ETF 资金流：左侧列表（搜索/排序/批量/自选）+ 右侧多线叠加 / 4 维拆解。 */
 export function EtfFlowPage() {
   const [scope, setScope] = useState("all");
@@ -273,6 +298,14 @@ export function EtfFlowPage() {
                 <EmptyState title="暂无分时数据" hint={(series as any)?.error ?? "加载中…"} className="flex-1" />
               ) : (
                 <>
+                  <LegendChips
+                    items={etfLines.slice(0, 30).map((l) => ({
+                      key: l.code,
+                      name: l.name,
+                      value: l.points.length ? l.points[l.points.length - 1][1] : null,
+                    }))}
+                    more={Math.max(0, etfLines.length - 30)}
+                  />
                   <div className="min-h-0 flex-1">
                     <BoardFlowChart id="etf-flow-lines" lines={etfLines} hoverCode={hoverCode}
                       temp={tempLine} height="100%" onHoverCode={setHoverCode} />
@@ -306,18 +339,16 @@ export function EtfFlowPage() {
               )
             ) : (
               <>
+                <LegendChips
+                  items={dimSeries.map((s: any) => ({
+                    key: s.code,
+                    name: s.name,
+                    value: s.values[s.values.length - 1] ?? null,
+                  }))}
+                />
                 <div className="min-h-0 flex-1">
                   <MoneyLinesChart id={`etf-4dim-${dimCode}`} axis={dim4!.axis} series={dimSeries as any}
                     height="100%" maxLines={5} />
-                </div>
-                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 px-2 pb-1 text-[10px] text-muted-foreground">
-                  {dimSeries.map((s: any) => (
-                    <span key={s.code} className="inline-flex items-center gap-1">
-                      <span className="inline-block size-1.5 rounded-full bg-primary/70" />
-                      {s.name}
-                      <span className="tnum text-foreground/80">{signedYi(s.values[s.values.length - 1])}</span>
-                    </span>
-                  ))}
                 </div>
               </>
             )}
