@@ -760,16 +760,8 @@ export function MoneyLinesChart({
     opt.series[0].markLine = {
       symbol: "none",
       silent: true,
-      label: {
-        show: true,
-        position: "start",     // 统一贴在顶部（竖线默认会旋转到竖排，必须显式 rotate 0）
-        rotate: 0,
-        distance: 6,
-        align: "center",
-        color: "#a1a1aa",
-        fontSize: 10,
-        formatter: (pp: any) => String(pp.value ?? "").slice(0, 5),
-      },
+      // 日期只由 x 轴刻度显示；markLine 再标一次会在左下角与坐标轴标签重叠
+      label: { show: false },
       lineStyle: { color: "rgba(228,228,231,0.55)", type: [5, 4], width: 1.5 },
       data: vLines.map((v) => ({ xAxis: v })),
     };
