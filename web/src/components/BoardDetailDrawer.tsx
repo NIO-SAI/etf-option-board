@@ -120,14 +120,32 @@ export function BoardDetailDrawer({
           <Section title={`研报热度（近 ${heat?.days ?? 90} 天）`} hint={errors.report_heat}>
             {heat ? (
               <>
-                <div className="mb-1 text-xs text-muted-foreground">
-                  合计 <span className="font-semibold text-foreground">{heat.count}</span> 篇（成分股前 3 名聚合）
+                <div className="mb-1 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span>
+                    合计 <span className="font-semibold text-foreground">{heat.count}</span> 篇（成分股前 3 名聚合）
+                  </span>
+                  <a
+                    href="https://data.eastmoney.com/report/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="在东方财富研报中心查看（新窗口）"
+                    className="shrink-0 text-[11px] text-primary hover:underline"
+                  >
+                    东财研报中心 ↗
+                  </a>
                 </div>
                 <div className="flex flex-wrap gap-2 text-[11px]">
                   {(heat.top ?? []).map((t: any) => (
-                    <span key={t.code} className="rounded bg-muted/50 px-1.5 py-0.5">
-                      {t.name} <span className="tnum text-foreground/80">{t.hits}</span>
-                    </span>
+                    <a
+                      key={t.code}
+                      href={`https://data.eastmoney.com/report/stock.jshtml?stockcode=${encodeURIComponent(t.code)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`在新窗口打开 ${t.name} 的东方财富研报`}
+                      className="rounded bg-muted/50 px-1.5 py-0.5 text-foreground/80 transition-colors hover:bg-primary/15 hover:text-primary"
+                    >
+                      {t.name} <span className="tnum">{t.hits}</span>
+                    </a>
                   ))}
                 </div>
               </>

@@ -135,3 +135,13 @@
 | ② 右下角无用日期标签 | 移除底部的日期 chip 行，只保留「区间累计资金…」说明 | 页面中 `MM-DD` chip 数量 0 |
 | ③ 左下角重复日期 | 同一处 markLine label 原先用 `insideEnd` 落在底部，改成 `start` 后只出现在顶部 | 标签位置统一为顶部；底部仅剩 x 轴刻度 `10-29…11-04` |
 | 竖虚线看不清 | 颜色 `rgba(228,228,231,0.35)` → `0.55`，线宽 1.2 → 1.5，虚线 `[5,4]` | option.lineStyle 已生效 |
+
+## 追加（第九轮：研报热度可跳转东财）
+
+详情抽屉「研报热度」块改为可点击：
+- 每只成分股 → `https://data.eastmoney.com/report/stock.jshtml?stockcode=<代码>`（新股标签页打开）；
+- 标题右侧新增「东财研报中心 ↗」→ `https://data.eastmoney.com/report/`；
+- 链接均带 `target="_blank" rel="noopener noreferrer"`。
+
+验证：抽屉内 4 个链接（1 个中心入口 + 3 只成分股），点击「中际旭创」后新开标签页
+「个股研报 https://data.eastmoney.com/report/stock.jshtml?stockcode=300308」。
