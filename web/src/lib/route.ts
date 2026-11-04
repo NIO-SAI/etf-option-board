@@ -49,10 +49,13 @@ export function usePageRoute(): PageKey {
   );
   useEffect(() => {
     const onHash = () => {
-      const k = pageFromHash(window.location.hash);
-      const h = hashOf(k);
-      // 未知 hash / 带尾斜杠 / 带查询串：改写成规范值，避免地址栏停留在无效链接
-      if (window.location.hash !== h) window.history.replaceState(null, "", h);
+      const raw = window.location.hash;
+      const k = pageFromHash(raw);
+      const canon = hashOf(k);
+      // 只在「认不出」或「只差尾斜杠」时规范化；`#/board/em?date=…` 这类参数要保留
+      if (raw !== canon && !raw.startsWith(canon + "?")) {
+        window.history.replaceState(null, "", canon);
+      }
       setKey(k);
     };
     window.addEventListener("hashchange", onHash);

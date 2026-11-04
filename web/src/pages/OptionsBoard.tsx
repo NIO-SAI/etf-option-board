@@ -23,9 +23,10 @@ const SWATCH_PLAN = { background: "linear-gradient(90deg,#f59e0b,#ef4444,#16a34a
 
 /** 期权看板（原 App 主体）。外壳负责顶栏、路由与设置弹窗，这里只管本页数据与布局。 */
 export function OptionsBoard() {
-  const [etfCode, setEtfCode] = useState("510300");
-  const [month, setMonth] = useState<number | null>(null);
-  const [contractSecid, setContractSecid] = useState<string | null>(null);
+  // 选中标的/月份/合约跨页面切换与刷新都要保持（否则切去板块页再回来会重置）
+  const [etfCode, setEtfCode] = usePersistedState<string>("board.etf", "510300");
+  const [month, setMonth] = usePersistedState<number | null>("board.month", null);
+  const [contractSecid, setContractSecid] = usePersistedState<string | null>("board.contract", null);
   // 切换月份后链数据要等一次请求；给用户即时反馈，数据到达即清除
   const [monthPending, setMonthPending] = useState(false);
   // 行情卡的两个图线开关 + 图表高度 ×2。开关常驻（数据没到只置灰），
@@ -433,8 +434,7 @@ function usePersistedFlag(key: string) {
 }
 
 /** 对象型偏好（如 {levels, plan}）：按 JSON 存取，缺键回落默认值。 */
-function usePersistedFlag2<T extends Record<string, boolean>>(key: string, defaults: T) {
-  const [val, setVal] = useState<T>(() => {
+function usePersistedFlag2<T extends Record<string, boolean>>(key: string, defaults: T) {  const [val, setVal] = useState<T>(() => {
     try {
       const raw = localStorage.getItem(key);
       return raw ? { ...defaults, ...JSON.parse(raw) } : defaults;
@@ -447,6 +447,26 @@ function usePersistedFlag2<T extends Record<string, boolean>>(key: string, defau
       localStorage.setItem(key, JSON.stringify(val));
     } catch {
       /* 同上 */
+    }
+  }, [key, val]);
+  return [val, setVal] as const;
+}
+
+/** 任意可 JSON 序列化的状态：用于跨页切换/刷新保持选中标的、月份、合约。 */
+function usePersistedState<T>(key: string, initial: T) {
+  const [val, setVal] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw == null ? initial : (JSON.parse(raw) as T);
+    } catch {
+      return initial;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(val));
+    } catch {
+      /* 隐私模式忽略 */
     }
   }, [key, val]);
   return [val, setVal] as const;
@@ -478,7 +498,7 @@ function mergeCache(a: CacheMeta | null, b: CacheMeta | null): CacheMeta | null 
 }
 
 /** 数据新鲜度角标：每次刷新后都显式标注——缓存 = 红色，实时 = 绿色。 */
-export function CacheTag({ meta, onRefresh }: { meta: CacheMeta | null; onRefresh?: () => Promise<void> }) {
+function CacheTag({ meta, onRefresh }: { meta: CacheMeta | null; onRefresh?: () => Promise<void> }) {
   const [busy, setBusy] = useState(false);
   const stale = !!meta && meta.day !== dayKey();
   const pending = busy;

@@ -6,7 +6,6 @@
 import { api } from "./api";
 
 const EVENT = "board:global-refresh";
-export const REFRESH_EVENT = EVENT;
 
 /** 广播一次刷新（顶栏按钮调用）。 */
 export function requestRefresh() {

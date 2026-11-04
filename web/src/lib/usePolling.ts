@@ -112,20 +112,3 @@ export function usePolling<T>(
   return { data, error, cacheAt, refresh };
 }
 
-/** SSE 订阅告警流。 */
-export function useAlertStream(onAlert: (a: any) => void) {
-  const cb = useRef(onAlert);
-  cb.current = onAlert;
-  useEffect(() => {
-    const es = new EventSource("/api/alerts/stream");
-    es.onmessage = (ev) => {
-      try {
-        cb.current(JSON.parse(ev.data));
-      } catch {
-        /* ignore */
-      }
-    };
-    es.onerror = () => {/* 浏览器会自动重连 */};
-    return () => es.close();
-  }, []);
-}

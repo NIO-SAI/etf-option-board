@@ -6,12 +6,11 @@ import { EmptyState } from "@/components/ui/misc";
 
 /** 板块资金页面的占位外壳：正式内容由工单 02–07 逐页接入，先保证导航可达、不空屏。 */
 function BoardPlaceholder({
-  title, subtitle, icon, children,
+  title, subtitle, icon,
 }: {
   title: string;
   subtitle: string;
   icon: ReactNode;
-  children?: ReactNode;
 }) {
   return (
     <main className="grid gap-3 p-3">
@@ -26,7 +25,6 @@ function BoardPlaceholder({
           </FrameHeader>
           <div className="flex flex-col gap-3 p-6">
             <EmptyState title={subtitle} hint="数据接口与图表会在后续工单接入，此处先保留页面骨架。" />
-            {children}
           </div>
         </FramePanel>
       </Frame>

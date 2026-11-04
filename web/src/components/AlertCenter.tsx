@@ -5,9 +5,8 @@ import { Badge } from "@/components/reui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, EmptyState, HoverTip } from "@/components/ui/misc";
 import { api } from "@/lib/api";
-import { useAlertStream } from "@/lib/usePolling";
-import { notifyPermission, requestNotifyPermission, showNotification, autoPromptPermissionOnce, reportNotifyState } from "@/lib/notify";
-import { sound } from "@/lib/sound";
+import { subscribeAlerts } from "@/lib/alertBus";
+import { notifyPermission, requestNotifyPermission, autoPromptPermissionOnce, reportNotifyState } from "@/lib/notify";
 import { clsUpDown, signedMoney } from "@/lib/format";
 import { AlertTriangle, BellRing, Volume2 } from "lucide-react";
 
@@ -45,22 +44,14 @@ export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void })
   }, []);
 
   const onAlert = (a: any) => {
+    // 副作用（声音/通知）已由全局 alertBus 处理，这里只管列表与弹窗
     if (seen.current.has(a.id)) return;
     seen.current.add(a.id);
     setItems((prev) => [a, ...prev].slice(0, 80));
-    // 重放的历史（连接/刷新时补发）：只进列表，不弹窗不出声
-    if (a.backfill) return;
-    // info（变盘时点）不打扰，只进列表
-    if (a.level !== "info") {
-      sound.play(a.level);
-      // 优先 Chrome 浏览器通知；不可用/未授权时降级为页面内 toast
-      const shown = showNotification(a);
-      if (!shown) toast(a.title, { description: a.text, duration: 6000 });
-    }
     // 主力资金与变盘开仓弹模态框（后者是可执行的交易信号，优先级最高）
     if (a.type === "main_inflow" || a.type === "reversal") setPopup(a);
   };
-  useAlertStream(onAlert);
+  useEffect(() => subscribeAlerts(onAlert), []);
 
   const onEnable = async () => {
     const p = await requestNotifyPermission();

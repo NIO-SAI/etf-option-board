@@ -26,7 +26,7 @@ export function TopBar({
       <div className="flex items-center gap-3 px-3 py-1.5">
         <div className="flex items-center gap-2 pr-2">
           <Activity className="size-4 shrink-0 text-primary" aria-hidden />
-          <span className="hidden text-sm font-semibold whitespace-nowrap lg:inline">ETF 期权看板</span>
+          <span className="hidden text-sm font-semibold whitespace-nowrap sm:inline">ETF 期权日内决策看板</span>
         </div>
         {nav}
         <div className="flex-1" />

@@ -13,6 +13,10 @@ function inWindow(d = new Date()): boolean {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// 上次预取结束时间：页面切走再切回会重新挂载，若不设门槛会立刻把 12 只标的再拉一遍
+let lastRunAt = 0;
+const RERUN_AFTER_MS = 5 * 60_000;
+
 /** 顺序预取：左栏顺序、跳过当前标的与 60s 内已取过的标的，每只之间间隔 2.5s。
  *  页面隐藏 / 切标的 / 卸载即停；同一时刻只有一个预取请求在途。 */
 export function usePrefetch(current: string, codes: string[], ready: boolean) {
@@ -20,6 +24,8 @@ export function usePrefetch(current: string, codes: string[], ready: boolean) {
   useEffect(() => {
     if (!ready || !codes.length) return;
     if (document.visibilityState !== "visible" || !inWindow()) return;
+    if (Date.now() - lastRunAt < RERUN_AFTER_MS) return;
+    lastRunAt = Date.now();
     let cancelled = false;
     let timer: any;
     const fetched = new Map<string, number>();
