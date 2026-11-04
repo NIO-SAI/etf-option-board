@@ -712,6 +712,7 @@ export function MoneyLinesChart({
       data: axis,
       boundaryGap: false,
       axisLine: { show: false },
+      axisTick: { show: false },
       axisLabel: {
         color: AXIS, fontSize: 10, hideOverlap: true,
         // 多日模式：底部只按「日」显示（MM-DD）；单日模式：每半小时（09:30/10:00/10:30…）
@@ -763,7 +764,7 @@ export function MoneyLinesChart({
     } else {
       axis.filter((t) => isHalfHour(t)).forEach((t) => data.push({ xAxis: t, lineStyle: { color: "#6b7280", type: [4, 4], width: 1 } }));
     }
-    data.push({ yAxis: 0, lineStyle: { color: "#9ca3af", type: [4, 4], width: 1 } });
+    data.push({ yAxis: 0, lineStyle: { color: "#9ca3af", type: "solid", width: 1 } });
     opt.series[0].markLine = { symbol: "none", silent: true, label: { show: false }, data };
     return opt;
   };
@@ -1012,7 +1013,7 @@ export function BoardFlowChart({
         times.filter((t) => isHalfHour(t)).forEach((t) => data.push({ xAxis: t, lineStyle: { color: "#6b7280", type: [4, 4], width: 1 } }));
       }
       // 0 轴：一条 1px 直线，不带任何刻度/标签
-      data.push({ yAxis: 0, lineStyle: { color: "#9ca3af", type: [4, 4], width: 1 } });
+      data.push({ yAxis: 0, lineStyle: { color: "#9ca3af", type: "solid", width: 1 } });
       series[0].markLine = { symbol: "none", silent: true, label: { show: false }, data };
     }
 
@@ -1074,8 +1075,9 @@ export function BoardFlowChart({
         type: "category",
         data: times,
         boundaryGap: false,
-        // 不需要底部轴线（横线很显眼）：刻度文字保留，轴线整条隐藏
+        // 不需要底部轴线（横线很显眼）：刻度文字保留，轴线与刻度梳齿都隐藏
         axisLine: { show: false },
+        axisTick: { show: false },
         // 多日模式：只在每天起点显示 MM-DD；单日模式：只显示整点/半点
         axisLabel: {
           color: "#71717a", fontSize: 10, hideOverlap: true,

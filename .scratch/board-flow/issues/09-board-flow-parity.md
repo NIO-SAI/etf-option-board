@@ -209,3 +209,25 @@ ETF 页「4 维拆解」渲染 5 条曲线（主力/超大单/大单/中单/小�
 | 板块分时标签移到左侧 | 概念/行业/指数/热门/自定义 紧贴「板块资金分时」标题（原来在右侧日期旁） | 头部文本顺序：标题 → 标签组 → 日期 |
 | 每个页面 URL 定位 + 刷新保持 | 新增 `lib/urlState.ts`，四页把 type/date/scope/view/start/end/code/codes 写进 hash 查询串（`replaceState`，不污染历史） | `#/board/flow?type=industry&date=2026-11-03&codes=BK1201,BK1036` 刷新后：行业页签、11-03、勾选半导体/电子全部恢复 |
 | 竖虚线太浅看不清 | 半小时线 `rgba(white,.4)` → **`#6b7280`** 实色；日分隔/0 轴/十字指针 → **`#9ca3af`**，线宽不变 | option 实测 `#6b7280 [4,4] 1px`、`#9ca3af solid 1px` |
+
+## 追加（第十七轮：多日图底部密集「梳齿」）
+
+**症状**：多日图底部 / 0 轴附近出现一排密集小竖线，只显示一天时更明显。
+
+**反馈环**（已先跑红）：
+```js
+// 断言 x 轴不再画刻度梳齿
+xa.axisTick?.show === false
+// 修复前：{ pass: false, axisTick: undefined, categories: 1128 }
+```
+
+**假设（排序）**
+1. `xAxis.axisTick` 默认显示，1128 个分钟分类 → 每个分类一根刻度，形成梳齿（最可能）
+2. 0 轴 markLine + 抗锯齿（排除：只有 1 条）
+3. yAxis 的 splitLine（方向不符，水平线）
+
+**修复**：`BoardFlowChart` / `MoneyLinesChart` 的 xAxis 增加 `axisTick: { show: false }`
+（轴线上一轮已 `axisLine.show=false`）。
+
+**验证**：修复后 `{ pass: true, axisTick: { show:false }, axisLine: { show:false } }`；
+概念页仍有 10 条半小时竖线 + 1 条 0 轴，日期刻度正常。
