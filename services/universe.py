@@ -60,15 +60,12 @@ TRACK_INDEX = {
 }
 
 # ---- 外围市场因子 -------------------------------------------------------
+# 2026-11-04 起只参考两个外围：韩国 KOSPI（亚洲时段同步领先）与纳指期货主连。
+# 东财没有 "NQmain" 这个代码，主连口径对应 103.NQ00Y「小型纳指当月连续」；
+# 其余外围（标普/道指/恒指/美元指数/黄金/原油）不再参考，也不再进顶栏展示。
 EXTERNAL = [
-    {"secid": "100.NDX",  "name": "纳斯达克100", "key": "ndx"},
-    {"secid": "100.SPX",  "name": "标普500",     "key": "spx"},
-    {"secid": "100.DJIA", "name": "道琼斯",      "key": "dji"},
-    {"secid": "100.HSI",  "name": "恒生指数",    "key": "hsi"},
-    {"secid": "100.KS11", "name": "韩国KOSPI",  "key": "kospi"},
-    {"secid": "100.UDI",  "name": "美元指数",    "key": "dxy"},
-    {"secid": "101.GC00Y", "name": "COMEX黄金",  "key": "gold"},
-    {"secid": "102.CL00Y", "name": "NYMEX原油",  "key": "oil"},
+    {"secid": "100.KS11",  "name": "韩国KOSPI",   "key": "kospi"},
+    {"secid": "103.NQ00Y", "name": "纳指期货主连", "key": "nq"},
 ]
 
 # 国家队护盘常买的宽基 ETF（判断护盘信号）

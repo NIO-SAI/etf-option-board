@@ -303,13 +303,13 @@ def bias_score(etf_ctx, track, national, ext, kronos_sum, idx_levels=None,
     if lv_total:
         score += lv_total
         detail["指数关键位"] = round(lv_total, 1)
-    # 外围（权重 10）
+    # 外围（权重 10）：只参考韩国 KOSPI 与纳指期货主连（NQmain），各 ±5、合计钳 ±10
     ext_score = 0.0
     for e in ext:
-        if e.get("key") in ("ndx", "spx", "dji", "hsi") and e.get("pct") is not None:
-            ext_score += e["pct"]
+        if e.get("key") in ("kospi", "nq") and e.get("pct") is not None:
+            ext_score += max(-5.0, min(5.0, e["pct"] * 2.5))
     if ext_score:
-        v = max(-10, min(10, ext_score * 3))
+        v = max(-10.0, min(10.0, ext_score))
         score += v; detail["外围市场"] = round(v, 1)
     # 市场总成交额（两市成交额折算全天 vs 前一日，量价配合 ±10）
     tv = (turnover or {}).get("factor") or 0
