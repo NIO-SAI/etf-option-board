@@ -216,3 +216,66 @@ class TestEmFlow:
         ]
         picked = bf.pick_em_industries(rank, limit=2)
         assert [p["code"] for p in picked] == ["BK2", "BK3"]
+
+
+class TestPruneCoversAllTables:
+    """ETF / 4 维 表也要按窗口裁剪（曾漏掉，库会无限增长）。
+
+    用临时目录切换库文件，保持「单测不碰真实数据」的约定。
+    """
+
+    @pytest.fixture()
+    def temp_db(self, tmp_path, monkeypatch):
+        from services import boardflow as b
+        monkeypatch.setattr(b, "_DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(b, "_DB_FILE", str(tmp_path / "board_flow.db"))
+        b.init_db()
+        return b
+
+    def test_prune_removes_old_etf_and_em_dates(self, temp_db):
+        b = temp_db
+        old = "2020-01-02"
+        with b._db() as conn:
+            conn.execute("INSERT OR REPLACE INTO etf_flow_points(date,code,time,main) VALUES(?,?,?,?)",
+                         (old, "510300", "09:31", 1.0))
+            conn.execute("INSERT OR REPLACE INTO etf_rank_snapshots(date,code,name,type,flow) VALUES(?,?,?,?,?)",
+                         (old, "510300", "沪深300ETF", "broad", 1.0))
+            conn.execute("INSERT OR REPLACE INTO em_flow_points(date,code,name,kind,time,inst) VALUES(?,?,?,?,?,?)",
+                         (old, "1.000300", "沪深300", "index", "09:31", 1.0))
+        b.prune(dt.date(2026, 11, 4))
+        with b._db() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM etf_flow_points WHERE date=?", (old,)).fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM etf_rank_snapshots WHERE date=?", (old,)).fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM em_flow_points WHERE date=?", (old,)).fetchone()[0] == 0
+
+    def test_available_dates_per_table(self, temp_db):
+        b = temp_db
+        assert b.available_dates(5, "etf") == []
+        assert b.available_dates(5, "em") == []
+        assert b.available_dates(5, "不存在的表") == b.available_dates(5, "board")
+
+
+class TestUpdateWatchAtomic:
+    @pytest.fixture()
+    def temp_db(self, tmp_path, monkeypatch):
+        from services import boardflow as b
+        monkeypatch.setattr(b, "_DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(b, "_DB_FILE", str(tmp_path / "board_flow.db"))
+        monkeypatch.setattr(b, "_WATCH_FILE", str(tmp_path / "board_watch.json"))
+        monkeypatch.setattr(b, "_ETF_WATCH_FILE", str(tmp_path / "etf_watch.json"))
+        b.init_db()
+        return b
+
+    def test_add_and_remove_return_ok(self, temp_db):
+        b = temp_db
+        items, ok = b.update_watch({"code": "BK0001", "name": "甲"})
+        assert ok and [i["code"] for i in items] == ["BK0001"]
+        items, ok = b.update_watch(None, "BK0001")
+        assert ok and items == []
+
+    def test_etf_watch_roundtrip(self, temp_db):
+        b = temp_db
+        items, ok = b.update_etf_watch({"code": "510300", "name": "沪深300ETF"})
+        assert ok and items[0]["code"] == "510300"
+        items, ok = b.update_etf_watch(None, "510300")
+        assert ok and items == []

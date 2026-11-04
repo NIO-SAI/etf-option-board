@@ -30,8 +30,8 @@ export function BoardMultiPage() {
 
   const { data, refresh, error } = usePolling(
     () => api.boardMulti(start || undefined, end || undefined, type),
-    600_000,
-    [type, start, end],
+    interval,
+    [type, start, end, interval],
     { kind: "bmulti", code: `${type}:${start || "auto"}:${end || "auto"}` },
   );
 
@@ -79,7 +79,7 @@ export function BoardMultiPage() {
           <FrameHeader className="flex-row items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <FrameTitle className="text-sm">主力资金多日图</FrameTitle>
-              <Tabs tabs={TYPES} value={type} onChange={(k) => { setType(k); setPicked([]); }} />
+              <Tabs tabs={TYPES} value={type} onChange={(k) => { setType(k); setPicked([]); touched.current = false; }} />
             </div>
             <div className="flex items-center gap-2">
               {health?.trading ? <Badge variant="success-light">交易中</Badge> : <Badge variant="outline">休市</Badge>}

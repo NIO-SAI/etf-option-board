@@ -136,6 +136,8 @@ export function EmFlowPage() {
           <div className="px-2 pb-2">
             {error ? (
               <EmptyState title="接口失败" hint={String(error)} />
+            ) : !effectiveCode ? (
+              <EmptyState title="没有可用的标的" hint="行业列表为空，稍后重试或检查采集状态" />
             ) : !series ? (
               <Skeleton className="h-[380px] w-full" />
             ) : !dimSeries.length ? (

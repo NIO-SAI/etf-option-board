@@ -681,16 +681,17 @@ async def board_watch_add(code: str = Query(...), name: str = Query("")):
     """加入自选板块（幂等）。"""
     if not code.startswith("BK"):
         return {"error": "板块代码必须是 BK 开头"}
-    items = await asyncio.to_thread(bf.update_watch, {"code": code, "name": (name or code).strip()}, None)
-    if not any(it["code"] == code for it in items):
+    items, ok = await asyncio.to_thread(
+        bf.update_watch, {"code": code, "name": (name or code).strip()}, None)
+    if not ok:
         return {"error": "自选板块写入失败"}
     return {"items": items}
 
 
 @router.delete("/board/watch")
 async def board_watch_remove(code: str = Query(...)):
-    items = await asyncio.to_thread(bf.update_watch, None, code)
-    if any(it["code"] == code for it in items):
+    items, ok = await asyncio.to_thread(bf.update_watch, None, code)
+    if not ok:
         return {"error": "自选板块写入失败"}
     return {"items": items}
 
@@ -895,7 +896,7 @@ async def etf_flow_rank(scope: str = Query("all", description="all / watch"),
                         date: str | None = Query(None)):
     if not date:
         try:
-            dates = await asyncio.to_thread(bf.available_dates, 1)
+            dates = await asyncio.to_thread(bf.available_dates, 1, "etf")
         except Exception:  # noqa: BLE001
             dates = []
         date = dates[0] if dates else dt.date.today().isoformat()
@@ -908,6 +909,9 @@ async def etf_flow_rank(scope: str = Query("all", description="all / watch"),
     watch_codes = {w["code"] for w in watch}
     if scope == "watch":
         rows = [r for r in rows if r["code"] in watch_codes]
+    elif scope == "hot":
+        # 热门 = |主力净流入| 前 30（与全部排行区分，页面上更聚焦）
+        rows = sorted(rows, key=lambda r: -abs(float(r.get("flow") or 0)))[:30]
     for r in rows:
         r["watch"] = r["code"] in watch_codes
     out = {"date": date, "scope": scope, "items": rows, "watch_count": len(watch_codes),
@@ -923,7 +927,7 @@ async def etf_flow_rank(scope: str = Query("all", description="all / watch"),
 async def etf_flow_series(codes: str = Query(""), date: str | None = Query(None)):
     if not date:
         try:
-            dates = await asyncio.to_thread(bf.available_dates, 1)
+            dates = await asyncio.to_thread(bf.available_dates, 1, "etf")
         except Exception:  # noqa: BLE001
             dates = []
         date = dates[0] if dates else dt.date.today().isoformat()
@@ -956,7 +960,7 @@ async def etf_flow_4dim(code: str = Query(...), date: str | None = Query(None)):
     """单只 ETF 的 4 维资金累计曲线（机构/大单/中户/散户）。"""
     if not date:
         try:
-            dates = await asyncio.to_thread(bf.available_dates, 1)
+            dates = await asyncio.to_thread(bf.available_dates, 1, "etf")
         except Exception:  # noqa: BLE001
             dates = []
         date = dates[0] if dates else dt.date.today().isoformat()
@@ -991,16 +995,17 @@ async def etf_flow_watch():
 async def etf_flow_watch_add(code: str = Query(...), name: str = Query("")):
     if not (code.isdigit() and len(code) == 6):
         return {"error": "ETF 代码必须是 6 位数字"}
-    items = await asyncio.to_thread(bf.update_etf_watch, {"code": code, "name": name or code}, None)
-    if not any(it["code"] == code for it in items):
+    items, ok = await asyncio.to_thread(
+        bf.update_etf_watch, {"code": code, "name": name or code}, None)
+    if not ok:
         return {"error": "自选 ETF 写入失败"}
     return {"items": items}
 
 
 @router.delete("/etf-flow/watch")
 async def etf_flow_watch_remove(code: str = Query(...)):
-    items = await asyncio.to_thread(bf.update_etf_watch, None, code)
-    if any(it["code"] == code for it in items):
+    items, ok = await asyncio.to_thread(bf.update_etf_watch, None, code)
+    if not ok:
         return {"error": "自选 ETF 写入失败"}
     return {"items": items}
 
@@ -1075,7 +1080,7 @@ async def em_flow_series(target_type: str = Query("index", description="index / 
     kind = target_type if target_type in ("index", "industry", "market") else "index"
     if not date:
         try:
-            dates = await asyncio.to_thread(bf.available_dates, 1)
+            dates = await asyncio.to_thread(bf.available_dates, 1, "em")
         except Exception:  # noqa: BLE001
             dates = []
         date = dates[0] if dates else dt.date.today().isoformat()

@@ -74,9 +74,10 @@ export function BoardFlowPage() {
   );
 
   // 详情抽屉：一次请求拿全六块，重复打开同一板块当日走缓存
+  // 抽屉不轮询：打开时取一次（成分股/研报是对上游的实时请求，重复拉会违背「读接口只读」）
   const { data: detail } = usePolling(
     () => (selected ? api.boardDetail(selected.code, date || undefined) : Promise.resolve(null)),
-    60_000,
+    3_600_000,
     [selected?.code, date],
     { kind: "bdetail", code: selected?.code ?? "none", extra: date || null },
   );

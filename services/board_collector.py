@@ -181,8 +181,13 @@ async def _etf_cycle() -> None:
     now = dt.datetime.now()
     date, hhmm = now.strftime("%Y-%m-%d"), now.strftime("%H:%M")
     if _etf_universe_date != date or not _etf_universe:
-        _etf_universe = await _build_etf_universe(date)
-        _etf_universe_date = date
+        picked = await _build_etf_universe(date)
+        # 只拿到核心 9 只（ETF 列表空回包）时不要锁定当天：下一轮继续尝试补齐宽基/行业
+        if len(picked) > 9:
+            _etf_universe = picked
+            _etf_universe_date = date
+        elif not _etf_universe:
+            _etf_universe = picked
     if not _etf_universe:
         return
     sem = asyncio.Semaphore(_ETF_CONCURRENCY)

@@ -331,9 +331,14 @@ def read_points(date: str, codes: list[str]) -> dict[str, list[tuple[str, float]
     return out
 
 
-def available_dates(limit: int = 60) -> list[str]:
+_DATE_TABLES = {"board": "rank_snapshots", "etf": "etf_rank_snapshots", "em": "em_flow_points"}
+
+
+def available_dates(limit: int = 60, table: str = "board") -> list[str]:
+    """有数据的日期（table: board / etf / em）。表名走白名单，不接受外部任意值。"""
+    name = _DATE_TABLES.get(table, "rank_snapshots")
     with _db() as conn:
-        cur = conn.execute("SELECT DISTINCT date FROM rank_snapshots ORDER BY date DESC LIMIT ?", (int(limit),))
+        cur = conn.execute(f"SELECT DISTINCT date FROM {name} ORDER BY date DESC LIMIT ?", (int(limit),))
         return [row[0] for row in cur.fetchall()]
 
 
@@ -362,8 +367,16 @@ def prune(today: dt.date | None = None) -> dict:
     with _db() as conn:
         p_dates = [r[0] for r in conn.execute("SELECT DISTINCT date FROM flow_points").fetchall()]
         r_dates = [r[0] for r in conn.execute("SELECT DISTINCT date FROM rank_snapshots").fetchall()]
+        etf_p = [r[0] for r in conn.execute("SELECT DISTINCT date FROM etf_flow_points").fetchall()]
+        etf_r = [r[0] for r in conn.execute("SELECT DISTINCT date FROM etf_rank_snapshots").fetchall()]
+        em_p = [r[0] for r in conn.execute("SELECT DISTINCT date FROM em_flow_points").fetchall()]
     plan = prune_plan(today, p_dates, r_dates)
-    removed = {"flow_points": 0, "rank_snapshots": 0}
+    # ETF / 4 维 与板块同口径：分时 30 天、排行 120 天
+    plan["etf_flow_points"] = prune_plan(today, etf_p, etf_p)["flow_points"]
+    plan["em_flow_points"] = prune_plan(today, em_p, em_p)["flow_points"]
+    plan["etf_rank_snapshots"] = prune_plan(today, etf_r, etf_r)["rank_snapshots"]
+    removed = {"flow_points": 0, "rank_snapshots": 0, "etf_flow_points": 0,
+               "etf_rank_snapshots": 0, "em_flow_points": 0}
     with _db() as conn:
         for table, dates in plan.items():
             for d in dates:
@@ -394,8 +407,8 @@ def load_watch() -> list[dict]:
     return out
 
 
-def update_watch(add: dict | None = None, remove: str | None = None) -> list[dict]:
-    """一次性完成「读—改—写」（加锁 + 原子替换），避免并发丢失更新。"""
+def update_watch(add: dict | None = None, remove: str | None = None) -> tuple[list[dict], bool]:
+    """一次性完成「读—改—写」（加锁 + 原子替换），返回 (列表, 是否写盘成功)。"""
     with _LOCK:
         items = load_watch()
         if remove:
@@ -404,8 +417,8 @@ def update_watch(add: dict | None = None, remove: str | None = None) -> list[dic
             code = str(add["code"])
             if not any(it["code"] == code for it in items):
                 items.append({"code": code, "name": str(add.get("name") or code)})
-        save_watch(items)
-        return items
+        ok = save_watch(items)
+        return items, ok
 
 
 def save_watch(items: list[dict]) -> bool:
@@ -642,7 +655,7 @@ def load_etf_watch() -> list[dict]:
     return out
 
 
-def update_etf_watch(add: dict | None = None, remove: str | None = None) -> list[dict]:
+def update_etf_watch(add: dict | None = None, remove: str | None = None) -> tuple[list[dict], bool]:
     with _LOCK:
         items = load_etf_watch()
         if remove:
@@ -652,14 +665,16 @@ def update_etf_watch(add: dict | None = None, remove: str | None = None) -> list
             if not any(it["code"] == code for it in items):
                 items.append({"code": code, "name": str(add.get("name") or code)})
         tmp = f"{_ETF_WATCH_FILE}.{os.getpid()}.{threading.get_ident()}.tmp"
+        ok = True
         try:
             os.makedirs(_DATA_DIR, exist_ok=True)
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(items, f, ensure_ascii=False, indent=2)
             os.replace(tmp, _ETF_WATCH_FILE)
         except OSError as exc:
+            ok = False
             log.warning("写入自选 ETF 失败: %s", exc)
-        return items
+        return items, ok
 
 
 # --------------------------------------------------------------------------
