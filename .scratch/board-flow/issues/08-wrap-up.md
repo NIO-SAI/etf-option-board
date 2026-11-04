@@ -34,3 +34,22 @@
   解析 tailnet 域名，跨设备视觉验收仍需在用户设备上确认）。
 - 收盘后：`/api/board/health` 返回 `trading=false`、`collector.cycles=0`（采集器只睡眠不请求），
   页面轮询降到 300s。
+
+## 追加（用户反馈：分时图没有数据、点不开）
+
+根因：本项目采集器只在交易时段写库，而板块库是收盘后才接通/重建的，`flow_points`、
+`etf_flow_points`、`em_flow_points` 三张表当天空，`build_series` 自然给不出时间轴 →
+四个页面的分时图全空，点板块进抽屉也只看到「暂无分时数据」，看起来像「点击无反应」。
+
+修复：
+1. 新增 `scripts/check_board_series.py` 探针（断言四条分时链路都有 axis 点，红了直接指出哪条空）；
+2. 新增 `scripts/import_stock_webui.py`：只读 ATTACH stock-webui 的 `data/board_flow.db`，
+   回补最近 N 个交易日的板块/ETF/4 维分钟点与排行（ETF 代码去 `sh/sz` 前缀、type 映射
+   index→broad / industry→sector、4 维列名映射；幂等，不覆盖本项目真实采集的排行 pct）；
+   已回补 10 个交易日（板块点 191 万、ETF 点 27.8 万、4 维点 4.7 万），耗时约 5 秒；
+3. ETF 页补齐 stock-webui 的点击交互：点任一行切到「选中分时」，看这只 ETF 自己的
+   累计资金曲线（原来只会跳 4 维拆解，容易被当成「点不开」）；
+4. 回归测试 `tests/test_import_stock_webui.py`（临时源库/目标库，验证映射、幂等、不覆盖真实排行）。
+
+验证：探针由红转绿；四个页面分时图均有数据；概念页点行抽屉显示 3 张图（分时/20 日/对比指数）、
+ETF 页点行显示该 ETF 曲线；pytest 458 通过。

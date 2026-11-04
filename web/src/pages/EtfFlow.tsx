@@ -48,6 +48,13 @@ export function EtfFlowPage() {
   );
 
   const selected = dimCode ?? rows[0]?.code ?? null;
+  // 点某一行 → 右侧切到「选中分时」，直接看这只 ETF 自己的资金曲线（stock-webui 的交互）
+  const { data: focus, refresh: refreshFocus } = usePolling(
+    () => (selected ? api.etfFlowSeries(selected) : Promise.resolve(null)),
+    interval,
+    [selected, interval],
+    { kind: "etfseries", code: `focus:${selected ?? "none"}` },
+  );
   const { data: dim4 } = usePolling(
     () => (selected ? api.etfFlow4dim(selected) : Promise.resolve(null)),
     60_000,
@@ -126,7 +133,7 @@ export function EtfFlowPage() {
                 <tbody>
                   {rows.map((r, i) => (
                     <tr key={r.code}
-                      onClick={() => { setDimCode(r.code); setView("4dim"); }}
+                      onClick={() => { setDimCode(r.code); setView("focus"); }}
                       className={cn("cursor-pointer border-t border-border/40 hover:bg-muted/40",
                         selected === r.code && "bg-muted/25")}>
                       <td className="px-2 py-1 tnum text-muted-foreground">{i + 1}</td>
@@ -168,15 +175,19 @@ export function EtfFlowPage() {
             <div className="flex items-center gap-2">
               <FrameTitle className="text-sm">资金分时</FrameTitle>
               <Tabs
-                tabs={[{ key: "series", label: "前 8 分时" }, { key: "4dim", label: "4 维拆解" }]}
+                tabs={[
+                  { key: "series", label: "前 8 分时" },
+                  { key: "focus", label: "选中分时" },
+                  { key: "4dim", label: "4 维拆解" },
+                ]}
                 value={view}
                 onChange={setView}
               />
             </div>
             <span className="truncate text-[10px] text-muted-foreground">
-              {view === "4dim"
-                ? `${rows.find((r) => r.code === selected)?.name ?? selected ?? "—"} · 累计净流入`
-                : `${data?.date ?? ""} · ${series?.points ?? 0} 个分时点`}
+              {view === "series"
+                ? `${data?.date ?? ""} · ${series?.points ?? 0} 个分时点`
+                : `${rows.find((r) => r.code === selected)?.name ?? selected ?? "—"} · 累计净流入`}
             </span>
           </FrameHeader>
 
@@ -196,6 +207,30 @@ export function EtfFlowPage() {
                         <span className="inline-block size-1.5 rounded-full bg-primary/70" />
                         {s.name}
                         <span className="tnum text-foreground/80">{signedYi(s.last)}</span>
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )
+            ) : view === "focus" ? (
+              !selected ? (
+                <EmptyState title="选择一只 ETF" hint="点左侧任意一行看它自己的资金分时" />
+              ) : !focus ? (
+                <Skeleton className="h-[340px] w-full" />
+              ) : !focus.axis?.length ? (
+                <EmptyState title="暂无分时数据" hint={focus.error ?? "该日还没有累积到分时点"} />
+              ) : (
+                <>
+                  <MoneyLinesChart id={`etf-focus-${selected}`} axis={focus.axis}
+                    series={focus.series as any} height={360} maxLines={1} />
+                  <div className="flex flex-wrap gap-x-3 gap-y-1 px-1 pt-1 text-[10px] text-muted-foreground">
+                    {(focus.series as any[]).map((s: any) => (
+                      <span key={s.code} className="inline-flex items-center gap-1">
+                        <span className="inline-block size-1.5 rounded-full bg-primary/70" />
+                        {s.name}
+                        <span className={cn("tnum", (s.last ?? 0) >= 0 ? "text-up" : "text-down")}>
+                          {signedYi(s.last)}
+                        </span>
                       </span>
                     ))}
                   </div>

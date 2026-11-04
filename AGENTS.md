@@ -43,6 +43,11 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   `/api/etf-flow/rank`、`/api/em-flow/series?target_type=index&code=1.000300` 逐个核。
   库文件 `data/board_flow.db`（gitignore），自选在 `data/board_watch.json`、`data/etf_watch.json`，
   4 维行业配置在 `data/em_flow_config.json`。
+- **分时图没数据**（重建库/收盘后接通时的常见情形）：先跑
+  `python3 scripts/check_board_series.py`（红的就说明某条分时链路为空），
+  再从 stock-webui 已采集的库里回补最近 N 个交易日：
+  `python3 scripts/import_stock_webui.py --days 10`（源库只读 ATTACH、幂等、不覆盖本项目的真实采集点）。
+  回补后再跑一次探针应变绿。
 - 后端代码更新后重启生效：`curl -s -X POST http://127.0.0.1:6799/api/admin/restart`
   （先优雅关闭 Kronos 子进程再以非零码退出，LaunchAgent 约 5 秒自动拉起；curl 报连接重置属正常）。
   首次上线该接口前需手动重启一次：`launchctl kickstart -k gui/$(id -u)/com.etf-option-board`。
