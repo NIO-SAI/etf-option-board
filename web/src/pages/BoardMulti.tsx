@@ -4,6 +4,7 @@ import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/fr
 import { Badge } from "@/components/reui/badge";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
 import { FlowListPanel, type BatchMode, type SortKey } from "@/components/FlowListPanel";
+import { BoardDetailDrawer } from "@/components/BoardDetailDrawer";
 import { MoneyLinesChart } from "@/components/charts";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
@@ -27,6 +28,7 @@ export function BoardMultiPage() {
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [detailCode, setDetailCode] = useState<{ code: string; name: string } | null>(null);
   const touched = useRef(false);
 
   const { data: health } = usePolling(() => api.boardHealth(), 60_000, [], { kind: "ctx", code: "board-health" });
@@ -45,7 +47,11 @@ export function BoardMultiPage() {
   const rows = useMemo(() => {
     const kw = search.trim().toLowerCase();
     let list = items;
-    if (kw) list = list.filter((i) => i.name.includes(search.trim()) || i.code.toLowerCase().includes(kw));
+    if (kw) {
+      const raw = search.trim();
+      list = list.filter((i) => i.name.includes(raw) || i.code.toLowerCase().includes(kw)
+        || String(i.py ?? "").includes(kw));
+    }
     return [...list].sort((a, b) => {
       const va = sortKey === "pct" ? (a.pct ?? 0) : a.total;
       const vb = sortKey === "pct" ? (b.pct ?? 0) : b.total;
@@ -131,6 +137,7 @@ export function BoardMultiPage() {
         }}
         sortOptions={[{ key: "pct", label: "涨幅" }, { key: "flow", label: "资金" }]}
         onBatch={batch}
+        onDetail={(r) => setDetailCode({ code: r.code, name: r.name })}
         loading={!data}
         emptyTitle="暂无区间数据"
         emptyHint={data?.error ?? undefined}
@@ -218,6 +225,12 @@ export function BoardMultiPage() {
           </div>
         </FramePanel>
       </Frame>
+
+      <BoardDetailDrawer
+        selected={detailCode}
+        date={end || intraday?.end || data?.end || ""}
+        onClose={() => setDetailCode(null)}
+      />
     </main>
   );
 }

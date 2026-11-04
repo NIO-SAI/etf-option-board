@@ -41,6 +41,7 @@ export function FlowListPanel({
   onToggleWatch,
   watchBusy,
   onDetail,
+  onHoverRow,
   maxHeight = "calc(100vh - 19rem)",
   loading,
 }: {
@@ -62,6 +63,8 @@ export function FlowListPanel({
   onToggleWatch?: (row: FlowRow) => void;
   watchBusy?: Record<string, boolean>;
   onDetail?: (row: FlowRow) => void;
+  /** 悬停某行（用于图上高亮/红绿分段），离开时传 null */
+  onHoverRow?: (code: string | null) => void;
   maxHeight?: string;
   loading?: boolean;
 }) {
@@ -138,6 +141,8 @@ export function FlowListPanel({
                     tabIndex={0}
                     onClick={() => onToggle(b.code)}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(b.code); } }}
+                    onMouseEnter={() => onHoverRow?.(b.code)}
+                    onMouseLeave={() => onHoverRow?.(null)}
                     className={cn(
                       "flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-[11px] transition-colors hover:bg-muted/60",
                       on && "bg-primary/5",

@@ -688,7 +688,7 @@ export function MoneyLinesChart({
   const option = useMemo(() => ({
     animation: false,
     color: colors,
-    grid: { left: 54, right: 12, top: 10, bottom: 24 },
+    grid: { left: 54, right: showEndLabel ? 220 : 12, top: 10, bottom: 26 },
     tooltip: {
       trigger: "axis",
       axisPointer: { type: "cross" },
@@ -714,7 +714,10 @@ export function MoneyLinesChart({
       axisLine: { lineStyle: { color: AXIS } },
       axisLabel: {
         color: AXIS, fontSize: 10, hideOverlap: true,
-        formatter: (v: string) => (["09:30", "10:30", "11:30", "14:00", "15:00"].includes(v) ? v : ""),
+        // 多日模式：底部只按「日」显示（MM-DD），时间刻度交给日分隔虚线
+        formatter: vLines?.length
+          ? (v: string) => (vLines.includes(v) ? v.slice(0, 5) : "")
+          : (v: string) => (["09:30", "10:30", "11:30", "14:00", "15:00"].includes(v) ? v : ""),
       },
     },
     yAxis: {
@@ -743,7 +746,7 @@ export function MoneyLinesChart({
           formatter: (pp: any) => {
             const arr = pp.value as any;
             const v = Array.isArray(arr) ? arr[1] : arr;
-            return `${s.name}  ${signedYi(v)}`;
+            return `${s.name} ${signedYi(v)}`;
           },
         },
         labelLayout: { moveOverlap: "shiftY" as const },

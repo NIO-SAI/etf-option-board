@@ -903,6 +903,8 @@ async def board_multi(start: str | None = Query(None, description="YYYY-MM-DD"),
                 "error": f"板块库读取失败: {exc}"}
 
     items = bf.aggregate_daily(rows, window)
+    for it in items:
+        it["py"] = pinyin_svc.initials(it.get("name") or "")
     return {"start": start, "end": end, "type": btype, "dates": window,
             "items": items, "available_dates": asc,
             "error": None if items else "该区间没有数据（可能还没采集到这些交易日）"}
@@ -1001,9 +1003,28 @@ async def etf_flow_4dim(code: str = Query(...), date: str | None = Query(None)):
         _, dims[key] = aligned([(t, d.get(key) or 0) for t, _, d in pts])
     if not axis:
         dims = {}
+    # 历史分时点可能只有「主力」一列（导入数据），四维全 0 时用一次实时快照兜底
+    def all_zero() -> bool:
+        return not any(
+            v for key in ("super", "large", "medium", "small")
+            for v in (dims.get(key) or []) if v)
+
     out = {"date": date, "code": code, "axis": axis, "dims": dims}
+    if not axis or all_zero():
+        try:
+            # ETF 代码转东财 secid：5 开头沪市(1.)，其余深市(0.)
+            secid = f"{'1' if code.startswith('5') else '0'}.{code}"
+            q = await em.stock_get(secid, "f57,f58,f137,f140,f143,f146,f149,f170", ttl=20.0)
+            row = bf.parse_etf_quote(code, q)
+            if row:
+                out["snapshot"] = {"main": row["flow"], "super": row["super"],
+                                   "large": row["large"], "medium": row["medium"],
+                                   "small": row["small"], "pct": row["pct"]}
+        except Exception as exc:  # noqa: BLE001 — 快照失败不影响主返回
+            out["errors"] = str(exc)
     if len(axis) < 2:
-        out["error"] = "当日分时点不足（服务启动后从下一分钟开始累积）"
+        out["error"] = ("当日 4 维分时点不足（导入的历史数据只有主力一列），下方为实时快照"
+                        if out.get("snapshot") else "当日分时点不足（服务启动后从下一分钟开始累积）")
     return out
 
 

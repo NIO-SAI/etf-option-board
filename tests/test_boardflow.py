@@ -290,3 +290,14 @@ class TestUpdateWatchAtomic:
         assert ok and items[0]["code"] == "510300"
         items, ok = b.update_etf_watch(None, "510300")
         assert ok and items == []
+
+
+class TestAggregateDailyPct:
+    def test_pct_uses_last_day(self):
+        rows = [
+            {"date": "2026-11-01", "code": "BK1", "name": "甲", "type": "concept", "flow": 1.0, "pct": 1.5},
+            {"date": "2026-11-02", "code": "BK1", "name": "甲", "type": "concept", "flow": 2.0, "pct": 3.2},
+        ]
+        out = bf.aggregate_daily(rows, ["2026-11-01", "2026-11-02"])
+        assert out[0]["pct"] == 3.2
+        assert out[0]["total"] == 3.0
