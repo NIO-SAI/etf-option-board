@@ -162,6 +162,13 @@ async def directions():
     return {"items": items}
 
 
+@router.get("/picks/top")
+async def picks_top(n: int = 6, force: int = 0):
+    """跨 9 只 ETF 的优选合约横评（性价比 0.6 + 波动 0.4）。"""
+    from services import top_picks
+    return await top_picks.snapshot(n=n, force=bool(force))
+
+
 @router.get("/etfs/spark")
 async def etfs_spark():
     """9 只标的 + 底栏两个大盘指数的日内收盘价序列（供列表迷你走势）。

@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Loader2, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { IntradayChart, LineToggle } from "@/components/charts";
 import { TopBar } from "@/components/TopBar";
-import { BiasBar, BiasBarSkeleton, CandidateList, CandidateSkeleton, EtfList, ExpiryCalendar, OptionTQuote, PlanCard, SignalFeed } from "@/components/panels";
+import { BiasBar, BiasBarSkeleton, CandidateList, CandidateSkeleton, EtfList, ExpiryCalendar, OptionTQuote, PlanCard, SignalFeed, TopPicksList } from "@/components/panels";
 import { ContractDetail, KronosPredict, LlmPanel } from "@/components/detail";
 import { AlertCenter } from "@/components/AlertCenter";
 import { SettingsDialog } from "@/components/SettingsDialog";
@@ -58,6 +58,8 @@ export default function App() {
   const { data: national } = usePolling(() => api.national(), 30_000);
   const { data: etfQuotes } = usePolling(() => api.etfs(), 10_000);
   const { data: directions } = usePolling(() => api.directions(), 60_000);
+  // 跨 9 只标的的合约横评（后端 30s SWR 缓存，轮询 30s 即可）
+  const { data: topPicks, refresh: refreshPicks } = usePolling(() => api.topPicks(6), 30_000);
   const { data: spark } = usePolling(() => api.etfs_spark(), 120_000, []);
   // 到期日历：一天只变一次，10 分钟轮询足够（换来的是「当月还剩几天」永不陈旧）
   const { data: expiryView } = usePolling(() => api.expiry(), 600_000);
@@ -81,7 +83,19 @@ export default function App() {
     return chain.contracts.find((c: any) => c.secid === contractSecid) ?? null;
   }, [chain, contractSecid]);
 
-  useEffect(() => { setMonth(null); setContractSecid(null); }, [etfCode]);
+  // 跨标的优选点选：目标合约先存起来，等链切到该标的后再选中（切标的会重置合约/月份）
+  const pendingPick = useRef<{ code: string; secid: string; month: number | null } | null>(null);
+  useEffect(() => {
+    const p = pendingPick.current;
+    if (p && p.code === etfCode) {
+      setMonth(p.month ?? null);
+      setContractSecid(p.secid);
+      pendingPick.current = null;
+      return;
+    }
+    setMonth(null);
+    setContractSecid(null);
+  }, [etfCode]);
 
   // 缓存里的合约可能已不在最新链里（换了月份/已到期）：链就绪后回退到默认优选合约
   const chainCode = chain?.etf?.code;
@@ -164,6 +178,18 @@ export default function App() {
   const onPickContract = (c: any) => {
     setContractSecid(c.secid);
     if (c.month != null && c.month !== (month ?? chain?.front_month)) void onMonth(c.month);
+  };
+
+  // 右侧「全市场优选」可能是别的标的：记下目标合约，切标的后由上面的 effect 选中
+  const onPickTop = (p: any) => {
+    const code = p.etf_code as string;
+    if (code === etfCode) {
+      setContractSecid(p.secid);
+      if (p.month != null && p.month !== (month ?? chain?.front_month)) void onMonth(p.month);
+      return;
+    }
+    pendingPick.current = { code, secid: p.secid, month: p.month ?? null };
+    setEtfCode(code);
   };
 
   return (
@@ -363,6 +389,23 @@ export default function App() {
           )}
           <div className={`flex flex-col gap-3 ${rightCollapsed ? "hidden" : ""}`}>
           <AlertCenter onSelect={setEtfCode} />
+
+          <Frame spacing="sm">
+            <FramePanel dense>
+              <FrameHeader className="flex-row items-center justify-between">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <FrameTitle className="text-xs">优选合约（全市场）</FrameTitle>
+                  <span className="truncate text-[10px] text-muted-foreground" title="综合分 = 性价比×0.6 + 波动×0.4；性价比与单标的优选同一套打分，波动=有效杠杆+当日涨幅+标的振幅">
+                    性价比×0.6 + 波动×0.4
+                  </span>
+                </div>
+                <CacheTag meta={null} onRefresh={refreshPicks} />
+              </FrameHeader>
+              <div className="px-2 pb-3">
+                <TopPicksList items={topPicks?.items ?? []} loading={!topPicks} onSelect={onPickTop} selectedSecid={contractSecid} />
+              </div>
+            </FramePanel>
+          </Frame>
 
           <Frame spacing="sm">
             <FramePanel dense>

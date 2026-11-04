@@ -26,6 +26,7 @@ export const api = {
   optTrends: (secid: string) => get(`/option/trends?secid=${secid}`),
   optLevels: (code: string, secid: string) =>
     get(`/option/levels?code=${code}&secid=${secid}`),
+  topPicks: (n = 6) => get(`/picks/top?n=${n}`),
   calibration: () => get("/calibration"),
   indexOptionOverview: () => get("/index-option/overview"),
   indexOption: (symbol: string) => get(`/index-option/${symbol}`),

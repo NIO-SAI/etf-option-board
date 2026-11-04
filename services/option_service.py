@@ -222,6 +222,7 @@ async def chain(etf_code: str) -> dict:
         "prev_close": em.num(q.get("f60")) if q else None,
         "volume": em.num(q.get("f47")) if q else 0,
         "amount": em.num(q.get("f48")) if q else 0,
+        "amplitude": em.num(q.get("f171")) if q else None,
     }
     contracts = [_enrich(r, s, today) for r in raw]
     contracts.sort(key=lambda x: (x["days"], x["strike"], not x["is_call"]))

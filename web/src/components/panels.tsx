@@ -945,6 +945,69 @@ export function CandidateList({
   );
 }
 
+/* ---------------- 跨标的优选（全市场 9 标的横评） ---------------- */
+export function TopPicksList({
+  items, onSelect, selectedSecid, loading,
+}: {
+  items: any[];
+  onSelect: (p: any) => void;
+  selectedSecid?: string | null;
+  loading?: boolean;
+}) {
+  if (loading) return <CandidateSkeleton />;
+  if (!items?.length) {
+    return <EmptyState title="暂无跨标的优选" hint="等待期权链与方向数据返回（约 30 秒）" />;
+  }
+  return (
+    <div className="flex flex-col gap-1" role="list">
+      {items.map((p) => {
+        const dir = DIR[(p.direction === "call" || p.direction === "put" ? p.direction : "neutral") as Dir];
+        // 方向观望时只表示「按涨跌择边」，别把中性标的写成看多/看空
+        const dirLabel = p.direction === "call" ? "看多" : p.direction === "put" ? "看空"
+          : p.side === "call" ? "观望·偏多" : "观望·偏空";
+        const eff = (p.leverage || 0) * Math.abs(p.delta || 0);
+        return (
+          <button
+            key={`${p.etf_code}-${p.secid}`}
+            type="button"
+            role="listitem"
+            aria-current={p.secid === selectedSecid ? "true" : undefined}
+            onClick={() => onSelect(p)}
+            title={(p.reasons || []).join("；")}
+            className={cn(
+              "flex items-center gap-2 rounded-md border border-border/60 px-2.5 py-2 text-left transition-colors",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+              p.secid === selectedSecid ? "border-primary bg-primary/12 ring-2 ring-inset ring-primary" : "hover:bg-muted/40",
+            )}
+          >
+            <span className="w-4 shrink-0 text-center text-xs text-muted-foreground tnum" aria-hidden>{p.rank}</span>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="truncate text-xs font-medium">{p.etf_name}</span>
+                <Badge variant={dir.variant} className="shrink-0" title="该标的当前综合方向；观望时按涨跌择边">{dirLabel}</Badge>
+                <span className="text-[10px] text-muted-foreground tnum">{p.etf_code}</span>
+              </div>
+              <div className="truncate text-[11px] text-muted-foreground tnum">{p.name}</div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] tnum">
+                <span className="rounded bg-primary/10 px-1 text-primary" title="综合分 = 性价比×0.6 + 波动×0.4">综合 {p.pick_score}</span>
+                <span className="rounded bg-muted px-1 text-muted-foreground" title="性价比：与单标的优选同一套打分（流动性/期望收益/Δ/Theta/IV/溢价…）">性价比 {p.quality}</span>
+                <span className="rounded bg-warning/15 px-1 text-warning" title="波动分：有效杠杆（|Δ|×标的价/权利金）+ 合约当日涨幅 + 标的日内振幅">波动 {p.vol}</span>
+              </div>
+            </div>
+            <div className="shrink-0 text-right">
+              <div className="text-xs font-medium tnum">{nf(p.last, 4)}</div>
+              <div className={cn("text-xs tnum", clsUpDown(p.pct))}>{pct(p.pct)}</div>
+              <div className="text-[10px] text-muted-foreground tnum" title="有效杠杆：标的涨 1% 时合约约涨多少">
+                ×{nf(eff, 1)}
+              </div>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ---------------- T 型报价 ---------------- */
 export function OptionTQuote({
   chain, month, onMonth, selectedSecid, onSelect, cacheTag, loading,
