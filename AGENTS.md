@@ -41,6 +41,10 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   测试通知：`curl -X POST http://127.0.0.1:6799/api/admin/test-alert`（发 3 条【测试】告警走真实 SSE）。
 - 已装 LaunchAgent `com.etf-option-board` 常驻 `:6799`（崩溃自动拉起）。手动起服务前先确认
   端口未被它占用（`launchctl print gui/$(id -u)/com.etf-option-board`），日志 `/tmp/etf-option-board.log`。
+- **Docker 部署（2026-11-04 新增）**：`Dockerfile` 多阶段（Node 构建前端 → `python:3.13-slim` 托管）+
+  `docker-compose.yml`（镜像 `${ETF_IMAGE:-vissong/etf-option-board:latest}`，卷挂 `/app/data`）。
+  镜像必须带 `TZ=Asia/Shanghai`——交易时段判断全用本地 naive 时间。容器内无 Kronos、无 opencode CLI 回落，
+  `/api/admin/deploy` 重建前端不可用（镜像不含 Node）。用法与换镜像名见 README「Docker 部署」。
 - 板块资金排障：`curl /api/board/health` 看采集时间与库里条数；`/api/board/rank?type=all`、
   `/api/etf-flow/rank`、`/api/em-flow/series?target_type=index&code=1.000300` 逐个核。
   库文件 `data/board_flow.db`（gitignore），自选在 `data/board_watch.json`、`data/etf_watch.json`，

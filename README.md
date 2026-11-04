@@ -72,6 +72,39 @@ bash run.sh          # 后端 :6799
 bash web/dev.sh      # 前端 :5273（/api 代理到 6799）
 ```
 
+### Docker 部署
+
+镜像已推到 Docker Hub：`vissong/etf-option-board`（linux/amd64 + linux/arm64）。
+只需要仓库里的 `docker-compose.yml` 一个文件：
+
+```bash
+docker compose up -d                          # 拉镜像并后台启动，打开 http://<主机IP>:6799
+docker compose logs -f                        # 看日志
+docker compose pull && docker compose up -d   # 升级到最新镜像
+```
+
+- 数据（设置、自选、板块库、分钟线累积）在命名卷 `etf-data`（容器内 `/app/data`），重建容器不丢。
+- 镜像固定 `TZ=Asia/Shanghai`：交易时段判断全靠本地时间，不要改成 UTC。
+- 大模型决策：在 `docker-compose.yml` 同目录的 `.env` 写 `LLM_API_KEY=...`。容器里没有 opencode CLI，
+  免费额度用尽后不会回落 CLI 通道。
+- Kronos 预测在容器内不可用（依赖宿主机上的 facecat-kronos 环境），预测区显示离线。
+- `/api/admin/restart` 退出后由 compose 的 `restart: unless-stopped` 拉起；`/api/admin/deploy`
+  的「重建前端」在容器里会失败（镜像不含 Node），改了代码请重新构建镜像。
+- `/api/admin/*` 没有鉴权，默认端口对所有网卡开放；只想本机访问就把 `ports` 改成 `127.0.0.1:6799:6799`。
+
+> **给原作者 / 其他 fork 者：把镜像换到自己的 Docker Hub 名下**
+>
+> 1. `docker login` 登录你自己的 Docker Hub 账号。
+> 2. 在仓库根目录构建并推送多架构镜像（`<你的用户名>` 换成自己的）：
+>    ```bash
+>    docker buildx create --name etf-builder --driver docker-container --use   # 只需一次
+>    docker buildx build --platform linux/amd64,linux/arm64 \
+>      -t <你的用户名>/etf-option-board:latest --push .
+>    ```
+> 3. 让 compose 用你的镜像：在 `docker-compose.yml` 同目录的 `.env` 写
+>    `ETF_IMAGE=<你的用户名>/etf-option-board:latest`，或者直接把 `docker-compose.yml` 里
+>    `image:` 默认值中的 `vissong` 改掉。本节和 `Dockerfile` 注释里的 `vissong` 也一并替换。
+
 ## 目录结构
 
 ```
