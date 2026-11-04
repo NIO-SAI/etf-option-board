@@ -8,7 +8,8 @@ import { ensureAlertsStarted } from "@/lib/alertBus";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { OptionsBoard } from "@/pages/OptionsBoard";
-import { BoardMultiPage, EtfFlowPage, EmFlowPage } from "@/pages/board";
+import { EtfFlowPage, EmFlowPage } from "@/pages/board";
+import { BoardMultiPage } from "@/pages/BoardMulti";
 import { BoardFlowPage } from "@/pages/BoardFlow";
 
 // 当前加载的前端 bundle 哈希（用于判断浏览器是否加载了最新构建）

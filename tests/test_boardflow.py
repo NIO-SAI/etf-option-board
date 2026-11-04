@@ -171,3 +171,26 @@ class TestAlignAgainst:
 
     def test_empty_axis(self):
         assert bf.align_against([], {"09:31": 1.0}) == []
+
+
+class TestAggregateDaily:
+    def test_sums_and_aligns_missing_days(self):
+        dates = ["2026-11-01", "2026-11-02", "2026-11-03"]
+        rows = [
+            {"date": "2026-11-01", "code": "BK1", "name": "甲", "type": "concept", "flow": 1e8},
+            {"date": "2026-11-03", "code": "BK1", "name": "甲", "type": "concept", "flow": -2e7},
+            {"date": "2026-11-02", "code": "BK2", "name": "乙", "type": "concept", "flow": 5e7},
+        ]
+        out = bf.aggregate_daily(rows, dates)
+        assert [i["code"] for i in out] == ["BK1", "BK2"]
+        bk1 = out[0]
+        assert bk1["total"] == 8e7 and bk1["days"] == 2
+        assert bk1["values"] == [1e8, None, -2e7]
+        assert out[1]["values"] == [None, 5e7, None]
+
+    def test_bad_flow_skipped(self):
+        out = bf.aggregate_daily([{"date": "2026-11-01", "code": "BK1", "flow": "x"}], ["2026-11-01"])
+        assert out[0]["total"] == 0 and out[0]["days"] == 0
+
+    def test_empty(self):
+        assert bf.aggregate_daily([], ["2026-11-01"]) == []

@@ -393,3 +393,48 @@ def read_history(code: str, days: int = 20) -> list[dict]:
 def align_against(axis: list[str], mapping: dict[str, float]) -> list[float | None]:
     """把另一条序列（时间→值）对齐到给定时间轴，缺失点补 None。纯函数。"""
     return [mapping.get(t) for t in (axis or [])]
+
+
+def read_rank_range(start: str, end: str, board_type: str | None = None) -> list[dict]:
+    """区间内每个交易日的排行快照（一日一行/板块）。"""
+    sql = ("SELECT date, code, name, type, flow, pct FROM rank_snapshots "
+           "WHERE date BETWEEN ? AND ?")
+    args: list = [start, end]
+    if board_type:
+        sql += " AND type=?"
+        args.append(board_type)
+    sql += " ORDER BY date, code"
+    with _db() as conn:
+        cur = conn.execute(sql, args)
+        cols = [c[0] for c in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def aggregate_daily(rows: Iterable[dict], dates: list[str]) -> list[dict]:
+    """把区间快照按板块聚合成「区间累计 + 每日序列」（缺失日留 None）。纯函数。
+
+    金额口径：每个交易日的资金流是**当日净流入**，区间累计 = 各日相加（不是末值相减）。
+    """
+    dates = list(dates or [])
+    idx = {d: i for i, d in enumerate(dates)}
+    acc: dict[str, dict] = {}
+    for r in rows or []:
+        code = str(r.get("code") or "")
+        if not code:
+            continue
+        item = acc.get(code)
+        if item is None:
+            item = acc[code] = {"code": code, "name": r.get("name") or code,
+                                "type": r.get("type"), "total": 0.0, "days": 0,
+                                "values": [None] * len(dates)}
+        flow = r.get("flow")
+        try:
+            flow = float(flow)
+        except (TypeError, ValueError):
+            continue
+        item["total"] += flow
+        item["days"] += 1
+        i = idx.get(str(r.get("date")))
+        if i is not None:
+            item["values"][i] = flow
+    return sorted(acc.values(), key=lambda x: (-x["total"], x["code"]))

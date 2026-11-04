@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Activity, Layers, Wallet } from "lucide-react";
+import { Activity, Wallet } from "lucide-react";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { EmptyState } from "@/components/ui/misc";
@@ -29,16 +29,6 @@ function BoardPlaceholder({
         </FramePanel>
       </Frame>
     </main>
-  );
-}
-
-export function BoardMultiPage() {
-  return (
-    <BoardPlaceholder
-      title="主力资金多日图"
-      subtitle="多日资金流排行与板块走势对比"
-      icon={<Layers className="size-4" />}
-    />
   );
 }
 

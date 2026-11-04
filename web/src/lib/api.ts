@@ -66,6 +66,8 @@ export const api = {
   boardDates: (limit = 60) => get(`/board/dates?limit=${limit}`),
   boardDetail: (code: string, date?: string) =>
     get(`/board/detail?code=${encodeURIComponent(code)}${date ? `&date=${date}` : ""}`),
+  boardMulti: (start?: string, end?: string, type = "concept") =>
+    get(`/board/multi?type=${type}${start ? `&start=${start}` : ""}${end ? `&end=${end}` : ""}`),
   boardWatch: () => get("/board/watch"),
   boardWatchAdd: async (code: string, name: string) =>
     (await fetch(`${BASE}/board/watch?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`,

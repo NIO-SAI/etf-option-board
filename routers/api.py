@@ -851,3 +851,37 @@ async def board_detail(code: str = Query(..., description="BK 板块代码"),
         out["errors"]["report_heat"] = str(exc)
 
     return out
+
+
+@router.get("/board/multi")
+async def board_multi(start: str | None = Query(None, description="YYYY-MM-DD"),
+                      end: str | None = Query(None),
+                      type: str = Query("concept", description="concept / industry")):
+    """区间累计排行 + 每日序列（主力资金多日图）。只读本地库，一次请求拿全。"""
+    btype = type if type in ("concept", "industry") else "concept"
+    try:
+        dates = await asyncio.to_thread(bf.available_dates, 120)
+    except Exception:  # noqa: BLE001
+        dates = []
+    if not dates:
+        return {"start": start or "", "end": end or "", "dates": [], "items": [],
+                "error": "暂无采集数据（交易时段每 30 秒采集一次）"}
+
+    # 默认最近 5 个交易日（dates 为倒序）
+    asc = sorted(dates)
+    end = end or asc[-1]
+    start = start or (asc[-5] if len(asc) >= 5 else asc[0])
+    if start > end:
+        start, end = end, start
+    window = [d for d in asc if start <= d <= end]
+
+    try:
+        rows = await asyncio.to_thread(bf.read_rank_range, start, end, btype)
+    except Exception as exc:  # noqa: BLE001
+        return {"start": start, "end": end, "dates": window, "items": [],
+                "error": f"板块库读取失败: {exc}"}
+
+    items = bf.aggregate_daily(rows, window)
+    return {"start": start, "end": end, "type": btype, "dates": window,
+            "items": items, "available_dates": asc,
+            "error": None if items else "该区间没有数据（可能还没采集到这些交易日）"}
