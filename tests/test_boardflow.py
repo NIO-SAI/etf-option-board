@@ -293,11 +293,11 @@ class TestUpdateWatchAtomic:
 
 
 class TestAggregateDailyPct:
-    def test_pct_uses_last_day(self):
+    def test_pct_is_sum_over_range(self):
         rows = [
             {"date": "2026-11-01", "code": "BK1", "name": "甲", "type": "concept", "flow": 1.0, "pct": 1.5},
             {"date": "2026-11-02", "code": "BK1", "name": "甲", "type": "concept", "flow": 2.0, "pct": 3.2},
         ]
         out = bf.aggregate_daily(rows, ["2026-11-01", "2026-11-02"])
-        assert out[0]["pct"] == 3.2
+        assert out[0]["pct"] == 4.7      # 区间涨跌幅之和
         assert out[0]["total"] == 3.0

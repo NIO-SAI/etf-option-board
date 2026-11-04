@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
@@ -15,6 +16,7 @@ import { cn } from "@/lib/utils";
 const TYPES = [
   { key: "concept", label: "概念" },
   { key: "industry", label: "行业" },
+  { key: "custom", label: "自定义" },
 ];
 /** 图上最多画 6 条；勾选数量不限制 */
 const MAX_LINES = 6;
@@ -29,24 +31,49 @@ export function BoardMultiPage() {
   const [end, setEnd] = useState("");
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [detailCode, setDetailCode] = useState<{ code: string; name: string } | null>(null);
+  const [watchItems, setWatchItems] = useState<{ code: string; name: string }[]>([]);
+  const [watchBusy, setWatchBusy] = useState<Record<string, boolean>>({});
   const touched = useRef(false);
 
   const { data: health } = usePolling(() => api.boardHealth(), 60_000, [], { kind: "ctx", code: "board-health" });
   const interval = health?.trading ? 120_000 : 600_000;
 
+  // 一次取「概念+行业」全量，切页签/自定义都本地过滤，避免切 tab 重新请求
   const { data, refresh, error } = usePolling(
-    () => api.boardMulti(start || undefined, end || undefined, type),
+    () => api.boardMulti(start || undefined, end || undefined, "all"),
     interval,
-    [type, start, end, interval],
-    { kind: "bmulti", code: `${type}:${start || "auto"}:${end || "auto"}` },
+    [start, end, interval],
+    { kind: "bmulti", code: `all:${start || "auto"}:${end || "auto"}` },
   );
+
+  const { data: watchView, refresh: refreshWatch } = usePolling(
+    () => api.boardWatch(), 300_000, [], { kind: "ctx", code: "board-watch" });
+  useEffect(() => {
+    if (Array.isArray(watchView?.items)) setWatchItems(watchView.items);
+  }, [watchView]);
+  const watchSet = useMemo(() => new Set(watchItems.map((i) => i.code)), [watchItems]);
 
   useEffect(() => onGlobalRefresh(() => { void refresh(); }), [refresh]);
 
   const items: any[] = data?.items ?? [];
+  const byCode = useMemo(() => {
+    const m: Record<string, any> = {};
+    items.forEach((i) => (m[i.code] = i));
+    return m;
+  }, [items]);
+  const sourceItems = useMemo(() => {
+    if (type === "custom") {
+      // 多日图是板块维度（BK），指数（1.xxxxxx）没有板块日快照，这里只列板块
+      return watchItems.filter((w) => w.code.startsWith("BK")).map((w) => byCode[w.code] ?? {
+        code: w.code, name: w.name, type: "concept", total: 0, pct: 0, days: 0, values: [], watch: true,
+      }).map((i) => ({ ...i, watch: true }));
+    }
+    return items.filter((i) => i.type === type);
+  }, [type, items, watchItems, byCode]);
+
   const rows = useMemo(() => {
     const kw = search.trim().toLowerCase();
-    let list = items;
+    let list = sourceItems;
     if (kw) {
       const raw = search.trim();
       list = list.filter((i) => i.name.includes(raw) || i.code.toLowerCase().includes(kw)
@@ -57,18 +84,21 @@ export function BoardMultiPage() {
       const vb = sortKey === "pct" ? (b.pct ?? 0) : b.total;
       return (va - vb) * sortDir;
     });
-  }, [items, search, sortKey, sortDir]);
+  }, [sourceItems, search, sortKey, sortDir]);
 
   // 默认选前 3（手动改过就不再回填）
   useEffect(() => {
-    if (!items.length || touched.current) return;
+    if (!sourceItems.length || touched.current) return;
     setSelected((prev) => {
-      const codes = new Set(items.map((i) => i.code));
+      const codes = new Set(sourceItems.map((i) => i.code));
       const keep = Object.keys(prev).filter((c) => codes.has(c));
       if (keep.length) return prev;
-      return Object.fromEntries(items.slice(0, 3).map((i) => [i.code, true]));
+      if (type === "custom") {
+        return Object.fromEntries(sourceItems.map((i) => [i.code, true]));
+      }
+      return Object.fromEntries(sourceItems.slice(0, 3).map((i) => [i.code, true]));
     });
-  }, [items]);
+  }, [sourceItems, type]);
 
   const selectedCodes = rows.filter((r) => selected[r.code]).map((r) => r.code);
   const chartCodes = selectedCodes.slice(0, MAX_LINES);
@@ -99,13 +129,34 @@ export function BoardMultiPage() {
 
   const batch = (mode: BatchMode) => {
     touched.current = true;
-    const base = [...items].sort((a, b) => b.total - a.total);
+    const base = [...sourceItems].sort((a, b) => b.total - a.total);
     const next: Record<string, boolean> = {};
     if (mode === "all") base.forEach((b) => (next[b.code] = true));
     else if (mode === "pos10") base.filter((b) => b.total >= 0).slice(0, 10).forEach((b) => (next[b.code] = true));
     else if (mode === "neg10") base.filter((b) => b.total < 0).slice(-10).forEach((b) => (next[b.code] = true));
     else if (mode === "invert") base.forEach((b) => { if (!selected[b.code]) next[b.code] = true; });
     setSelected(next);
+  };
+
+  const toggleWatch = async (b: any) => {
+    if (watchBusy[b.code]) return;
+    const isWatched = watchSet.has(b.code);
+    setWatchBusy((m) => ({ ...m, [b.code]: true }));
+    setWatchItems((prev) => (isWatched
+      ? prev.filter((i) => i.code !== b.code)
+      : [...prev, { code: b.code, name: b.name }]));
+    try {
+      const res = isWatched ? await api.boardWatchRemove(b.code) : await api.boardWatchAdd(b.code, b.name);
+      if (res?.error) throw new Error(res.error);
+      void refreshWatch();
+    } catch (e: any) {
+      setWatchItems((prev) => (isWatched
+        ? [...prev, { code: b.code, name: b.name }]
+        : prev.filter((i) => i.code !== b.code)));
+      toast("自定义操作失败", { description: String(e?.message ?? e) });
+    } finally {
+      setWatchBusy((m) => ({ ...m, [b.code]: false }));
+    }
   };
 
   const quickRange = (n: number) => {
@@ -124,6 +175,7 @@ export function BoardMultiPage() {
         countText={`共 ${rows.length} 个 · 已选 ${selectedCodes.length}`}
         rows={rows.map((r: any) => ({
           code: r.code, name: r.name, flow: r.total, pct: r.pct ?? null, type: r.type,
+          watch: watchSet.has(r.code),
         }))}
         selected={selected}
         onToggle={toggle}
@@ -138,6 +190,8 @@ export function BoardMultiPage() {
         sortOptions={[{ key: "pct", label: "涨幅" }, { key: "flow", label: "资金" }]}
         onBatch={batch}
         onDetail={(r) => setDetailCode({ code: r.code, name: r.name })}
+        onToggleWatch={toggleWatch}
+        watchBusy={watchBusy}
         loading={!data}
         emptyTitle="暂无区间数据"
         emptyHint={data?.error ?? undefined}
@@ -218,8 +272,12 @@ export function BoardMultiPage() {
             )}
             <div className="mt-1 flex flex-wrap items-center justify-between gap-2 px-2 text-[10px] text-muted-foreground">
               <span>区间累计资金（分钟级）· 图上最多 {MAX_LINES} 条，已选 {selectedCodes.length} 个</span>
-              <span className="flex flex-wrap gap-2">
-                {dates.map((d: string) => <span key={d} className="tnum">{d.slice(5)}</span>)}
+              <span className="flex flex-wrap items-center gap-1.5">
+                {dates.map((d: string) => (
+                  <span key={d} className="tnum rounded border border-border/60 bg-muted/30 px-1.5 py-0.5">
+                    {d.slice(5)}
+                  </span>
+                ))}
               </span>
             </div>
           </div>

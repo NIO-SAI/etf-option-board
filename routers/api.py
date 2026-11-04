@@ -877,9 +877,12 @@ async def board_detail(code: str = Query(..., description="BK 板块代码"),
 @router.get("/board/multi")
 async def board_multi(start: str | None = Query(None, description="YYYY-MM-DD"),
                       end: str | None = Query(None),
-                      type: str = Query("concept", description="concept / industry")):
-    """区间累计排行 + 每日序列（主力资金多日图）。只读本地库，一次请求拿全。"""
-    btype = type if type in ("concept", "industry") else "concept"
+                      type: str = Query("concept", description="concept / industry / all")):
+    """区间累计排行 + 每日序列（主力资金多日图）。只读本地库，一次请求拿全。
+
+    type=all 返回概念+行业合并（前端「自定义」页签需要跨类型查名字与累计）。
+    """
+    btype = type if type in ("concept", "industry", "all") else "concept"
     try:
         dates = await asyncio.to_thread(bf.available_dates, 120)
     except Exception:  # noqa: BLE001
@@ -897,7 +900,8 @@ async def board_multi(start: str | None = Query(None, description="YYYY-MM-DD"),
     window = [d for d in asc if start <= d <= end]
 
     try:
-        rows = await asyncio.to_thread(bf.read_rank_range, start, end, btype)
+        rows = await asyncio.to_thread(bf.read_rank_range, start, end,
+                                       None if btype == "all" else btype)
     except Exception as exc:  # noqa: BLE001
         return {"start": start, "end": end, "dates": window, "items": [],
                 "error": f"板块库读取失败: {exc}"}

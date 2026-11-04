@@ -760,8 +760,15 @@ export function MoneyLinesChart({
     opt.series[0].markLine = {
       symbol: "none",
       silent: true,
-      label: { show: false },
-      lineStyle: { color: "rgba(255,255,255,0.22)", type: "dashed", width: 1 },
+      label: {
+        show: true,
+        position: "insideEnd",
+        distance: 6,
+        color: "#71717a",
+        fontSize: 9,
+        formatter: (pp: any) => String(pp.value ?? "").slice(0, 5),
+      },
+      lineStyle: { color: "rgba(228,228,231,0.35)", type: [4, 4], width: 1.2 },
       data: vLines.map((v) => ({ xAxis: v })),
     };
     return opt;

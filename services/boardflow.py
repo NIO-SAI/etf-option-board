@@ -505,7 +505,7 @@ def aggregate_daily(rows: Iterable[dict], dates: list[str]) -> list[dict]:
         if item is None:
             item = acc[code] = {"code": code, "name": r.get("name") or code,
                                 "type": r.get("type"), "total": 0.0, "days": 0,
-                                "pct": None, "last_date": "",
+                                "pct": 0.0, "last_date": "",
                                 "values": [None] * len(dates)}
         flow = r.get("flow")
         try:
@@ -514,13 +514,13 @@ def aggregate_daily(rows: Iterable[dict], dates: list[str]) -> list[dict]:
             continue
         item["total"] += flow
         item["days"] += 1
-        # 列表里的「涨幅」取区间内最后一个有数据交易日的涨跌幅（当日总涨幅）
+        # 列表里的「涨幅」= 区间内各交易日涨跌幅之和（用户口径：统计区间累计涨幅）
         if str(r.get("date") or "") >= item["last_date"]:
             item["last_date"] = str(r.get("date") or "")
-            try:
-                item["pct"] = float(r.get("pct") or 0)
-            except (TypeError, ValueError):
-                item["pct"] = None
+        try:
+            item["pct"] = round(float(item["pct"] or 0) + float(r.get("pct") or 0), 4)
+        except (TypeError, ValueError):
+            pass
         i = idx.get(str(r.get("date")))
         if i is not None:
             item["values"][i] = flow
