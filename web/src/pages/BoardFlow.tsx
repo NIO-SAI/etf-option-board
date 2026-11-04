@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, RefreshCw, Search } from "lucide-react";
+import { Check, Loader2, Plus, RefreshCw, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
@@ -65,7 +65,15 @@ export function BoardFlowPage() {
     [interval, date],
     { kind: "brank", code: `index:${date || "latest"}` },
   );
-  const { data: watchView } = usePolling(() => api.boardWatch(), 300_000, [], { kind: "ctx", code: "board-watch" });
+  const { data: watchView, refresh: refreshWatch } = usePolling(
+    () => api.boardWatch(), 300_000, [], { kind: "ctx", code: "board-watch" });
+  // 自选的本地真实来源：点击 + 立即翻转（乐观更新），服务端返回后以 watchView 对齐
+  const [watchItems, setWatchItems] = useState<{ code: string; name: string }[]>([]);
+  const [watchBusy, setWatchBusy] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (Array.isArray(watchView?.items)) setWatchItems(watchView.items);
+  }, [watchView]);
+  const watchSet = useMemo(() => new Set(watchItems.map((i) => i.code)), [watchItems]);
 
   const refresh = useCallback(() => {
     cache.current = {};
@@ -78,9 +86,9 @@ export function BoardFlowPage() {
 
   const allBoards: Bar[] = useMemo(
     () => (rankView?.items ?? []).map((r: any) => ({
-      code: r.code, name: r.name, type: r.type, flow: r.flow ?? 0, pct: r.pct ?? null, watch: r.watch,
+      code: r.code, name: r.name, type: r.type, flow: r.flow ?? 0, pct: r.pct ?? null, watch: watchSet.has(r.code),
     })),
-    [rankView],
+    [rankView, watchSet],
   );
   const indexRows: Bar[] = useMemo(
     () => (indexView?.items ?? []).map((r: any) => ({
@@ -97,12 +105,12 @@ export function BoardFlowPage() {
     }
     if (type === "custom") {
       const byCode = new Map([...allBoards, ...indexRows].map((b) => [b.code, b] as const));
-      return (watchView?.items ?? [])
-        .map((w: any) => byCode.get(w.code) ?? { code: w.code, name: w.name, type: "concept", flow: 0, pct: null, watch: true })
+      return watchItems
+        .map((w) => byCode.get(w.code) ?? { code: w.code, name: w.name, type: "concept", flow: 0, pct: null, watch: true })
         .map((b: any) => ({ ...b, watch: true }));
     }
     return allBoards.filter((b) => b.type === type);
-  }, [type, allBoards, indexRows, watchView]);
+  }, [type, allBoards, indexRows, watchItems]);
 
   /** 搜索 + 排序后的可见列表 */
   const rows: Bar[] = useMemo(() => {
@@ -262,12 +270,25 @@ export function BoardFlowPage() {
   }, [selectedKey, cacheVer, rowsKey]);
 
   const toggleCustom = async (b: Bar) => {
+    if (watchBusy[b.code]) return;
+    const isWatched = watchSet.has(b.code);
+    setWatchBusy((m) => ({ ...m, [b.code]: true }));
+    // 乐观更新：按钮/「自定义」列表立刻变化，失败再回滚
+    setWatchItems((prev) => (isWatched
+      ? prev.filter((i) => i.code !== b.code)
+      : [...prev, { code: b.code, name: b.name }]));
     try {
-      const res = b.watch ? await api.boardWatchRemove(b.code) : await api.boardWatchAdd(b.code, b.name);
+      const res = isWatched ? await api.boardWatchRemove(b.code) : await api.boardWatchAdd(b.code, b.name);
       if (res?.error) throw new Error(res.error);
-      toast(b.watch ? `已从自定义移除：${b.name}` : `已添加到自定义：${b.name}`);
+      toast(isWatched ? `已从自定义移除：${b.name}` : `已添加到自定义：${b.name}`);
+      void refreshWatch();
     } catch (e: any) {
+      setWatchItems((prev) => (isWatched
+        ? [...prev, { code: b.code, name: b.name }]
+        : prev.filter((i) => i.code !== b.code)));
       toast("自定义操作失败", { description: String(e?.message ?? e) });
+    } finally {
+      setWatchBusy((m) => ({ ...m, [b.code]: false }));
     }
   };
 
@@ -302,21 +323,26 @@ export function BoardFlowPage() {
 
             <div className="flex items-center gap-1 text-[11px]">
               <span className="text-muted-foreground">排序</span>
-              {(["pct", "flow"] as SortKey[]).map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => {
-                    if (sortKey === k) setSortDir((d) => -d);
-                    else { setSortKey(k); setSortDir(-1); }
-                  }}
-                  aria-pressed={sortKey === k}
-                  className={cn("rounded px-1.5 py-0.5 transition-colors",
-                    sortKey === k ? "bg-primary/15 text-primary" : "bg-muted/40 text-muted-foreground hover:text-foreground")}
-                >
-                  {k === "pct" ? "涨幅" : "资金"}{sortKey === k ? (sortDir === -1 ? "↓" : "↑") : ""}
-                </button>
-              ))}
+              <div className="flex items-center gap-0.5 rounded-md border border-border bg-muted/40 p-0.5">
+                {(["pct", "flow"] as SortKey[]).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => {
+                      if (sortKey === k) setSortDir((d) => -d);
+                      else { setSortKey(k); setSortDir(-1); }
+                    }}
+                    aria-pressed={sortKey === k}
+                    title={k === "pct" ? "按涨跌幅排序（再点切换升/降序）" : "按主力净流入排序（再点切换升/降序）"}
+                    className={cn("rounded px-2 py-0.5 font-medium transition-colors",
+                      sortKey === k
+                        ? "bg-primary text-primary-foreground shadow-xs"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground")}
+                  >
+                    {k === "pct" ? "涨幅" : "资金"}{sortKey === k ? (sortDir === -1 ? "↓" : "↑") : ""}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="flex flex-wrap gap-1 text-[11px]">
@@ -339,7 +365,7 @@ export function BoardFlowPage() {
                 </div>
               ) : rows.length === 0 ? (
                 <EmptyState title={type === "custom" ? "还没有自定义板块" : "无匹配板块"}
-                  hint={type === "custom" ? "在其他列表点右侧 + 加入自定义" : undefined} />
+                  hint={type === "custom" ? "在其他列表点行尾的 ＋ 图标即可加入自定义" : undefined} />
               ) : (
                 rows.map((b) => {
                   const on = !!selected[b.code];
@@ -377,12 +403,22 @@ export function BoardFlowPage() {
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); void toggleCustom(b); }}
-                        title={b.watch ? "从自定义列表移除" : "添加到自定义列表"}
+                        disabled={!!watchBusy[b.code]}
+                        title={b.watch ? "已加入自定义，点击移除" : "加入自定义"}
                         aria-label={b.watch ? "移除自定义" : "添加自定义"}
-                        className={cn("shrink-0 rounded px-1 text-[10px] leading-4 transition-colors",
-                          b.watch ? "text-warning hover:text-destructive" : "text-muted-foreground hover:text-primary")}
+                        aria-pressed={!!b.watch}
+                        className={cn(
+                          "inline-flex size-5 shrink-0 items-center justify-center rounded border transition-colors",
+                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          b.watch
+                            ? "border-warning/60 bg-warning/15 text-warning hover:border-destructive hover:text-destructive"
+                            : "border-border bg-card text-muted-foreground hover:border-primary hover:bg-primary/10 hover:text-primary",
+                          watchBusy[b.code] && "cursor-wait opacity-60",
+                        )}
                       >
-                        {b.watch ? "✓" : "+"}
+                        {watchBusy[b.code]
+                          ? <Loader2 className="size-3 animate-spin" aria-hidden />
+                          : b.watch ? <Check className="size-3" aria-hidden /> : <Plus className="size-3" aria-hidden />}
                       </button>
                     </div>
                   );
