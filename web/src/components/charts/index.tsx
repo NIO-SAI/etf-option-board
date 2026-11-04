@@ -762,13 +762,15 @@ export function MoneyLinesChart({
       silent: true,
       label: {
         show: true,
-        position: "insideEnd",
+        position: "start",     // 统一贴在顶部（竖线默认会旋转到竖排，必须显式 rotate 0）
+        rotate: 0,
         distance: 6,
-        color: "#71717a",
-        fontSize: 9,
+        align: "center",
+        color: "#a1a1aa",
+        fontSize: 10,
         formatter: (pp: any) => String(pp.value ?? "").slice(0, 5),
       },
-      lineStyle: { color: "rgba(228,228,231,0.35)", type: [4, 4], width: 1.2 },
+      lineStyle: { color: "rgba(228,228,231,0.55)", type: [5, 4], width: 1.5 },
       data: vLines.map((v) => ({ xAxis: v })),
     };
     return opt;

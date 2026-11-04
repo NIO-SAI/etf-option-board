@@ -272,13 +272,6 @@ export function BoardMultiPage() {
             )}
             <div className="mt-1 flex flex-wrap items-center justify-between gap-2 px-2 text-[10px] text-muted-foreground">
               <span>区间累计资金（分钟级）· 图上最多 {MAX_LINES} 条，已选 {selectedCodes.length} 个</span>
-              <span className="flex flex-wrap items-center gap-1.5">
-                {dates.map((d: string) => (
-                  <span key={d} className="tnum rounded border border-border/60 bg-muted/30 px-1.5 py-0.5">
-                    {d.slice(5)}
-                  </span>
-                ))}
-              </span>
             </div>
           </div>
         </FramePanel>
