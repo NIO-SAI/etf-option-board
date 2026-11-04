@@ -160,7 +160,7 @@ export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void })
         </FramePanel>
       </Frame>
 
-      <Dialog open={!!popup} onClose={() => setPopup(null)} className="w-[min(90vw,460px)]"
+      <Dialog open={!!popup} onClose={() => setPopup(null)} className="w-[min(90vw,460px)] p-5"
         title={<span className="flex items-center gap-2"><AlertTriangle className="size-4 text-destructive" />重要提醒</span>}>
         {popup && (
           <div className="flex flex-col gap-2">
