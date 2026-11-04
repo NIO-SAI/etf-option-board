@@ -18,8 +18,8 @@ const TYPES = [
   { key: "industry", label: "行业" },
   { key: "custom", label: "自定义" },
 ];
-/** 图上最多画 6 条；勾选数量不限制 */
-const MAX_LINES = 6;
+/** 不限制曲线条数：勾选多少就画多少（用户要求） */
+const MAX_LINES = Number.MAX_SAFE_INTEGER;
 
 /** 主力资金多日图：左侧列表（搜索/排序/批量勾选）+ 右侧分钟级累计资金曲线。 */
 export function BoardMultiPage() {
@@ -101,7 +101,7 @@ export function BoardMultiPage() {
   }, [sourceItems, type]);
 
   const selectedCodes = rows.filter((r) => selected[r.code]).map((r) => r.code);
-  const chartCodes = selectedCodes.slice(0, MAX_LINES);
+  const chartCodes = selectedCodes;
   const codesKey = chartCodes.join(",");
 
   const { data: intraday } = usePolling(
@@ -268,7 +268,7 @@ export function BoardMultiPage() {
               </div>
             )}
             <div className="mt-1 flex flex-wrap items-center justify-between gap-2 px-2 text-[10px] text-muted-foreground">
-              <span>区间累计资金（分钟级）· 图上最多 {MAX_LINES} 条，已选 {selectedCodes.length} 个</span>
+              <span>区间累计资金（分钟级）· 已选 {selectedCodes.length} 个（全部绘制）</span>
             </div>
           </div>
         </FramePanel>

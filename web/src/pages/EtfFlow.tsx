@@ -16,7 +16,8 @@ const SCOPES = [
   { key: "all", label: "全部" },
   { key: "watch", label: "自选" },
 ];
-const MAX_LINES = 6;
+// 不限制曲线条数（用户要求：能显示多少就显示多少）
+const MAX_LINES = Number.MAX_SAFE_INTEGER;
 const DIM_LABEL: Record<string, string> = {
   main: "主力", super: "超大单", large: "大单", medium: "中单", small: "小单",
 };
@@ -87,7 +88,7 @@ export function EtfFlowPage() {
   }, [baseKey, scope]);
 
   const selectedCodes = rows.filter((r) => selected[r.code]).map((r) => r.code);
-  const chartCodes = selectedCodes.slice(0, MAX_LINES);
+  const chartCodes = selectedCodes;
   const codesKey = chartCodes.join(",");
 
   const { data: series } = usePolling(
@@ -149,7 +150,7 @@ export function EtfFlowPage() {
 
   const etfLines: FlowLine[] = useMemo(() => {
     const axis: string[] = (series as any)?.axis ?? [];
-    return ((series as any)?.series ?? []).slice(0, MAX_LINES).map((s: any) => ({
+    return ((series as any)?.series ?? []).map((s: any) => ({
       code: s.code,
       name: s.name,
       pct: rows.find((r) => r.code === s.code)?.pct ?? null,
@@ -242,7 +243,7 @@ export function EtfFlowPage() {
                       height="100%" onHoverCode={setHoverCode} />
                   </div>
                   <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 px-2 pb-1 text-[10px] text-muted-foreground">
-                    {etfLines.map((s) => (
+                    {etfLines.slice(0, 30).map((s) => (
                       <span key={s.code} className="inline-flex items-center gap-1">
                         <span className="inline-block size-1.5 rounded-full bg-primary/70" />
                         {s.name}
