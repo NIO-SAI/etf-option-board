@@ -3,10 +3,10 @@ import { Button } from "@/components/ui/button";
 import { clsUpDown, pct } from "@/lib/format";
 import { sound } from "@/lib/sound";
 import { Activity, Bell, BellOff, RefreshCw, Settings, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 export function TopBar({
-  external, national, health, clock, onRefresh, onOpenSettings,
+  external, national, health, clock, onRefresh, onOpenSettings, nav,
 }: {
   external: any[];
   national: any;
@@ -14,6 +14,8 @@ export function TopBar({
   clock: string;
   onRefresh: () => void;
   onOpenSettings: () => void;
+  /** 左上角页面切换标签（由外壳传入，页面本身不关心路由） */
+  nav?: ReactNode;
 }) {
   const [muted, setMuted] = useState(!sound.enabled);
   const nt = national?.score ?? 0;
@@ -24,8 +26,9 @@ export function TopBar({
       <div className="flex items-center gap-3 px-3 py-1.5">
         <div className="flex items-center gap-2 pr-2">
           <Activity className="size-4 shrink-0 text-primary" aria-hidden />
-          <span className="text-sm font-semibold whitespace-nowrap">ETF 期权日内决策看板</span>
+          <span className="hidden text-sm font-semibold whitespace-nowrap lg:inline">ETF 期权看板</span>
         </div>
+        {nav}
         <div className="flex-1" />
         <div className="hidden items-center gap-2 xl:flex">
           {(external ?? []).slice(0, 5).map((e) => (
