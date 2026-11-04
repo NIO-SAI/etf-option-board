@@ -113,6 +113,10 @@ async def run_forever() -> None:
                     await _etf_cycle()
                 except Exception as exc:  # noqa: BLE001 — ETF 失败不拖累板块
                     log.warning("ETF 资金流采集失败: %s", exc)
+                try:
+                    await _em_cycle(dt.datetime.now())
+                except Exception as exc:  # noqa: BLE001 — 4 维失败不拖累其它
+                    log.warning("东财 4 维采集失败: %s", exc)
                 await asyncio.sleep(_CYCLE_SEC)
             else:
                 await asyncio.sleep(_IDLE_SEC)
@@ -194,3 +198,60 @@ async def _etf_cycle() -> None:
     rows = [r for r in results if r]
     if rows:
         await asyncio.to_thread(bf.save_etf_cycle, date, hhmm, rows)
+
+
+# --------------------------------------------------------------------------
+# 东财 4 维资金：指数（30s）+ 行业 Top40（60s）+ 全 A（30s）
+# --------------------------------------------------------------------------
+_EM_INDEX_INTERVAL = 30
+_EM_INDUSTRY_INTERVAL = 60
+_em_last = {"index": 0.0, "industry": 0.0}
+_EM_FIELDS = "f57,f58,f140,f143,f146,f149"
+
+
+async def _em_fetch(secid: str, kind: str, name: str = "") -> dict | None:
+    q = await em.stock_get(secid, _EM_FIELDS, ttl=20.0)
+    row = bf.parse_em_flow(secid, kind, q, name)
+    if row and kind == "industry":
+        # 存 BK 代码，查询统一用 BKxxxx（与板块排行、前端下拉一致）
+        row["code"] = secid.split(".", 1)[-1]
+    return row
+
+
+async def _em_cycle(now: dt.datetime) -> None:
+    from services.universe import INDICES
+
+    date, hhmm = now.strftime("%Y-%m-%d"), now.strftime("%H:%M")
+    mono = asyncio.get_event_loop().time()
+    targets: list[tuple[str, str, str]] = []
+
+    if mono - _em_last["index"] >= _EM_INDEX_INTERVAL:
+        _em_last["index"] = mono
+        targets += [(i["secid"], "index", i["name"]) for i in INDICES]
+        targets.append((bf.EM_MARKET_CODE, "market", bf.EM_MARKET_NAME))
+
+    if mono - _em_last["industry"] >= _EM_INDUSTRY_INTERVAL:
+        _em_last["industry"] = mono
+        try:
+            rank = await asyncio.to_thread(bf.read_rank, date, "industry")
+        except Exception:
+            rank = []
+        cfg = await asyncio.to_thread(bf.load_em_config)
+        picked = cfg["items"] if cfg.get("customized") and cfg.get("items") else bf.pick_em_industries(rank)
+        # 板块 secid 必须是 90.BKxxxx（只传 BK 代码会全部失败并触发重试，拖慢整轮）
+        targets += [(f"90.{t['code']}", "industry", t["name"]) for t in picked]
+
+    if not targets:
+        return
+    sem = asyncio.Semaphore(8)
+
+    async def one(t):
+        async with sem:
+            try:
+                return await _em_fetch(*t)
+            except Exception:  # noqa: BLE001
+                return None
+
+    rows = [r for r in await asyncio.gather(*(one(t) for t in targets)) if r]
+    if rows:
+        await asyncio.to_thread(bf.save_em_cycle, date, hhmm, rows)

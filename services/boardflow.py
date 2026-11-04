@@ -24,6 +24,7 @@ _DATA_DIR = os.path.join(_ROOT, "data")
 _DB_FILE = os.path.join(_DATA_DIR, "board_flow.db")
 _WATCH_FILE = os.path.join(_DATA_DIR, "board_watch.json")
 _ETF_WATCH_FILE = os.path.join(_DATA_DIR, "etf_watch.json")
+_EM_CONFIG_FILE = os.path.join(_DATA_DIR, "em_flow_config.json")
 
 # 保留窗口（交易日）
 KEEP_POINT_DAYS = 30
@@ -89,6 +90,19 @@ CREATE TABLE IF NOT EXISTS etf_flow_points (
     PRIMARY KEY (date, code, time)
 );
 CREATE INDEX IF NOT EXISTS idx_etf_points_date ON etf_flow_points(date, code, time);
+CREATE TABLE IF NOT EXISTS em_flow_points (
+    date TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'industry',
+    time TEXT NOT NULL,
+    inst REAL NOT NULL DEFAULT 0,
+    large REAL NOT NULL DEFAULT 0,
+    medium REAL NOT NULL DEFAULT 0,
+    retail REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (date, code, time)
+);
+CREATE INDEX IF NOT EXISTS idx_em_points_date ON em_flow_points(date, code, time);
 """
 
 
@@ -646,3 +660,105 @@ def update_etf_watch(add: dict | None = None, remove: str | None = None) -> list
         except OSError as exc:
             log.warning("写入自选 ETF 失败: %s", exc)
         return items
+
+
+# --------------------------------------------------------------------------
+# 东财 4 维资金（机构/大单/中户/散户）：指数 + 行业 + 全 A
+# --------------------------------------------------------------------------
+EM_DEFAULT_INDUSTRIES = 40
+
+EM_MARKET_CODE = "47.800000"
+EM_MARKET_NAME = "东方财富全A"
+
+
+def parse_em_flow(code: str, kind: str, data: dict | None,
+                  name: str = "") -> dict | None:
+    """归一东财 4 维快照：f140 机构(超大单)、f143 大单、f146 中户、f149 散户。
+
+    主字段缺失时返回 None（不写全 0 假数据）。
+    """
+    if not isinstance(data, dict) or data.get("f140") in (None, "", "-"):
+        return None
+
+    def num(key):
+        v = data.get(key)
+        if isinstance(v, bool) or v in (None, "", "-"):
+            return 0.0
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return {"code": code, "kind": kind, "name": str(data.get("f58") or name or code),
+            "inst": num("f140"), "large": num("f143"),
+            "medium": num("f146"), "retail": num("f149")}
+
+
+def save_em_cycle(date: str, hhmm: str, rows: list[dict]) -> int:
+    if not rows:
+        return 0
+    with _db() as conn:
+        conn.executemany(
+            "INSERT INTO em_flow_points(date,code,name,kind,time,inst,large,medium,retail) "
+            "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(date,code,time) DO UPDATE SET "
+            "name=excluded.name, kind=excluded.kind, inst=excluded.inst, "
+            "large=excluded.large, medium=excluded.medium, retail=excluded.retail",
+            [(date, r["code"], r["name"], r["kind"], hhmm,
+              float(r["inst"]), float(r["large"]), float(r["medium"]), float(r["retail"]))
+             for r in rows])
+    return len(rows)
+
+
+def read_em_points(date: str, code: str) -> list[tuple[str, float, float, float, float]]:
+    with _db() as conn:
+        cur = conn.execute(
+            "SELECT time,inst,large,medium,retail FROM em_flow_points "
+            "WHERE date=? AND code=? ORDER BY time", (date, code))
+        return [(str(t), float(a), float(b), float(c), float(d)) for t, a, b, c, d in cur.fetchall()]
+
+
+def read_em_meta(date: str, code: str) -> dict:
+    """4 维目标的名称与口径（供详情标题用）。"""
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT name, kind FROM em_flow_points WHERE date=? AND code=? LIMIT 1",
+            (date, code)).fetchone()
+    return {"name": row[0], "kind": row[1]} if row else {}
+
+
+def pick_em_industries(rank: list[dict], limit: int = EM_DEFAULT_INDUSTRIES) -> list[dict]:
+    """按 |主力净流入| 取前 N 个行业作为 4 维采集/展示目标（纯函数）。"""
+    rows = [r for r in rank or [] if str(r.get("code", "")).startswith("BK")]
+    rows.sort(key=lambda r: -abs(float(r.get("flow") or 0)))
+    return [{"code": r["code"], "name": r.get("name") or r["code"]} for r in rows[:max(1, limit)]]
+
+
+def load_em_config() -> dict:
+    """行业展示配置：{customized: bool, codes: [{code,name}]}；文件缺失即默认。"""
+    try:
+        with open(_EM_CONFIG_FILE, encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        return {"customized": False, "items": []}
+    except (OSError, ValueError) as exc:
+        log.warning("读取 4 维行业配置失败，按默认处理: %s", exc)
+        return {"customized": False, "items": []}
+    items = []
+    for it in (raw or {}).get("items") or []:
+        code = str((it or {}).get("code") or "").strip()
+        if code.startswith("BK"):
+            items.append({"code": code, "name": str((it or {}).get("name") or code)})
+    return {"customized": bool((raw or {}).get("customized")), "items": items}
+
+
+def save_em_config(config: dict) -> bool:
+    tmp = f"{_EM_CONFIG_FILE}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, _EM_CONFIG_FILE)
+        return True
+    except OSError as exc:
+        log.warning("写入 4 维行业配置失败: %s", exc)
+        return False

@@ -82,6 +82,18 @@ export const api = {
       { method: "POST" })).json(),
   etfFlowWatchRemove: async (code: string) =>
     (await fetch(`${BASE}/etf-flow/watch?code=${encodeURIComponent(code)}`, { method: "DELETE" })).json(),
+
+  // 东财 4 维资金
+  emFlowTargets: () => get("/em-flow/targets"),
+  emFlowIndustries: () => get("/em-flow/industries"),
+  emFlowSeries: (kind: string, code: string) =>
+    get(`/em-flow/series?target_type=${kind}&code=${encodeURIComponent(code)}`),
+  emFlowConfigAdd: async (code: string, name: string) =>
+    (await fetch(`${BASE}/em-flow/config/add?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`,
+      { method: "POST" })).json(),
+  emFlowConfigRemove: async (code: string) =>
+    (await fetch(`${BASE}/em-flow/config?code=${encodeURIComponent(code)}`, { method: "DELETE" })).json(),
+  emFlowConfigReset: async () => (await fetch(`${BASE}/em-flow/config/reset`, { method: "POST" })).json(),
   boardWatchAdd: async (code: string, name: string) =>
     (await fetch(`${BASE}/board/watch?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`,
       { method: "POST" })).json(),

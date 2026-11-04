@@ -8,8 +8,8 @@ import { ensureAlertsStarted } from "@/lib/alertBus";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { OptionsBoard } from "@/pages/OptionsBoard";
-import { EmFlowPage } from "@/pages/board";
 import { EtfFlowPage } from "@/pages/EtfFlow";
+import { EmFlowPage } from "@/pages/EmFlow";
 import { BoardMultiPage } from "@/pages/BoardMulti";
 import { BoardFlowPage } from "@/pages/BoardFlow";
 

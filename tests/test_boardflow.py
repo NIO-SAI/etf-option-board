@@ -194,3 +194,25 @@ class TestAggregateDaily:
 
     def test_empty(self):
         assert bf.aggregate_daily([], ["2026-11-01"]) == []
+
+
+class TestEmFlow:
+    def test_parse_missing_fields_rejected(self):
+        assert bf.parse_em_flow("1.000300", "index", None) is None
+        assert bf.parse_em_flow("1.000300", "index", {"f140": "-"}) is None
+
+    def test_parse_normalizes(self):
+        row = bf.parse_em_flow("BK1036", "industry",
+                               {"f58": "半导体", "f140": 3, "f143": 2, "f146": 1, "f149": -4})
+        assert row == {"code": "BK1036", "kind": "industry", "name": "半导体",
+                       "inst": 3.0, "large": 2.0, "medium": 1.0, "retail": -4.0}
+
+    def test_pick_industries_by_abs_flow(self):
+        rank = [
+            {"code": "BK1", "name": "甲", "flow": 1e8},
+            {"code": "BK2", "name": "乙", "flow": -5e8},
+            {"code": "BK3", "name": "丙", "flow": 2e8},
+            {"code": "000001", "name": "非板块", "flow": 9e9},
+        ]
+        picked = bf.pick_em_industries(rank, limit=2)
+        assert [p["code"] for p in picked] == ["BK2", "BK3"]

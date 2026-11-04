@@ -669,13 +669,15 @@ export function Sparkline({ data, up, height = 24, width = 54 }: { data: number[
 
 /** 板块资金多线图：统一时间轴、前值填充后的累计净流入（元 → 亿/万显示）。 */
 export function MoneyLinesChart({
-  id, axis, series, height = 320, maxLines = 8,
+  id, axis, series, height = 320, maxLines = 8, mode = "line",
 }: {
   id: string;
   axis: string[];
   series: { code: string; name: string; values: (number | null)[]; watch?: boolean }[];
   height?: number;
   maxLines?: number;
+  /** line=分线；stack=堆叠面积（4 维资金用） */
+  mode?: "line" | "stack";
 }) {
   const colors = ["#ef4444", "#f59e0b", "#a855f7", "#3b82f6", "#14b8a6", "#ec4899", "#84cc16", "#f97316"];
   const shown = (series ?? []).slice(0, maxLines);
@@ -723,10 +725,12 @@ export function MoneyLinesChart({
       showSymbol: false,
       smooth: false,
       connectNulls: false,
-      lineStyle: { width: s.watch ? 2.4 : 1.4 },
+      ...(mode === "stack"
+        ? { stack: "total", areaStyle: { opacity: 0.35 }, lineStyle: { width: 1 } }
+        : { lineStyle: { width: s.watch ? 2.4 : 1.4 } }),
       data: s.values,
     })),
-  }), [axis, shown]);
+  }), [axis, shown, mode]);
 
   if (!axis.length) return null;
   return <ReactECharts key={id} option={option} notMerge style={{ height }} />;

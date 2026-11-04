@@ -1003,3 +1003,118 @@ async def etf_flow_watch_remove(code: str = Query(...)):
     if any(it["code"] == code for it in items):
         return {"error": "自选 ETF 写入失败"}
     return {"items": items}
+
+
+# --------------------------------------------------------------------------
+# 东财 4 维资金（机构/大单/中户/散户）
+# --------------------------------------------------------------------------
+@router.get("/em-flow/targets")
+async def em_flow_targets():
+    """4 维页的目标清单：核心指数 + 全 A 聚合。"""
+    from services.universe import INDICES
+    return {"indices": [{"code": i["secid"], "name": i["name"]} for i in INDICES],
+            "market": {"code": bf.EM_MARKET_CODE, "name": bf.EM_MARKET_NAME}}
+
+
+@router.get("/em-flow/industries")
+async def em_flow_industries(date: str | None = Query(None)):
+    """行业展示列表（自定义优先，否则按 |主力净流入| 前 40）+ 全量候选。"""
+    if not date:
+        try:
+            dates = await asyncio.to_thread(bf.available_dates, 1)
+        except Exception:  # noqa: BLE001
+            dates = []
+        date = dates[0] if dates else dt.date.today().isoformat()
+    try:
+        rank = await asyncio.to_thread(bf.read_rank, date, "industry")
+    except Exception as exc:  # noqa: BLE001
+        return {"date": date, "display": [], "all": [], "error": str(exc)}
+    cfg = await asyncio.to_thread(bf.load_em_config)
+    display = cfg["items"] if cfg.get("customized") and cfg["items"] else bf.pick_em_industries(rank)
+    all_rows = [{"code": r["code"], "name": r["name"], "flow": r["flow"]}
+                for r in sorted(rank, key=lambda r: -abs(float(r.get("flow") or 0)))[:200]]
+    return {"date": date, "display": display, "all": all_rows,
+            "customized": bool(cfg.get("customized")),
+            "default_limit": bf.EM_DEFAULT_INDUSTRIES}
+
+
+@router.post("/em-flow/config/add")
+async def em_flow_config_add(code: str = Query(...), name: str = Query("")):
+    if not code.startswith("BK"):
+        return {"error": "行业代码必须是 BK 开头"}
+    cfg = await asyncio.to_thread(bf.load_em_config)
+    items = cfg["items"] if cfg.get("customized") else []
+    if not any(it["code"] == code for it in items):
+        items.append({"code": code, "name": name or code})
+    if not await asyncio.to_thread(bf.save_em_config, {"customized": True, "items": items}):
+        return {"error": "行业配置写入失败"}
+    return {"customized": True, "items": items}
+
+
+@router.delete("/em-flow/config")
+async def em_flow_config_remove(code: str = Query(...)):
+    cfg = await asyncio.to_thread(bf.load_em_config)
+    items = [it for it in (cfg["items"] if cfg.get("customized") else []) if it["code"] != code]
+    if not await asyncio.to_thread(bf.save_em_config, {"customized": True, "items": items}):
+        return {"error": "行业配置写入失败"}
+    return {"customized": True, "items": items}
+
+
+@router.post("/em-flow/config/reset")
+async def em_flow_config_reset():
+    if not await asyncio.to_thread(bf.save_em_config, {"customized": False, "items": []}):
+        return {"error": "行业配置写入失败"}
+    return {"customized": False, "items": []}
+
+
+@router.get("/em-flow/series")
+async def em_flow_series(target_type: str = Query("index", description="index / industry / market"),
+                         code: str = Query(""),
+                         date: str | None = Query(None)):
+    """单个目标的 4 维资金分时（累计）。"""
+    kind = target_type if target_type in ("index", "industry", "market") else "index"
+    if not date:
+        try:
+            dates = await asyncio.to_thread(bf.available_dates, 1)
+        except Exception:  # noqa: BLE001
+            dates = []
+        date = dates[0] if dates else dt.date.today().isoformat()
+
+    if not code:
+        if kind == "market":
+            code = bf.EM_MARKET_CODE
+        elif kind == "index":
+            from services.universe import INDICES
+            code = INDICES[0]["secid"]
+        else:
+            try:
+                rank = await asyncio.to_thread(bf.read_rank, date, "industry")
+            except Exception:  # noqa: BLE001
+                rank = []
+            picked = bf.pick_em_industries(rank, 1)
+            code = picked[0]["code"] if picked else ""
+
+    if not code:
+        return {"date": date, "code": code, "kind": kind, "axis": [], "dims": {},
+                "error": "没有可用的行业标的"}
+
+    try:
+        pts = await asyncio.to_thread(bf.read_em_points, date, code)
+    except Exception as exc:  # noqa: BLE001
+        return {"date": date, "code": code, "kind": kind, "axis": [], "dims": {}, "error": str(exc)}
+
+    def aligned(vals):
+        out = bf.build_series({code: vals})
+        return out["axis"], (out["series"][0]["values"] if out["series"] else [])
+
+    axis, inst = aligned([(t, a) for t, a, *_ in pts])
+    dims = {"inst": inst}
+    for idx, key in ((1, "large"), (2, "medium"), (3, "retail")):
+        _, dims[key] = aligned([(t, p[idx]) for p in pts for t in [p[0]]])
+
+    meta = await asyncio.to_thread(bf.read_em_meta, date, code)
+    out = {"date": date, "code": code, "kind": kind, "axis": axis, "dims": dims,
+           "name": meta.get("name") or code}
+    if not axis:
+        out["error"] = "当日 4 维分时点不足（服务启动后从下一分钟开始累积）"
+    return out
