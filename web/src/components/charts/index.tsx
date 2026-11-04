@@ -880,12 +880,12 @@ export function BoardFlowChart({
     };
 
     const many = lines.length > 40;
-    const series = lines.map((l, i) => {
+    const series: any[] = lines.map((l, i) => {
       const baseColor = FLOW_COLORS[i % FLOW_COLORS.length];
       const dim = hoverCode && hoverCode !== l.code;
       const focus = hoverCode === l.code;
       const last = l.points.length ? l.points[l.points.length - 1][1] : null;
-      // 悬停时用红/绿表达涨跌（红=净流入、绿=净流出），其余时候用调色板区分线条
+      // 悬停时这条线会被「分段红绿」覆盖（见下方 seg 系列），这里只保留末端标签与底衬
       const color = focus ? ((last ?? 0) >= 0 ? "#ef4444" : "#22c55e") : baseColor;
       const pctStr = typeof l.pct === "number" ? `(${l.pct >= 0 ? "+" : ""}${l.pct.toFixed(2)}%)` : "";
       const label = `${l.name}  ${last == null ? "—" : signedYi(last)}${pctStr}`;
@@ -909,9 +909,40 @@ export function BoardFlowChart({
           distance: 6,
         },
         labelLayout: { moveOverlap: "shiftY" as const },
-        z: focus ? 4 : 3,
+        // 悬停线本身退到分段线的下面（半透明），避免把红绿分段盖住
+        z: focus ? 2 : 3,
+        ...(focus ? { lineStyle: { width: 0.6, color, opacity: 0.25 } } : {}),
       };
     });
+
+    // 悬停的线按「逐分钟资金变化」拆成红涨绿跌的小段（与 stock-webui 一致）。
+    // 段数过多（超长序列）时跳过，避免几百个 series 拖慢渲染。
+    const focused = hoverCode ? lines.find((l) => l.code === hoverCode) : null;
+    if (focused && focused.points.length > 1 && focused.points.length <= 600) {
+      const idx = new Map(times.map((t, i) => [t, i] as const));
+      const vals = toValues(focused.points);
+      for (let i = 1; i < times.length; i++) {
+        const cur = vals[i];
+        const prev = vals[i - 1];
+        if (cur == null || prev == null) continue;
+        const up = cur >= prev;
+        const data: (number | null)[] = new Array(times.length).fill(null);
+        data[i - 1] = prev;
+        data[i] = cur;
+        series.push({
+          id: `${focused.code}_seg_${i}`,
+          name: `${focused.name}_seg${i}`,
+          type: "line",
+          data,
+          showSymbol: false,
+          silent: true,
+          lineStyle: { width: 3.2, color: up ? "#ef4444" : "#22c55e", opacity: 1 },
+          itemStyle: { color: up ? "#ef4444" : "#22c55e" },
+          emphasis: { disabled: true },
+          z: 10,
+        });
+      }
+    }
 
     if (temp) {
       const color = "#ff5722";
@@ -952,7 +983,7 @@ export function BoardFlowChart({
         borderColor: "rgba(255,255,255,0.12)",
         textStyle: { color: "#e4e4e7", fontSize: 11 },
         formatter: (ps: any[]) => {
-          const rows = (ps ?? []).filter((p) => p.value != null)
+          const rows = (ps ?? []).filter((p) => p.value != null && !String(p.seriesId ?? "").includes("_seg_"))
             .sort((a, b) => (b.value as number) - (a.value as number));
           if (!rows.length) return "";
           const hovered = hoverCode ? rows.find((r) => r.seriesId === hoverCode) : null;

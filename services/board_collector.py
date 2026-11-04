@@ -18,7 +18,7 @@ log = logging.getLogger("board_collector")
 
 # 概念板块多（约 500 个，5 页），行业约 1 页；一次翻页上限留足余量
 _BOARD_FS = (("m:90+t:3", "concept"), ("m:90+t:2", "industry"))
-_FIELDS = "f2,f3,f4,f12,f13,f14,f62"
+_FIELDS = "f2,f3,f4,f12,f13,f14,f22,f62"
 _CYCLE_SEC = 30
 _IDLE_SEC = 120
 
@@ -211,7 +211,7 @@ async def _etf_cycle() -> None:
 _EM_INDEX_INTERVAL = 30
 _EM_INDUSTRY_INTERVAL = 60
 _em_last = {"index": 0.0, "industry": 0.0}
-_EM_FIELDS = "f57,f58,f140,f143,f146,f149"
+_EM_FIELDS = "f57,f58,f140,f143,f146,f149,f170"
 
 
 async def _em_fetch(secid: str, kind: str, name: str = "") -> dict | None:

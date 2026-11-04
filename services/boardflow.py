@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS rank_snapshots (
     pct REAL NOT NULL DEFAULT 0,
     rank INTEGER,
     prev_rank INTEGER,
+    speed REAL NOT NULL DEFAULT 0,
     ts TEXT,
     PRIMARY KEY (date, code)
 );
@@ -100,6 +101,7 @@ CREATE TABLE IF NOT EXISTS em_flow_points (
     large REAL NOT NULL DEFAULT 0,
     medium REAL NOT NULL DEFAULT 0,
     retail REAL NOT NULL DEFAULT 0,
+    pct REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (date, code, time)
 );
 CREATE INDEX IF NOT EXISTS idx_em_points_date ON em_flow_points(date, code, time);
@@ -140,7 +142,7 @@ def _fnum(value) -> float | None:
 def parse_rank_rows(rows: Iterable[dict], board_type: str) -> list[dict]:
     """把东财 clist 行归一成内部结构；坏行丢弃而不是抛异常。
 
-    f12=板块代码、f14=名称、f62=主力净流入（元）、f3=涨跌幅（%）。
+    f12=板块代码、f14=名称、f62=主力净流入（元）、f3=涨跌幅（%）、f22=涨速（%）。
     非 BK 代码、缺名称、资金不可解析的行一律跳过；同代码重复时保留首行。
     """
     out: list[dict] = []
@@ -156,9 +158,12 @@ def parse_rank_rows(rows: Iterable[dict], board_type: str) -> list[dict]:
         if flow is None:
             continue
         pct = _fnum(it.get("f3"))
+        speed = _fnum(it.get("f22"))
         seen.add(code)
         out.append({"code": code, "name": name, "flow": flow,
-                    "pct": 0.0 if pct is None else pct, "type": board_type})
+                    "pct": 0.0 if pct is None else pct,
+                    "speed": 0.0 if speed is None else speed,
+                    "type": board_type})
     return out
 
 
@@ -266,9 +271,20 @@ def _db():
             conn.close()
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """老库补列（SQLite 没有 ADD COLUMN IF NOT EXISTS，只能先查 PRAGMA）。"""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(rank_snapshots)").fetchall()}
+    if "speed" not in cols:
+        conn.execute("ALTER TABLE rank_snapshots ADD COLUMN speed REAL NOT NULL DEFAULT 0")
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(em_flow_points)").fetchall()}
+    if "pct" not in cols:
+        conn.execute("ALTER TABLE em_flow_points ADD COLUMN pct REAL NOT NULL DEFAULT 0")
+
+
 def init_db() -> None:
     with _db() as conn:
         conn.executescript(_SCHEMA)
+        _migrate(conn)
 
 
 def save_cycle(date: str, hhmm: str, rows: list[dict]) -> int:
@@ -282,12 +298,12 @@ def save_cycle(date: str, hhmm: str, rows: list[dict]) -> int:
             "ON CONFLICT(code) DO UPDATE SET name=excluded.name, type=excluded.type",
             [(r["code"], r["name"], r["type"]) for r in rows])
         conn.executemany(
-            "INSERT INTO rank_snapshots(date,code,name,type,flow,pct,rank,prev_rank,ts) "
-            "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(date,code) DO UPDATE SET "
+            "INSERT INTO rank_snapshots(date,code,name,type,flow,pct,rank,prev_rank,speed,ts) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(date,code) DO UPDATE SET "
             "name=excluded.name, type=excluded.type, flow=excluded.flow, pct=excluded.pct, "
-            "rank=excluded.rank, prev_rank=excluded.prev_rank, ts=excluded.ts",
+            "rank=excluded.rank, prev_rank=excluded.prev_rank, speed=excluded.speed, ts=excluded.ts",
             [(date, r["code"], r["name"], r["type"], float(r["flow"]), float(r.get("pct") or 0),
-              r.get("rank"), r.get("prev_rank"), ts) for r in rows])
+              r.get("rank"), r.get("prev_rank"), float(r.get("speed") or 0), ts) for r in rows])
         conn.executemany(
             "INSERT INTO flow_points(date,code,time,flow) VALUES(?,?,?,?) "
             "ON CONFLICT(date,code,time) DO UPDATE SET flow=excluded.flow",
@@ -303,7 +319,7 @@ def load_prev_ranks(date: str) -> dict[str, int]:
 
 
 def read_rank(date: str, board_type: str | None = None) -> list[dict]:
-    sql = ("SELECT code,name,type,flow,pct,rank,prev_rank,ts FROM rank_snapshots WHERE date=?")
+    sql = ("SELECT code,name,type,flow,pct,rank,prev_rank,speed,ts FROM rank_snapshots WHERE date=?")
     args: list = [date]
     if board_type:
         sql += " AND type=?"
@@ -713,7 +729,8 @@ def parse_em_flow(code: str, kind: str, data: dict | None,
 
     return {"code": code, "kind": kind, "name": str(data.get("f58") or name or code),
             "inst": num("f140"), "large": num("f143"),
-            "medium": num("f146"), "retail": num("f149")}
+            "medium": num("f146"), "retail": num("f149"),
+            "pct": num("f170")}
 
 
 def save_em_cycle(date: str, hhmm: str, rows: list[dict]) -> int:
@@ -721,12 +738,13 @@ def save_em_cycle(date: str, hhmm: str, rows: list[dict]) -> int:
         return 0
     with _db() as conn:
         conn.executemany(
-            "INSERT INTO em_flow_points(date,code,name,kind,time,inst,large,medium,retail) "
-            "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(date,code,time) DO UPDATE SET "
+            "INSERT INTO em_flow_points(date,code,name,kind,time,inst,large,medium,retail,pct) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(date,code,time) DO UPDATE SET "
             "name=excluded.name, kind=excluded.kind, inst=excluded.inst, "
-            "large=excluded.large, medium=excluded.medium, retail=excluded.retail",
+            "large=excluded.large, medium=excluded.medium, retail=excluded.retail, pct=excluded.pct",
             [(date, r["code"], r["name"], r["kind"], hhmm,
-              float(r["inst"]), float(r["large"]), float(r["medium"]), float(r["retail"]))
+              float(r["inst"]), float(r["large"]), float(r["medium"]), float(r["retail"]),
+              float(r.get("pct") or 0))
              for r in rows])
     return len(rows)
 
@@ -743,13 +761,14 @@ def latest_em_flows(date: str) -> list[dict]:
     """每个目标在当日最后一刻的 4 维快照（指数/全A 排行用）。"""
     with _db() as conn:
         cur = conn.execute(
-            "SELECT p.code, p.name, p.kind, p.inst, p.large, p.medium, p.retail "
+            "SELECT p.code, p.name, p.kind, p.inst, p.large, p.medium, p.retail, p.pct "
             "FROM em_flow_points p JOIN ("
             "  SELECT code, MAX(time) AS t FROM em_flow_points WHERE date=? GROUP BY code"
             ") m ON p.code=m.code AND p.time=m.t"
             " WHERE p.date=?", (date, date))
         return [{"code": c, "name": n, "kind": k, "inst": float(i), "large": float(l),
-                 "medium": float(md), "retail": float(r)} for c, n, k, i, l, md, r in cur.fetchall()]
+                 "medium": float(md), "retail": float(r), "pct": float(pc or 0)}
+                for c, n, k, i, l, md, r, pc in cur.fetchall()]
 
 
 def read_em_meta(date: str, code: str) -> dict:

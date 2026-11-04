@@ -8,7 +8,7 @@ import { BoardFlowChart, FlowDetailChart, FlowHistoryChart, MoneyLinesChart, typ
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
-import { clsUpDown, pct as fmtPct, signedYi } from "@/lib/format";
+import { clsUpDown, pct as fmtPct, signedWanGrouped, signedYi } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** 与 stock-webui 一致的五个口径 */
@@ -19,12 +19,12 @@ const TYPES = [
   { key: "hot", label: "热门" },
   { key: "custom", label: "自定义" },
 ];
-type SortKey = "flow" | "pct";
+type SortKey = "flow" | "pct" | "speed";
 const SERIES_TTL = 90_000;
 
 type Bar = {
   code: string; name: string; type: string;
-  flow: number; pct: number | null; watch?: boolean;
+  flow: number; pct: number | null; speed?: number; watch?: boolean;
   /** 名称的拼音首字母（后端给），用于拼音搜索 */
   py?: string;
 };
@@ -89,14 +89,14 @@ export function BoardFlowPage() {
   const allBoards: Bar[] = useMemo(
     () => (rankView?.items ?? []).map((r: any) => ({
       code: r.code, name: r.name, type: r.type, flow: r.flow ?? 0, pct: r.pct ?? null,
-      watch: watchSet.has(r.code), py: r.py,
+      speed: r.speed ?? 0, watch: watchSet.has(r.code), py: r.py,
     })),
     [rankView, watchSet],
   );
   const indexRows: Bar[] = useMemo(
     () => (indexView?.items ?? []).map((r: any) => ({
-      code: r.code, name: r.name, type: "index", flow: r.flow ?? 0, pct: null, py: r.py,
-      watch: watchSet.has(r.code),
+      code: r.code, name: r.name, type: "index", flow: r.flow ?? 0, pct: r.pct ?? null,
+      speed: 0, py: r.py, watch: watchSet.has(r.code),
     })),
     [indexView, watchSet],
   );
@@ -129,8 +129,8 @@ export function BoardFlowPage() {
     }
     const dir = sortDir;
     return [...list].sort((a, b) => {
-      const va = sortKey === "pct" ? (a.pct ?? 0) : a.flow;
-      const vb = sortKey === "pct" ? (b.pct ?? 0) : b.flow;
+      const va = sortKey === "pct" ? (a.pct ?? 0) : sortKey === "speed" ? (a.speed ?? 0) : a.flow;
+      const vb = sortKey === "pct" ? (b.pct ?? 0) : sortKey === "speed" ? (b.speed ?? 0) : b.flow;
       return (va - vb) * dir;
     });
   }, [baseRows, search, sortKey, sortDir]);
@@ -346,7 +346,7 @@ export function BoardFlowPage() {
             <div className="flex items-center gap-1 text-[11px]">
               <span className="text-muted-foreground">排序</span>
               <div className="flex items-center gap-0.5 rounded-md border border-border bg-muted/40 p-0.5">
-                {(["pct", "flow"] as SortKey[]).map((k) => (
+                {(["pct", "speed", "flow"] as SortKey[]).map((k) => (
                   <button
                     key={k}
                     type="button"
@@ -355,13 +355,15 @@ export function BoardFlowPage() {
                       else { setSortKey(k); setSortDir(-1); }
                     }}
                     aria-pressed={sortKey === k}
-                    title={k === "pct" ? "按涨跌幅排序（再点切换升/降序）" : "按主力净流入排序（再点切换升/降序）"}
+                    title={k === "pct" ? "按涨跌幅排序（再点切换升/降序）"
+                      : k === "speed" ? "按涨速排序（不显示列，再点切换升/降序）"
+                        : "按主力净流入排序（再点切换升/降序）"}
                     className={cn("rounded px-2 py-0.5 font-medium transition-colors",
                       sortKey === k
                         ? "bg-primary text-primary-foreground shadow-xs"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground")}
                   >
-                    {k === "pct" ? "涨幅" : "资金"}{sortKey === k ? (sortDir === -1 ? "↓" : "↑") : ""}
+                    {k === "pct" ? "涨幅" : k === "speed" ? "涨速" : "资金"}{sortKey === k ? (sortDir === -1 ? "↓" : "↑") : ""}
                   </button>
                 ))}
               </div>
@@ -419,7 +421,7 @@ export function BoardFlowPage() {
                         {b.pct == null ? "--" : fmtPct(b.pct, 2)}
                       </span>
                       <span className={cn("shrink-0 whitespace-nowrap text-right text-[10px] tnum", b.flow >= 0 ? "text-up" : "text-down")}>
-                        {signedYi(b.flow)}
+                        {signedWanGrouped(b.flow)}
                       </span>
                       {b.code.startsWith("BK") && (
                         <button

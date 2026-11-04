@@ -38,7 +38,8 @@ export function dayKey(d = new Date()): string {
 
 // v2：修复前「切合约时旧请求把数据写进新合约的键」污染过缓存，加版本段让旧键自然失效。
 // v3：板块排行新增拼音首字母（py）字段，旧缓存没有该字段会让拼音搜索失效。
-const CACHE_VER = "v3";
+// v4：排行新增涨速（speed）、指数新增涨跌幅（pct），旧缓存会让「涨速」排序失效。
+const CACHE_VER = "v4";
 
 const keyOf = (kind: CacheKind, code: string, extra?: string | number | null) =>
   `${CACHE_VER}|${kind}|${code}|${extra ?? "-"}`;

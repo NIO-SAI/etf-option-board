@@ -1168,8 +1168,8 @@ async def board_index_rank(date: str | None = Query(None)):
             continue
         nm = names.get(r["code"]) or r.get("name") or r["code"]
         items.append({"code": r["code"], "name": nm, "type": "index",
-                      "flow": r["inst"] + r["large"], "pct": None,
-                      "py": pinyin_svc.initials(nm)})
+                      "flow": r["inst"] + r["large"], "pct": r.get("pct"),
+                      "speed": 0.0, "py": pinyin_svc.initials(nm)})
     items.sort(key=lambda x: -abs(x["flow"]))
     out = {"date": date, "items": items, "error": None if items else "暂无 4 维采集数据"}
     return out

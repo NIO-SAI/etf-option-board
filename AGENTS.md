@@ -47,7 +47,8 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   `python3 scripts/check_board_series.py`（红的就说明某条分时链路为空），
   再从 stock-webui 已采集的库里回补最近 N 个交易日：
   `python3 scripts/import_stock_webui.py --days 10`（源库只读 ATTACH、幂等、不覆盖本项目的真实采集点）。
-  回补后再跑一次探针应变绿。
+  回补后再跑一次探针应变绿。历史数据缺「涨速/指数涨跌幅」时：
+  `python3 scripts/backfill_speed_pct.py`（按当前快照回填最新交易日的 speed 与 pct）。
 - 后端代码更新后重启生效：`curl -s -X POST http://127.0.0.1:6799/api/admin/restart`
   （先优雅关闭 Kronos 子进程再以非零码退出，LaunchAgent 约 5 秒自动拉起；curl 报连接重置属正常）。
   首次上线该接口前需手动重启一次：`launchctl kickstart -k gui/$(id -u)/com.etf-option-board`。

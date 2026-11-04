@@ -42,7 +42,7 @@ class TestParseRankRows:
         out = bf.parse_rank_rows(rows, "industry")
         assert [r["code"] for r in out] == ["BK0475", "BK0476"]
         assert out[0] == {"code": "BK0475", "name": "半导体", "flow": 1.2e8,
-                          "pct": 3.5, "type": "industry"}
+                          "pct": 3.5, "speed": 0.0, "type": "industry"}
         assert out[1]["flow"] == -2.5e7 and out[1]["type"] == "industry"
 
     @pytest.mark.parametrize("row", [
@@ -55,6 +55,15 @@ class TestParseRankRows:
     ])
     def test_drops_bad_rows(self, row):
         assert bf.parse_rank_rows([row], "concept") == []
+
+    def test_keeps_speed_and_defaults_zero(self):
+        rows = [
+            {"f12": "BK0001", "f14": "甲", "f62": 1.0, "f3": 1.0, "f22": 0.35},
+            {"f12": "BK0002", "f14": "乙", "f62": 2.0, "f3": 2.0, "f22": "-"},
+        ]
+        out = bf.parse_rank_rows(rows, "concept")
+        assert out[0]["speed"] == 0.35
+        assert out[1]["speed"] == 0.0
 
     def test_pct_defaults_and_dedupes(self):
         rows = [
@@ -203,9 +212,11 @@ class TestEmFlow:
 
     def test_parse_normalizes(self):
         row = bf.parse_em_flow("BK1036", "industry",
-                               {"f58": "半导体", "f140": 3, "f143": 2, "f146": 1, "f149": -4})
+                               {"f58": "半导体", "f140": 3, "f143": 2, "f146": 1,
+                                "f149": -4, "f170": 5.5})
         assert row == {"code": "BK1036", "kind": "industry", "name": "半导体",
-                       "inst": 3.0, "large": 2.0, "medium": 1.0, "retail": -4.0}
+                       "inst": 3.0, "large": 2.0, "medium": 1.0, "retail": -4.0,
+                       "pct": 5.5}
 
     def test_pick_industries_by_abs_flow(self):
         rank = [

@@ -50,6 +50,16 @@ export const signedWan = (v: any): string => {
   return `${r > 0 ? "+" : ""}${r}万`;
 };
 
+/** 资金（元）→ 万，带千分位；列表列统一用万为单位时用。 */
+export const signedWanGrouped = (v: any): string => {
+  if (v === null || v === undefined || v === "") return "—";
+  const n = Number(v);
+  if (!isFinite(n)) return "—";
+  const wan = Math.round(n / 1e4);
+  const txt = Math.abs(wan).toLocaleString("en-US");
+  return `${wan > 0 ? "+" : wan < 0 ? "-" : ""}${txt}万`;
+};
+
 /** 板块/ETF 资金：≥1 亿按「亿」两位小数，否则按「万」整数（板块资金动辄几十亿，万亿单位难读）。 */
 export const signedYi = (v: any): string => {
   if (v === null || v === undefined || v === "") return "—";
