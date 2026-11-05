@@ -231,7 +231,7 @@ export function EmFlowPage() {
   const latestDay = health?.last?.date ?? "";
 
   return (
-    <main className="grid gap-3 p-3 xl:grid-cols-[320px_minmax(0,1fr)]">
+    <main className="grid gap-3 p-3 xl:grid-cols-[360px_minmax(0,1fr)]">
       <FlowListPanel
         title="标的列表"
         countText={`共 ${rows.length} 个 · 单击切换`}

@@ -278,7 +278,7 @@ export function EtfFlowPage() {
   }, [dim4]);
 
   return (
-    <main className="grid gap-3 p-3 xl:grid-cols-[320px_minmax(0,1fr)]">
+    <main className="grid gap-3 p-3 xl:grid-cols-[360px_minmax(0,1fr)]">
       <FlowListPanel
         title="ETF 列表"
         countText={dimView ? `共 ${rows.length} 只 · 单击切换` : `共 ${rows.length} 只 · 已选 ${selectedCodes.length}`}
