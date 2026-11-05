@@ -1,6 +1,6 @@
 import ReactECharts from "echarts-for-react";
 import { Maximize2, Minimize2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { alignToAxis, minuteOf, sameDayAs, trimSession } from "@/lib/series";
 import { signedFlow } from "@/lib/format";
 import { FlowEndLabels, type EndLabelItem } from "@/components/charts/endLabels";
@@ -310,7 +310,33 @@ export function IntradayChart({
       ],
     };
   }, [trends, indexTrends, indexName, flow, indexFlow, signals, prevClose, indexPrevClose, name, support, resistance, plan, showLevels, showPlan, legendSel, flowStyle, flowLabel]);
-  return <ReactECharts key={id} option={option} notMerge onEvents={legendEvents} style={{ height }} />;
+  const tip = useStickyTooltip(option);
+  return <ReactECharts key={id} ref={tip.ref} option={option} notMerge onEvents={legendEvents} onChartReady={tip.onChartReady} style={{ height }} />;
+}
+
+/**
+ * notMerge 更新后把悬浮框补回来。`notMerge` 会销毁并新建 tooltip 组件，新组件不知道指针在哪；
+ * 鼠标停着不动就没有 mousemove 唤回它——轮询一刷新，悬浮框就「自己消失」。
+ * 这里记住指针在图内的位置，option 每次更新后按原坐标补一次 showTip。
+ */
+function useStickyTooltip(option: unknown) {
+  const ref = useRef<ReactECharts>(null);
+  const pos = useRef<{ x: number; y: number } | null>(null);
+  const onChartReady = useCallback((chart: any) => {
+    const zr = chart.getZr();
+    zr.on("mousemove", (e: any) => { pos.current = { x: e.offsetX, y: e.offsetY }; });
+    zr.on("globalout", () => { pos.current = null; });
+  }, []);
+  // 子组件 ReactECharts 在 componentDidUpdate 里同步 setOption，先于这里执行；
+  // layout effect 在绘制前补上，悬浮框不会闪一下。
+  useLayoutEffect(() => {
+    const p = pos.current;
+    const chart = ref.current?.getEchartsInstance();
+    // 页面滚动等情况下指针可能已离开图表却没触发 globalout，以 :hover 为准
+    if (!p || !chart || chart.isDisposed() || !chart.getDom().matches(":hover")) return;
+    chart.dispatchAction({ type: "showTip", x: p.x, y: p.y });
+  }, [option]);
+  return { ref, onChartReady };
 }
 
 /**
@@ -592,6 +618,7 @@ export function OverlayChart({
   const hasPlan = !!(levels?.plan && [levels.plan.entry, levels.plan.stop, levels.plan.target]
     .some((v: any) => v != null && isFinite(Number(v)) && Number(v) > 0));
   const hasBE = breakEven != null && Number(breakEven) > 0;
+  const tip = useStickyTooltip(option);
   return (
     <div>
       <div className="flex items-center justify-end gap-1 pb-1">
@@ -611,7 +638,7 @@ export function OverlayChart({
           {expanded ? <Minimize2 className="size-3" aria-hidden /> : <Maximize2 className="size-3" aria-hidden />}
         </button>
       </div>
-      <ReactECharts key={id} option={option} notMerge onEvents={legendEvents}
+      <ReactECharts key={id} ref={tip.ref} option={option} notMerge onEvents={legendEvents} onChartReady={tip.onChartReady}
         style={{ height: expanded ? height * 2 : height }} />
     </div>
   );
