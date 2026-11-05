@@ -93,11 +93,12 @@ def status() -> dict:
     return dict(_state)
 
 
-async def _check_etf(etf: dict, key_hm: str | None) -> None:
+async def _check_etf(etf: dict) -> dict | None:
+    """单只标的的告警检查；变盘信号不在这里发，交给 cycle() 按轮合并成一条。"""
     ctx = await ms.etf_context(etf["code"], etf["secid"])
     q = ctx.get("quote") or {}
     if not q:
-        return
+        return None
     name = etf["name"]
 
     # 量能骤放（冷却 300s）：近1分钟量能超近60分钟均量 5 倍，且需量价配合
@@ -135,30 +136,75 @@ async def _check_etf(etf: dict, key_hm: str | None) -> None:
             "text": "15分钟K线动能与价格背离，留意反转。",
         })
 
-    # 关键时点（每个交易日、每只标的、每个时点只推一次）
-    if key_hm:
-        today = dt.datetime.now().strftime("%Y-%m-%d")
-        kk = f"{today}:{etf['code']}:{key_hm}"
-        if kk not in _key_fired and alerts.should_alert(etf["code"], "key_time", 300):
-            _key_fired.add(kk)
-            # 顺手清理过期 key，防止常驻进程集合无限增长
-            for k in [k for k in _key_fired if not k.startswith(today)]:
-                _key_fired.discard(k)
-            await alerts.publish({
-                "etf_code": etf["code"], "etf_name": name, "type": "key_time",
-                "level": "info", "dir": "neutral",
-                "title": f"临近变盘时点 {key_hm}",
-                "text": f"{name} 处于关键时点窗口，关注方向选择与量能。",
-            })
+    # 关键时点 / 变盘信号都改为「按轮合并」：由 cycle() 汇总后各发一条，
+    # 六只同一秒各推一条完全相同的提醒（见 _key_time_alert / _reversal_alert）。
 
     # 变盘点（5m/15m 高周期，阈值 65，需 15m 结构转向；同向 45 分钟冷却 / 反向 30 分钟抑制）
     try:
-        sig = await reversal.check(etf, ctx)
+        return await reversal.check(etf, ctx)
     except Exception as exc:  # noqa: BLE001
         log.debug("变盘信号计算失败 %s: %s", etf["code"], exc)
-        sig = None
-    if sig:
-        await alerts.publish(sig)
+        return None
+
+
+async def _key_time_alert(key_hm: str | None, now: dt.datetime | None = None) -> None:
+    """关键时点：市场级一条（每个时点每天只推一次）。
+
+    原实现挂在 _check_etf 里按标的循环，六只 ETF 同一秒会各推一条内容几乎相同的
+    「临近变盘时点」，既刷屏又看不出这是同一件事；改为一条，标题带时点与同步只数。
+    """
+    if not key_hm:
+        return
+    today = (now or dt.datetime.now()).strftime("%Y-%m-%d")
+    kk = f"{today}:{key_hm}"
+    if kk in _key_fired:
+        return
+    _key_fired.add(kk)
+    # 顺手清理过期 key，防止常驻进程集合无限增长
+    for k in [k for k in _key_fired if not k.startswith(today)]:
+        _key_fired.discard(k)
+    names = [e["name"] for e in ETFS]
+    await alerts.publish({
+        "etf_name": "宽基ETF", "type": "key_time", "level": "info", "dir": "neutral",
+        "title": f"临近变盘时点 {key_hm}（{len(names)} 只同步）",
+        "text": f"{'、'.join(names)} 同时进入关键时点窗口，关注方向选择与量能。",
+        "items": [{"code": e["code"], "name": e["name"]} for e in ETFS],
+    })
+
+
+def _dir_cn(d: str | None) -> str:
+    return "看多" if d == "bull" else "看空" if d == "bear" else "观望"
+
+
+async def _reversal_alert(sigs: list[dict]) -> None:
+    """一轮里所有标的的变盘信号合并成一条告警。
+
+    单只触发保持原样（标题带名称、可点击跳转）；多只触发改为市场级一条，
+    逐只的方向/分数/因子/合约明细放 items[]，避免六只各弹一次窗。
+    """
+    if not sigs:
+        return
+    sigs = sorted(sigs, key=lambda s: (-(s.get("score") or 0), s.get("etf_code") or ""))
+    if len(sigs) == 1:
+        await alerts.publish(sigs[0])
+        return
+    n_bull = sum(1 for s in sigs if s.get("dir") == "bull")
+    n_bear = sum(1 for s in sigs if s.get("dir") == "bear")
+    direction = "bull" if n_bull and not n_bear else "bear" if n_bear and not n_bull else "mixed"
+    brief = " · ".join(f"{s['etf_name']}{_dir_cn(s['dir'])}{(s.get('score') or 0):.0f}分"
+                       for s in sigs)
+    await alerts.publish({
+        "etf_name": "宽基ETF", "type": "reversal", "level": "critical", "dir": direction,
+        "title": f"{len(sigs)} 只标的同步变盘：{brief}",
+        "text": f"{len(sigs)} 只标的同轮触发变盘（15m 结构转向确认），"
+                f"看多 {n_bull} 只 / 看空 {n_bear} 只；逐只点位与合约见明细。",
+        "items": [{
+            "code": s.get("etf_code"), "name": s.get("etf_name"),
+            "dir": s.get("dir"), "score": s.get("score"),
+            "factors": s.get("factors"), "contract": s.get("contract"),
+            "text": s.get("text"), "ts": s.get("ts"),
+        } for s in sigs],
+    })
 
 
 async def _national_team_alert(nt: dict) -> None:
@@ -237,7 +283,10 @@ async def cycle() -> None:
     # 合约分钟累积：push2 的 stock/* 被接口级封禁，clist 仍可用 → 翻页记全市场。
     # 一轮约 20~40s（接口限流 + 重试），**后台跑不阻塞告警链路**；上一轮没完成就跳过。
     asyncio.create_task(_option_batch())
-    await asyncio.gather(*[_check_etf(e, key_hm) for e in ETFS], return_exceptions=True)
+    results = await asyncio.gather(*[_check_etf(e) for e in ETFS], return_exceptions=True)
+    sigs = [r for r in results if isinstance(r, dict)]
+    await _reversal_alert(sigs)
+    await _key_time_alert(key_hm)
     _state["last_cycle"] = now.isoformat(timespec="seconds")
     _state["cycles"] += 1
 

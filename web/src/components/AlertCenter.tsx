@@ -16,6 +16,11 @@ const TYPE_LABEL: Record<string, string> = {
   opt_spike: "合约异动", reversal: "变盘开仓",
 };
 
+/** 合并告警（变盘信号 / 变盘时点）的逐只明细：有分数就带方向+分数 */
+const itemTxt = (e: any) =>
+  e.score == null ? e.name : `${e.name}${e.dir === "bull" ? "看多" : e.dir === "bear" ? "看空" : ""}${Math.round(e.score)}分`;
+const itemDir = (e: any) => (e.dir === "bull" ? 1 : e.dir === "bear" ? -1 : 0);
+
 export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void }) {
   const [items, setItems] = useState<any[]>([]);
   const [popup, setPopup] = useState<any>(null);
@@ -124,13 +129,27 @@ export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void })
                 {/* 整行悬浮：代码 + 完整标题 + 完整正文（列表里标题 truncate、正文 line-clamp-2 会截断） */}
                 <HoverTip label={`${a.etf_code ? a.etf_code + " " : ""}${a.title}\n${a.text}${
                   (a.etfs ?? []).map((e: any) => `\n${e.name} ${signedMoney(e.main_inflow)}${e.surge ? " · " + e.surge + "x放量" : ""}`).join("")
-                }`} className="min-w-[240px]">
+                }${(a.items ?? []).map((e: any) => `\n${itemTxt(e)}`).join("")}`} className="min-w-[240px]">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className={`truncate text-xs font-medium ${clsUpDown(a.dir === "bull" ? 1 : a.dir === "bear" ? -1 : 0)}`}>{a.title}</span>
                       <Badge variant="outline" className="shrink-0">{TYPE_LABEL[a.type] ?? a.type}</Badge>
                     </div>
                     <div className="line-clamp-2 text-[10px] leading-snug text-muted-foreground">{a.text}</div>
+                    {a.items?.length ? (
+                      <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] leading-snug text-muted-foreground tnum">
+                        {a.items.map((e: any) => (
+                          <span key={`${e.code}-${e.dir ?? ""}`} className="whitespace-nowrap">
+                            <span className="text-foreground">{e.name}</span>
+                            {e.score != null && (
+                              <span className={`ml-1 ${clsUpDown(itemDir(e))}`}>
+                                {e.dir === "bull" ? "看多" : e.dir === "bear" ? "看空" : "观望"} {Math.round(e.score)}分
+                              </span>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                     {a.etfs?.length ? (
                       <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] leading-snug text-muted-foreground tnum">
                         {a.etfs.map((e: any) => (
@@ -157,6 +176,24 @@ export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void })
           <div className="flex flex-col gap-2">
             <div className="text-base font-semibold">{popup.title}</div>
             <div className="text-sm text-muted-foreground">{popup.text}</div>
+            {popup.items?.length ? (
+              <div className="flex flex-col gap-1 rounded-lg bg-muted/50 px-2 py-1.5 text-[11px] leading-snug">
+                {popup.items.map((e: any) => (
+                  <div key={`${e.code}-${e.dir ?? ""}`} className="flex flex-col gap-0.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-foreground">{e.name}
+                        <span className="ml-1 text-muted-foreground">{e.code}</span></span>
+                      {e.score != null && (
+                        <span className={clsUpDown(itemDir(e))}>
+                          {e.dir === "bull" ? "看多" : e.dir === "bear" ? "看空" : "观望"} {Math.round(e.score)}分
+                        </span>
+                      )}
+                    </div>
+                    {e.text ? <div className="text-muted-foreground">{e.text}</div> : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
             {popup.etfs?.length ? (
               <div className="flex flex-col gap-0.5 rounded-lg bg-muted/50 px-2 py-1.5 text-xs tnum">
                 {popup.etfs.map((e: any) => (
