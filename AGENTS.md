@@ -107,6 +107,19 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   纯函数（时段/解析/名次/区间聚合/序列对齐/裁剪）在 `boardflow.py`，单测在 `tests/test_boardflow.py`。
   **两个数据源坑**：emdatah5 的 `fs=m:90+t:3` 必须编码成 `%2B`（raw `+` 被当空格会忽略过滤）；
   板块 4 维 secid 必须是 `90.BKxxxx`。
+- **右侧「虚线 + 彩色标签」图层（2026-11-06）**：`web/src/components/charts/endLabels.tsx`，
+  主力资金分时与四维资金共用。`LABEL_GUTTER`=260（右侧留白中含 50px 引导虚线），
+  标签按 y 排序做 12.5px 最小行距避让。**严禁在 render 期间调用 ECharts 实例方法**：
+  `ReactECharts` 的 `key`（图表 id）变化会销毁旧实例，此时 `chart.getWidth()` 直接抛
+  `Cannot read properties of null`，会把整页打进 ErrorBoundary（显示「页面 渲染出错」）。
+  像素坐标只能在 effect 里算、先判 `chart.isDisposed()`，结果放 state。
+- **财联社「热门」（2026-11-06）**：`services/cls_hot.py`。异动取
+  `v3/transaction/articles` 里**所有带 `plate_name` 的条目**（每条都是一次板块异动播报，
+  不能按标题含「异动」过滤，否则一天只拿到 1~2 条）；热门取
+  `web_quote/plate/hot_plate?type=industry,concept`（行业/概念各 6 个）。
+  CLS 与东财命名不一致的靠 `_ALIASES` 显式对齐（异质结电池→HJT电池、短剧→短剧互动游戏、
+  豆包大模型→抖音概念…），归一化会先去掉括号注释（`抖音概念(字节概念)` → `抖音`）。
+  只缓存 CLS 名称 5 分钟，资金/涨幅按请求日期现算（缓存整份结果会让历史日期显示错的钱）。
 - `services/universe.py` 维护标的/指数/外围/国家队清单；改标的只改这里。
   **2026-11-04 起 ETF 标的收敛为 6 只**（按跟踪指数去重，删 159919/159922/588080，见
   `docs/adr/0004-期权标的收敛为6只.md`）；下线后记得跑

@@ -3,12 +3,13 @@
 数据源（财联社公开接口，按 CLS 规则签名 ``sign = md5(sha1(sorted_query))``）：
 - ``x-quote.cls.cn/web_quote/plate/hot_plate?type=industry,concept,area&way=change&rever=1``
   → 热门行业板块 / 热门概念板块（各 6 个）
-- ``www.cls.cn/v3/transaction/articles`` → 当日盘面直播，标题含「XX板块异动」的条目自带
-  ``plate_name``（如「中字头」「智能电网」）
+- ``www.cls.cn/v3/transaction/articles`` → 当日盘面直播，**每条带 ``plate_name`` 的都是
+  一次板块异动播报**（如「中字头」「智能电网」「锂矿」），不能只挑标题含「异动」的，
+  否则一天只能拿到 1~2 条。
 
-CLS 名称与东财板块名不完全一致（「半导体」vs「半导体概念」、「中字头」vs「中字头概念」），
-所以用「去后缀 → 精确 → 包含 → difflib 相似度」四步匹配。接口失败时返回上一份缓存，
-再不行返回空列表，绝不抛异常（页面走回退逻辑）。
+CLS 名称与东财板块名不完全一致（「半导体」vs「半导体概念」、「短剧」vs「短剧互动游戏」），
+所以用「别名 → 去括号/后缀 → 精确 → 包含 → difflib 相似度」五步匹配。
+接口失败时返回上一份缓存，再不行返回空列表，绝不抛异常（页面走回退逻辑）。
 """
 
 from __future__ import annotations
@@ -30,6 +31,19 @@ _TTL = 300.0
 # 板块名后缀：去掉后「半导体概念」与「半导体」才能对齐
 _SUFFIXES = ("概念板块", "行业板块", "板块", "概念", "行业", "指数")
 
+# CLS 的叫法与东财板块名不同、且没有公共子串，只能显式列别名（值为东财板块名）
+_ALIASES = {
+    "异质结电池": "HJT电池",
+    "文生视频": "AI视频",
+    "存储器": "存储芯片",
+    "短剧": "短剧互动游戏",
+    "豆包大模型": "抖音概念",
+    "高股息": "红利股",
+    "盐湖提锂": "锂矿概念",
+    "AI玩具": "谷子经济",
+    "有色·镍": "镍",
+}
+
 _cache: dict = {"at": 0.0, "data": None}
 
 
@@ -40,8 +54,10 @@ def sign_params(params: dict) -> str:
 
 
 def normalize_name(name: str) -> str:
-    """匹配用归一：去空白、去「概念/板块/行业/指数」后缀。纯函数。"""
-    s = re.sub(r"\s+", "", str(name or ""))
+    """匹配用归一：去括号注释、去空白、去「概念/板块/行业/指数」后缀。纯函数。"""
+    # 「抖音概念(字节概念)」「AI制药（医疗）」→ 去掉括号里的别名
+    s = re.sub(r"[（(][^）)]*[）)]", "", str(name or ""))
+    s = re.sub(r"\s+", "", s)
     for suf in _SUFFIXES:
         if s.endswith(suf) and len(s) > len(suf):
             s = s[: -len(suf)]
@@ -54,7 +70,8 @@ def match_name(name: str, boards: list[dict]) -> dict | None:
 
     匹配顺序：归一后精确 → 包含（长度 ≥2，取更长公共部分）→ difflib 相似度 ≥ 0.78。
     """
-    target = normalize_name(name)
+    raw = str(name or "").strip()
+    target = normalize_name(_ALIASES.get(raw, raw))
     if not target:
         return None
     norm = [(normalize_name(b.get("name")), b) for b in boards or []]
@@ -100,15 +117,16 @@ async def fetch_hot_plates() -> list[tuple[str, str]]:
 
 
 async def fetch_abnormal() -> list[str]:
-    """当日盘面直播里「XX板块异动」条目涉及的板块名。"""
+    """当日盘面直播里所有带 ``plate_name`` 的条目（每条都是一次板块异动播报）。
+
+    以前只取标题含「异动」的，2026-11-05 实测一天只有 2 条，漏掉 20 多个板块；
+    ``plate_name`` 本身就是财联社给这条播报打的板块标签，不需要再靠标题判断。
+    """
     d = await _get_json(_ARTICLE_URL, dict(_CLS_BASE))
     arts = (d or {}).get("data") if isinstance(d, dict) else None
     out: list[str] = []
     for a in arts or []:
         if not isinstance(a, dict):
-            continue
-        title = str(a.get("title") or "")
-        if "异动" not in title:
             continue
         nm = str(a.get("plate_name") or "").strip()
         if nm:

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { RefreshCw, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
@@ -67,7 +67,7 @@ export function EmFlowPage() {
   const { data: concepts } = usePolling(
     () => api.emFlowConcepts(), 300_000, [], { kind: "ctx", code: "em-concepts" });
   // 财联社「热门板块」（热门行业/概念 + 异动）→ 后端模糊匹配到本地板块
-  const { data: hotView } = usePolling(
+  const { data: hotView, refresh: refreshHot } = usePolling(
     () => api.boardClsHot(), 300_000, [], { kind: "ctx", code: "cls-hot" });
 
   /** CLS 拉不到时的回退：概念 + 行业按涨幅取前 40（与「热门」口径一致） */
@@ -136,7 +136,17 @@ export function EmFlowPage() {
     { kind: "emseries", code: `${seriesKind}:${effectiveCode}` },
   );
 
-  useEffect(() => onGlobalRefresh(() => { void refresh(); }), [refresh]);
+  // 刷新按钮：当前标的 4 维 + 热门板块一起刷，并给出转圈反馈（否则数据没变就像「点了没反应」）
+  const [refreshing, setRefreshing] = useState(false);
+  const doRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([refresh(), refreshHot()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refresh, refreshHot]);
+  useEffect(() => onGlobalRefresh(() => { void doRefresh(); }), [doRefresh]);
 
   useEffect(() => {
     writeHashParams({ kind, code: effectiveCode || undefined });
@@ -234,12 +244,13 @@ export function EmFlowPage() {
               </button>
               <button
                 type="button"
-                onClick={() => void refresh()}
-                title="立即刷新"
+                onClick={() => void doRefresh()}
+                title="立即刷新（4 维分时 + 热门板块）"
                 aria-label="刷新"
-                className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground"
+                disabled={refreshing}
+                className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
               >
-                <RefreshCw className="size-3" aria-hidden />
+                <RefreshCw className={cn("size-3", refreshing && "animate-spin")} aria-hidden />
               </button>
               {health?.trading ? <Badge variant="success-light">交易中</Badge> : <Badge variant="outline">休市</Badge>}
             </div>

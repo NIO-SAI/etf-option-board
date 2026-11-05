@@ -917,8 +917,8 @@ export type FlowLine = {
   checked?: boolean;
 };
 
-/** 右侧标签区的固定留白（px）：虚线 + 文字都画在这块空白里 */
-const LABEL_GUTTER = 210;
+/** 右侧标签区的固定留白（px）：50px 引导虚线 + 文字都画在这块空白里 */
+const LABEL_GUTTER = 260;
 
 /** 多线叠加图的统一时间轴（资金流行情的 HH:MM）。 */
 function flowTimes(lines: FlowLine[], temp?: FlowLine | null): string[] {

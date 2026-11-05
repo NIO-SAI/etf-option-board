@@ -84,9 +84,11 @@ export function BoardFlowPage() {
   const { data: watchView, refresh: refreshWatch } = usePolling(
     () => api.boardWatch(), 300_000, [], { kind: "ctx", code: "board-watch" });
   // 财联社「热门」：热门行业/概念 + 盘面异动，后端模糊匹配到本地板块
-  const { data: hotView } = usePolling(
+  const { data: hotView, refresh: refreshHot } = usePolling(
     () => api.boardClsHot(date || undefined), 300_000, [date],
     { kind: "ctx", code: `cls-hot:${date || "latest"}` });
+  // 刷新按钮的忙碌态：至少让用户看到图标在转，而不是「点了没反应」
+  const [refreshing, setRefreshing] = useState(false);
   // 自选的本地真实来源：点击 + 立即翻转（乐观更新），服务端返回后以 watchView 对齐
   const [watchItems, setWatchItems] = useState<{ code: string; name: string }[]>([]);
   const [watchBusy, setWatchBusy] = useState<Record<string, boolean>>({});
@@ -104,10 +106,11 @@ export function BoardFlowPage() {
 
   const refresh = useCallback(() => {
     cache.current = {};
-    void refreshRank();
-    void refreshIndex();
     setRefreshTick((t) => t + 1);
-  }, [refreshRank, refreshIndex]);
+    setRefreshing(true);
+    void Promise.all([refreshRank(), refreshIndex(), refreshHot()])
+      .finally(() => setRefreshing(false));
+  }, [refreshRank, refreshIndex, refreshHot]);
 
   useEffect(() => onGlobalRefresh(() => refresh()), [refresh]);
 
@@ -431,7 +434,7 @@ export function BoardFlowPage() {
                 onChange={(e) => setDate(e.target.value)}
                 className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
-                {dates.map((d) => <option key={d} value={d}>{dateWithWeek(d)}</option>)}
+                {[...dates].sort().reverse().map((d) => <option key={d} value={d}>{dateWithWeek(d)}</option>)}
               </select>
               <button
                 type="button"
@@ -444,11 +447,12 @@ export function BoardFlowPage() {
               <button
                 type="button"
                 onClick={() => refresh()}
-                title="刷新"
+                title="刷新（当前口径 + 热门板块 + 分时）"
                 aria-label="刷新"
-                className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                disabled={refreshing}
+                className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
               >
-                <RefreshCw className="size-3" aria-hidden />
+                <RefreshCw className={cn("size-3", refreshing && "animate-spin")} aria-hidden />
               </button>
             </div>
           </FrameHeader>

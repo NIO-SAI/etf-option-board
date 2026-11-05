@@ -7,6 +7,10 @@ import { useEffect, useMemo, useState } from "react";
  * 这里在图表之上盖一层绝对定位的 SVG：每条线的末端 → 右侧标签画一条虚线，
  * 标签按 y 排序后做「最小行距」避让；行数超过可用高度时，按 |值| 从大到小占位
  * （大资金/大涨幅优先看得见），悬停/高亮的那条始终保留。
+ *
+ * 注意：ECharts 实例（`chart`）在 `key`/`id` 变化时会被销毁重建，销毁后调用
+ * `getWidth()` 会抛 `Cannot read properties of null (reading 'getWidth')`。
+ * 所以**渲染期间一律不碰实例**，像素坐标与留白都只在 effect 里算好放进 state。
  */
 
 export type EndLabelItem = {
@@ -23,11 +27,16 @@ export type EndLabelItem = {
 };
 
 type Row = EndLabelItem & { x: number; y: number; ly: number };
+type Layout = { rows: Row[]; labelX: number };
 
 const MIN_GAP = 12.5;
+/** 分时线末端到标签文字的横向留白：虚线要肉眼可辨，至少 50px */
+const LEAD = 54;
+/** 虚线末端与文字的间隔 */
+const DASH_END_GAP = 4;
 
 export function FlowEndLabels({
-  chart, items, version, gridTop = 30, gridRight = 210, gridBottom = 34, offset = 0,
+  chart, items, version, gridTop = 30, gridRight = 240, gridBottom = 34,
 }: {
   chart: any;
   items: EndLabelItem[];
@@ -36,10 +45,8 @@ export function FlowEndLabels({
   gridTop?: number;
   gridRight?: number;
   gridBottom?: number;
-  /** 外层容器相对图表的额外偏移（一般 0） */
-  offset?: number;
 }) {
-  const [rows, setRows] = useState<Row[]>([]);
+  const [layout, setLayout] = useState<Layout>({ rows: [], labelX: 0 });
   const [tick, setTick] = useState(0);
   const itemKey = useMemo(
     () => items.map((i) => `${i.id}:${i.coord[0]}:${i.coord[1]}:${i.text}:${i.active ? 1 : 0}`).join("|"),
@@ -49,28 +56,38 @@ export function FlowEndLabels({
   // 容器尺寸变化（窗口缩放/布局切换）时重算像素坐标
   useEffect(() => {
     if (!chart) return;
-    const dom = chart.getDom?.();
-    if (!dom || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(() => setTick((t) => t + 1));
-    ro.observe(dom);
-    return () => ro.disconnect();
+    let ro: ResizeObserver | null = null;
+    try {
+      const dom = chart.getDom?.();
+      if (dom && typeof ResizeObserver !== "undefined") {
+        ro = new ResizeObserver(() => setTick((t) => t + 1));
+        ro.observe(dom);
+      }
+    } catch {
+      /* 实例已销毁：交给下一次 onChartReady */
+    }
+    return () => ro?.disconnect();
   }, [chart]);
 
   useEffect(() => {
-    if (!chart || !items.length) {
-      setRows([]);
-      return;
-    }
-    const width = chart.getWidth?.() ?? 0;
-    const height = chart.getHeight?.() ?? 0;
-    if (!width || !height) {
-      setRows([]);
+    const size = (() => {
+      try {
+        if (!chart || chart.isDisposed?.()) return null;
+        const w = chart.getWidth?.() ?? 0;
+        const h = chart.getHeight?.() ?? 0;
+        return w > 0 && h > 0 ? { w, h } : null;
+      } catch {
+        return null;
+      }
+    })();
+    if (!size || !items.length) {
+      setLayout({ rows: [], labelX: 0 });
       return;
     }
     const top = gridTop + 2;
-    const bottom = height - gridBottom - 2;
+    const bottom = size.h - gridBottom - 2;
     if (bottom <= top) {
-      setRows([]);
+      setLayout({ rows: [], labelX: 0 });
       return;
     }
     const px: (EndLabelItem & { x: number; y: number })[] = [];
@@ -82,10 +99,11 @@ export function FlowEndLabels({
         p = null;
       }
       if (!p || !isFinite(p[0]) || !isFinite(p[1])) continue;
-      px.push({ ...it, x: p[0], y: p[1] });
+      // 线末端最多画到网格右边界：留白区里的 54px 才是清晰可见的引导虚线
+      px.push({ ...it, x: Math.min(p[0], size.w - gridRight), y: p[1] });
     }
     if (!px.length) {
-      setRows([]);
+      setLayout({ rows: [], labelX: 0 });
       return;
     }
 
@@ -113,28 +131,31 @@ export function FlowEndLabels({
       const up = top - laid[0].ly;
       laid.forEach((l) => (l.ly += up));
     }
-    setRows(laid.map((l) => ({
-      ...l,
-      ly: Math.min(Math.max(l.ly, top), bottom),
-      x: Math.min(l.x, width - gridRight),
-    })));
+    setLayout({
+      rows: laid.map((l) => ({ ...l, ly: Math.min(Math.max(l.ly, top), bottom) })),
+      labelX: size.w - gridRight + LEAD,
+    });
   }, [chart, items, itemKey, version, tick, gridTop, gridRight, gridBottom]);
 
+  const { rows, labelX } = layout;
   if (!rows.length) return null;
-  const labelX = (chart?.getWidth?.() ?? 0) - gridRight + 4;
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden" style={{ marginLeft: offset }}>
+    <div className="pointer-events-none absolute inset-0 overflow-hidden">
       <svg className="absolute inset-0 h-full w-full" aria-hidden>
         {rows.map((r) => (
-          <line key={`l-${r.id}`} x1={r.x} y1={r.y} x2={labelX - 3} y2={r.ly}
+          <line key={`l-${r.id}`} x1={r.x} y1={r.y} x2={labelX - DASH_END_GAP} y2={r.ly}
             stroke={r.color} strokeWidth={1} strokeDasharray={r.dashed ? "2 3" : "3 3"} opacity={0.75} />
         ))}
       </svg>
       {rows.map((r) => (
         <span
           key={`t-${r.id}`}
-          className="absolute whitespace-nowrap text-[10px] font-semibold leading-none"
-          style={{ left: labelX + 2, top: r.ly, transform: "translateY(-50%)", color: r.color }}
+          className="absolute overflow-hidden text-ellipsis whitespace-nowrap text-[10px] font-semibold leading-none"
+          style={{
+            left: labelX, top: r.ly, transform: "translateY(-50%)", color: r.color,
+            // 超长板块名兜底：绝不越过留白区右边界
+            maxWidth: Math.max(40, gridRight - LEAD - 6),
+          }}
         >
           {r.text}
         </span>

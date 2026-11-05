@@ -211,6 +211,11 @@ export function BoardMultiPage() {
   };
 
   const dates = intraday?.dates ?? data?.dates ?? [];
+  // 下拉游标按时间倒序（最新的在最上面）；图表轴仍用升序的 dates
+  const dateOptionsDesc = useMemo(
+    () => [...(data?.available_dates ?? [])].sort().reverse(),
+    [data?.available_dates],
+  );
   const rangeEnd = end || intraday?.end || data?.end || "";
   const latestDay = health?.last?.date ?? "";
 
@@ -268,7 +273,7 @@ export function BoardMultiPage() {
                 className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground"
               >
                 <option value="">默认起</option>
-                {(data?.available_dates ?? []).map((d: string) => <option key={d} value={d}>{dateWithWeek(d)}</option>)}
+                {dateOptionsDesc.map((d: string) => <option key={d} value={d}>{dateWithWeek(d)}</option>)}
               </select>
               <span className="text-muted-foreground">至</span>
               <select
@@ -277,7 +282,7 @@ export function BoardMultiPage() {
                 className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground"
               >
                 <option value="">默认止</option>
-                {(data?.available_dates ?? []).map((d: string) => <option key={d} value={d}>{dateWithWeek(d)}</option>)}
+                {dateOptionsDesc.map((d: string) => <option key={d} value={d}>{dateWithWeek(d)}</option>)}
               </select>
               <span className="flex items-center gap-0.5 rounded-md border border-border bg-muted/40 p-0.5">
                 {[3, 5, 8].map((n) => (
