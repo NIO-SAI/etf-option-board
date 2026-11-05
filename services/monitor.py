@@ -11,7 +11,7 @@ import logging
 
 from config import settings
 from services import (alerts, decision, deploy as deploy_svc, em, market_service as ms,
-                      reversal, strategy, user_settings as usv)
+                      money as money_fmt, reversal, strategy, user_settings as usv)
 from services.universe import ETFS
 
 log = logging.getLogger("monitor")
@@ -122,8 +122,8 @@ async def _check_etf(etf: dict) -> dict | None:
         await alerts.publish({
             "etf_code": etf["code"], "etf_name": name, "type": "main_inflow",
             "level": "critical", "dir": "bull" if d5 > 0 else "bear",
-            "title": f"{name} 主力{'流入' if d5>0 else '流出'} {abs(d5)/1e8:.2f} 亿",
-            "text": f"近5分钟主力净{'流入' if d5>0 else '流出'} {abs(d5)/1e8:.2f} 亿元。",
+            "title": f"{name} 主力{'流入' if d5>0 else '流出'} {money_fmt.money(abs(d5))}元",
+            "text": f"近5分钟主力净{'流入' if d5>0 else '流出'} {money_fmt.money(abs(d5))}元。",
         })
 
     # MACD 背离（15 分钟K线口径；冷却 600s）
@@ -222,7 +222,7 @@ async def _national_team_alert(nt: dict) -> None:
     picked = (pos or entries)[:3]
 
     def _amt(wan: float) -> str:
-        return f"{wan / 1e4:.2f}亿" if abs(wan) >= 1e4 else f"{wan:.0f}万"
+        return money_fmt.money(wan * 1e4)
 
     parts = []
     for e in picked:

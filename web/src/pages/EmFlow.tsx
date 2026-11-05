@@ -9,7 +9,7 @@ import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
 import { readHashParams, writeHashParams } from "@/lib/urlState";
-import { signedYi } from "@/lib/format";
+import { signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const TARGETS = [
@@ -171,7 +171,7 @@ export function EmFlowPage() {
                     <span key={s.code} className="inline-flex items-center gap-1">
                       <span className="inline-block size-1.5 rounded-full bg-primary/70" />
                       {s.name}
-                      <span className="tnum text-foreground/80">{signedYi(s.values[s.values.length - 1])}</span>
+                      <span className="tnum text-foreground/80">{signedFlow(s.values[s.values.length - 1])}</span>
                     </span>
                   ))}
                 </div>

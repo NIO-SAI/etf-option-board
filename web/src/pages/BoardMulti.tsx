@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
 import { joinCodes, parseCodes, readHashParams, writeHashParams } from "@/lib/urlState";
-import { signedYi } from "@/lib/format";
+import { signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const TYPES = [

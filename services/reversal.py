@@ -31,7 +31,7 @@ import datetime as dt
 import logging
 from collections import deque
 
-from services import alerts, em, option_service as osvc, strategy
+from services import alerts, em, money as money_fmt, option_service as osvc, strategy
 from services.indicators import macd, macd_state
 
 log = logging.getLogger("reversal")
@@ -138,10 +138,10 @@ def _score_side(ctx: dict, bars: list[dict], track: dict | None,
     d5 = ctx.get("flow_main_delta5m") or 0
     if (bull and d5 >= 1.2e8) or (not bull and d5 <= -1.2e8):
         s += 15
-        hits.append(f"主力{'流入' if bull else '流出'}{abs(d5) / 1e8:.1f}亿")
+        hits.append(f"主力{'流入' if bull else '流出'}{money_fmt.money(abs(d5))}")
     elif (bull and d5 >= 5e7) or (not bull and d5 <= -5e7):
         s += 10
-        hits.append(f"主力{'流入' if bull else '流出'}{abs(d5) / 1e8:.1f}亿")
+        hits.append(f"主力{'流入' if bull else '流出'}{money_fmt.money(abs(d5))}")
 
     # 关联指数同向
     if track:

@@ -6,7 +6,7 @@ import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
 import { Fold } from "@/components/ui/fold";
 import { AutoTip, GLOSSARY, Tip } from "@/components/ui/term";
-import { clsUpDown, gamma, money, nf, pct, signedMoney } from "@/lib/format";
+import { clsUpDown, flowMoney, gamma, money, nf, pct, signedMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowDownRight, ArrowUpRight, Loader2, Minus, Star } from "lucide-react";
@@ -214,7 +214,7 @@ export function EtfList({
                   <div className="text-xs font-semibold tnum">{q ? nf(q.price, 3) : "—"}</div>
                   <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>
                   <div className="text-[10px] tnum text-muted-foreground" title="当日成交额">
-                    {q?.amount ? `${(q.amount / 1e8).toFixed(1)}亿` : "—"}
+                    {q?.amount ? flowMoney(q.amount) : "—"}
                   </div>
                 </div>
               </button>
@@ -255,7 +255,7 @@ export function EtfList({
                       <div className="text-xs font-semibold tnum">{q ? nf(q.price, 2) : "—"}</div>
                       <div className={cn("text-[11px] tnum", clsUpDown(q?.pct))}>{q ? pct(q.pct) : "—"}</div>
                       <div className="text-[10px] tnum text-muted-foreground" title="当日成交额">
-                        {q?.amount ? `${(q.amount / 1e8).toFixed(1)}亿` : "—"}
+                        {q?.amount ? flowMoney(q.amount) : "—"}
                       </div>
                     </div>
                   </button>

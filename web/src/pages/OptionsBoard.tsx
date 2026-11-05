@@ -15,7 +15,7 @@ import { usePolling, type CacheMeta } from "@/lib/usePolling";
 import { dayKey } from "@/lib/cache";
 import { onGlobalRefresh } from "@/lib/refresh";
 import { usePrefetch } from "@/lib/prefetch";
-import { clsUpDown, hhmmss, nf, pct, signedWan } from "@/lib/format";
+import { clsUpDown, hhmmss, nf, pct, signedFlow } from "@/lib/format";
 
 // 图线开关的色带（与图上的横线同色）
 const SWATCH_LEVELS = { background: "linear-gradient(90deg,#ef4444 50%,#16a34a 50%)" };
@@ -261,8 +261,8 @@ export function OptionsBoard() {
             {ctxReady && (
               <div className="flex flex-wrap items-center gap-2 px-3 pb-1 text-[11px] text-muted-foreground">
                 <MiniKv k="量能" v={`${ctx.volume?.ratio ?? "—"}x`} tone={ctx.volume?.is_surge ? "warn" : undefined} />
-                <MiniKv k="主力5分" v={signedWan(ctx.flow_main_delta5m)} tone={ctx.flow_main_delta5m == null ? undefined : ctx.flow_main_delta5m > 0 ? "up" : "down"} />
-                <MiniKv k="主力累计" v={signedWan(ctx.flow_snapshot?.main)} tone={ctx.flow_snapshot?.main == null ? undefined : ctx.flow_snapshot.main > 0 ? "up" : "down"} />
+                <MiniKv k="主力5分" v={signedFlow(ctx.flow_main_delta5m)} tone={ctx.flow_main_delta5m == null ? undefined : ctx.flow_main_delta5m > 0 ? "up" : "down"} />
+                <MiniKv k="主力累计" v={signedFlow(ctx.flow_snapshot?.main)} tone={ctx.flow_snapshot?.main == null ? undefined : ctx.flow_snapshot.main > 0 ? "up" : "down"} />
                 {ctx.flow_day && ctx.flow_day < new Date().toLocaleDateString("en-CA") && (
                   <Badge variant="warning-light" title="当日资金流序列尚未产生，展示的是最近一个有数据的交易日">昨日资金流</Badge>
                 )}

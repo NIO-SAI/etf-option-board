@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/misc";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { AutoTip, GLOSSARY, Tip } from "@/components/ui/term";
-import { clsUpDown, money, nf, pct } from "@/lib/format";
+import { clsUpDown, flowMoney, money, nf, pct } from "@/lib/format";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { BrainCircuit, Loader2 } from "lucide-react";
@@ -60,7 +60,7 @@ export function ContractDetail({
                 <span className="text-muted-foreground"><Tip label={`Δ ${nf(contract.delta, 3)}`} tip={GLOSSARY.Delta} /></span>
                 <span className="text-muted-foreground"><Tip label={`溢价 ${nf(contract.premium_rate, 2)}%`} tip={GLOSSARY["溢价"]} /></span>
                 <span className="text-muted-foreground"><Tip label={`离到期 ${contract.days}天`} tip={GLOSSARY["离到期"]} /></span>
-                <span className="text-muted-foreground"><Tip label={`成交额 ${money(contract.amount)}`} tip={GLOSSARY["成交额"]} /></span>
+                <span className="text-muted-foreground"><Tip label={`成交额 ${flowMoney(contract.amount)}`} tip={GLOSSARY["成交额"]} /></span>
               </div>
             </>
           ) : (

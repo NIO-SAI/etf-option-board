@@ -9,7 +9,7 @@ import logging
 import re
 
 from config import settings
-from services import bs, em, iv_history as ivh
+from services import bs, em, iv_history as ivh, money as money_fmt
 from services.universe import ETF_BY_CODE, ETFS
 
 log = logging.getLogger("option")
@@ -637,7 +637,7 @@ def _reasons(c: dict, side: str, trend: dict, strength: float, liq: float,
         out.append("逆当前方向，仅作反向备选")
     amount = c.get("amount") or 0
     if liq >= 0.65:
-        amt_txt = f"{amount / 1e8:.2f}亿" if amount >= 1e8 else f"{amount / 1e4:.0f}万"
+        amt_txt = money_fmt.money(amount)
         out.append(f"流动性好（成交额 {amt_txt}）")
     spread = c.get("spread")
     if spread is not None and spread <= 2 and liq >= 0.3:

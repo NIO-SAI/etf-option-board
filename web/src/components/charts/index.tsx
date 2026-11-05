@@ -2,7 +2,7 @@ import ReactECharts from "echarts-for-react";
 import { Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { alignToAxis, minuteOf, sameDayAs, trimSession } from "@/lib/series";
-import { signedMoney, signedYi } from "@/lib/format";
+import { signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const AXIS = "#71717a";
@@ -244,9 +244,9 @@ export function IntradayChart({
             const n = Number(p.value);
             let val = "—";
             if (p.value !== null && p.value !== undefined && isFinite(n)) {
-              // 价格系列已是百分比；资金仍是金额（元），保持「万」口径
+              // 价格系列已是百分比；资金仍是金额（元），按统一口径「亿/万」显示
               const isFlow = p.seriesName === "标的主力净流入" || p.seriesName === "指数主力净流入";
-              val = isFlow ? `${Math.round(n / 1e4)}万` : `${n.toFixed(2)}%`;
+              val = isFlow ? signedFlow(n) : `${n.toFixed(2)}%`;
             }
             return `${p.marker}${p.seriesName} <b>${val}</b>`;
           }).join("<br/>");
@@ -512,7 +512,7 @@ export function OverlayChart({
             let val = "—";
             if (ok) {
               if (p.seriesName === `${underName}主力净买额`) {
-                val = signedMoney(n);
+                val = signedFlow(n);
               } else if (p.seriesName === "合约价格") {
                 val = `${fmtPrice(n)} <span style="color:#71717a">${fmtPct(pctOf(n, optPrevClose ?? null))}</span>`;
               } else {
@@ -702,7 +702,7 @@ export function MoneyLinesChart({
           .filter((p) => p.value != null)
           .sort((a, b) => (b.value as number) - (a.value as number))
           .map((p) => `<div style="display:flex;justify-content:space-between;gap:12px">
-            <span>${p.marker}${p.seriesName}</span><span>${signedMoney(p.value)}</span></div>`)
+            <span>${p.marker}${p.seriesName}</span><span>${signedFlow(p.value)}</span></div>`)
           .join("");
         return head + rows;
       },
@@ -724,7 +724,7 @@ export function MoneyLinesChart({
     yAxis: {
       type: "value",
       scale: true,
-      axisLabel: { color: AXIS, fontSize: 10, formatter: (v: number) => signedMoney(v) },
+      axisLabel: { color: AXIS, fontSize: 10, formatter: (v: number) => signedFlow(v) },
       splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
     },
     series: shown.map((s) => ({
@@ -747,7 +747,7 @@ export function MoneyLinesChart({
           formatter: (pp: any) => {
             const arr = pp.value as any;
             const v = Array.isArray(arr) ? arr[1] : arr;
-            return `${s.name} ${signedYi(v)}`;
+            return `${s.name} ${signedFlow(v)}`;
           },
         },
         labelLayout: { moveOverlap: "shiftY" as const },
@@ -799,7 +799,7 @@ export function FlowDetailChart({
       formatter: (ps: any[]) => {
         if (!ps?.length) return "";
         const rows = ps.map((p) => `<div style="display:flex;justify-content:space-between;gap:12px">
-          <span>${p.marker}${p.seriesName}</span><span>${signedMoney(p.value)}</span></div>`).join("");
+          <span>${p.marker}${p.seriesName}</span><span>${signedFlow(p.value)}</span></div>`).join("");
         return `<div style="margin-bottom:4px">${ps[0].axisValue}</div>${rows}`;
       },
     },
@@ -813,7 +813,7 @@ export function FlowDetailChart({
     },
     yAxis: {
       type: "value", scale: true,
-      axisLabel: { color: AXIS, fontSize: 10, formatter: (v: number) => signedMoney(v) },
+      axisLabel: { color: AXIS, fontSize: 10, formatter: (v: number) => signedFlow(v) },
       splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
     },
     series: [
@@ -850,7 +850,7 @@ export function FlowHistoryChart({
       borderColor: "rgba(255,255,255,0.12)",
       textStyle: { color: "#e4e4e7", fontSize: 11 },
       formatter: (ps: any[]) => ps?.length
-        ? `${ps[0].axisValue}<br/>${signedMoney(ps[0].value)}` : "",
+        ? `${ps[0].axisValue}<br/>${signedFlow(ps[0].value)}` : "",
     },
     xAxis: {
       type: "category", data: dates,
@@ -859,7 +859,7 @@ export function FlowHistoryChart({
     },
     yAxis: {
       type: "value", scale: true,
-      axisLabel: { color: AXIS, fontSize: 9, formatter: (v: number) => signedMoney(v) },
+      axisLabel: { color: AXIS, fontSize: 9, formatter: (v: number) => signedFlow(v) },
       splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
     },
     series: [{
@@ -929,7 +929,7 @@ export function BoardFlowChart({
       // 悬停时这条线会被「分段红绿」覆盖（见下方 seg 系列），这里只保留末端标签与底衬
       const color = focus ? ((last ?? 0) >= 0 ? "#ef4444" : "#22c55e") : baseColor;
       const pctStr = typeof l.pct === "number" ? `(${l.pct >= 0 ? "+" : ""}${l.pct.toFixed(2)}%)` : "";
-      const label = `${l.name}  ${last == null ? "—" : signedYi(last)}${pctStr}`;
+      const label = `${l.name}  ${last == null ? "—" : signedFlow(last)}${pctStr}`;
       return {
         id: l.code,
         name: l.name,
@@ -1032,7 +1032,7 @@ export function BoardFlowChart({
         blur: { lineStyle: { opacity: 1 } },
         endLabel: {
           show: true,
-          formatter: () => `${temp.name}  ${signedYi(temp.points.length ? temp.points[temp.points.length - 1][1] : null)}`,
+          formatter: () => `${temp.name}  ${signedFlow(temp.points.length ? temp.points[temp.points.length - 1][1] : null)}`,
           color, fontSize: 10, fontWeight: "bold" as const, distance: 6,
         },
         z: 6,
@@ -1066,7 +1066,7 @@ export function BoardFlowChart({
           return head + list.slice(0, 12).map((p) =>
             `<div style="display:flex;justify-content:space-between;gap:14px;${hovered === p ? "font-weight:700" : ""}">
                <span>${p.marker}${p.seriesName}</span>
-               <span style="color:${(p.value as number) >= 0 ? "#f87171" : "#4ade80"}">${(p.value as number) >= 0 ? "+" : ""}${p.value}亿</span>
+               <span style="color:${(p.value as number) >= 0 ? "#f87171" : "#4ade80"}">${signedFlow(Number(p.value) * 1e8)}</span>
              </div>`).join("") + (rows.length > 12 ? `<div style="opacity:.6">…共 ${rows.length} 条</div>` : "");
         },
       },

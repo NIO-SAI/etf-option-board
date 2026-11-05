@@ -7,7 +7,7 @@ import { Dialog, EmptyState, HoverTip } from "@/components/ui/misc";
 import { api } from "@/lib/api";
 import { subscribeAlerts } from "@/lib/alertBus";
 import { notifyPermission, requestNotifyPermission, autoPromptPermissionOnce, reportNotifyState } from "@/lib/notify";
-import { clsUpDown, signedMoney } from "@/lib/format";
+import { clsUpDown, signedFlow } from "@/lib/format";
 import { AlertTriangle, BellRing, Volume2 } from "lucide-react";
 
 const TYPE_LABEL: Record<string, string> = {
@@ -128,7 +128,7 @@ export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void })
                 <span className="mt-0.5">{a.level === "critical" ? <AlertTriangle className="size-3 text-destructive" /> : null}</span>
                 {/* 整行悬浮：代码 + 完整标题 + 完整正文（列表里标题 truncate、正文 line-clamp-2 会截断） */}
                 <HoverTip label={`${a.etf_code ? a.etf_code + " " : ""}${a.title}\n${a.text}${
-                  (a.etfs ?? []).map((e: any) => `\n${e.name} ${signedMoney(e.main_inflow)}${e.surge ? " · " + e.surge + "x放量" : ""}`).join("")
+                  (a.etfs ?? []).map((e: any) => `\n${e.name} ${signedFlow(e.main_inflow)}${e.surge ? " · " + e.surge + "x放量" : ""}`).join("")
                 }${(a.items ?? []).map((e: any) => `\n${itemTxt(e)}`).join("")}`} className="min-w-[240px]">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
@@ -155,7 +155,7 @@ export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void })
                         {a.etfs.map((e: any) => (
                           <span key={e.code} className="whitespace-nowrap">
                             <span className="text-foreground">{e.name}</span>
-                            <span className={`ml-1 ${clsUpDown(e.main_inflow ?? 0)}`}>{signedMoney(e.main_inflow)}</span>
+                            <span className={`ml-1 ${clsUpDown(e.main_inflow ?? 0)}`}>{signedFlow(e.main_inflow)}</span>
                             {e.surge ? <span className="ml-1">· {e.surge}x</span> : null}
                           </span>
                         ))}
@@ -200,7 +200,7 @@ export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void })
                   <div key={e.code} className="flex items-center justify-between gap-3">
                     <span>{e.name}<span className="ml-1 text-muted-foreground">{e.code}</span></span>
                     <span className={clsUpDown(e.main_inflow ?? 0)}>
-                      {signedMoney(e.main_inflow)}{e.surge ? ` · ${e.surge}x` : ""}
+                      {signedFlow(e.main_inflow)}{e.surge ? ` · ${e.surge}x` : ""}
                     </span>
                   </div>
                 ))}

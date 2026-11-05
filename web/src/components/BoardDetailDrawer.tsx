@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Drawer, EmptyState, Skeleton } from "@/components/ui/misc";
 import { FlowDetailChart, FlowHistoryChart, MoneyLinesChart } from "@/components/charts";
 import { api } from "@/lib/api";
-import { clsUpDown, pct as fmtPct, signedYi } from "@/lib/format";
+import { clsUpDown, pct as fmtPct, signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
@@ -47,7 +47,7 @@ export function BoardDetailDrawer({
       widthClass="w-[50vw] min-w-[420px] max-w-[1000px]"
       title={selected ? `${selected.name} ${selected.code}` : ""}
       subtitle={d && !loading
-        ? `${date} · ${d.type === "industry" ? "行业" : d.type === "index" ? "指数" : "概念"} · 主力净流入 ${signedYi(d.flow)}${d.pct != null ? ` · 涨跌幅 ${fmtPct(d.pct)}` : ""}`
+        ? `${date} · ${d.type === "industry" ? "行业" : d.type === "index" ? "指数" : "概念"} · 主力净流入 ${signedFlow(d.flow)}${d.pct != null ? ` · 涨跌幅 ${fmtPct(d.pct)}` : ""}`
         : `${date} · 加载中…`}
     >
       {!d || loading ? (
@@ -85,7 +85,7 @@ export function BoardDetailDrawer({
                       <td className="px-1 py-0.5 text-right tnum">{s.price ? s.price.toFixed(2) : "—"}</td>
                       <td className={cn("px-1 py-0.5 text-right tnum", clsUpDown(s.pct))}>{s.pct == null ? "—" : fmtPct(s.pct)}</td>
                       <td className={cn("px-1 py-0.5 text-right tnum", (s.flow ?? 0) >= 0 ? "text-up" : "text-down")}>
-                        {signedYi(s.flow)}
+                        {signedFlow(s.flow)}
                       </td>
                     </tr>
                   ))}

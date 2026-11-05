@@ -10,7 +10,7 @@ import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
 import { joinCodes, parseCodes, readHashParams, writeHashParams } from "@/lib/urlState";
-import { clsUpDown, pct as fmtPct, signedWanGrouped, signedYi } from "@/lib/format";
+import { clsUpDown, pct as fmtPct, signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** 与 stock-webui 一致的五个口径 */
@@ -451,7 +451,7 @@ export function BoardFlowPage() {
                         {b.pct == null ? "--" : fmtPct(b.pct, 2)}
                       </span>
                       <span className={cn("shrink-0 whitespace-nowrap text-right text-[10px] tnum", b.flow >= 0 ? "text-up" : "text-down")}>
-                        {signedWanGrouped(b.flow)}
+                        {signedFlow(b.flow)}
                       </span>
                       {b.code.startsWith("BK") && (
                         <button
@@ -569,7 +569,7 @@ export function BoardFlowPage() {
                 {activeLine && (
                   <> · <span className="text-foreground/80">{activeLine.name}</span>{" "}
                     <span className={cn("tnum", (activeLast ?? 0) >= 0 ? "text-up" : "text-down")}>
-                      {signedYi(activeLast)}
+                      {signedFlow(activeLast)}
                     </span>
                   </>
                 )}

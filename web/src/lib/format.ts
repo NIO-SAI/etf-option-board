@@ -34,43 +34,29 @@ export const signedMoney = (v: any): string => {
   return `${n > 0 ? "+" : ""}${money(n)}`;
 };
 
-/** 主力净流入等：以「万」为单位，精确到个位数（整数万）。 */
-export const wan = (v: any): string => {
+/** 资金流统一口径：≥1 亿用「亿」（2 位小数），不足 1 亿一律用「万」。
+ *  万的小数位随量级收减（≥100 万取整、≥1 万 1 位、更小 2 位），避免小额被抹成 0 万。
+ *  只给资金流/成交额用；敞口、张数等元级数字仍用 money()，免得几百元变成 0.05 万。 */
+export const flowMoney = (v: any): string => {
   if (v === null || v === undefined || v === "") return "—";
   const n = Number(v);
   if (!isFinite(n)) return "—";
-  return `${Math.round(n / 1e4)}万`;
+  const a = Math.abs(n);
+  if (a >= 1e8) return `${(n / 1e8).toFixed(2)}亿`;
+  const w = n / 1e4;
+  const aw = Math.abs(w);
+  const d = aw >= 100 ? 0 : aw >= 1 ? 1 : 2;
+  const txt = w.toFixed(d);
+  // 四舍五入后跨过 1 亿（9999.5 万 → 10000 万）时仍按「亿」显示
+  if (Math.abs(Number(txt)) >= 10000) return `${(n / 1e8).toFixed(2)}亿`;
+  return `${txt}万`;
 };
 
-export const signedWan = (v: any): string => {
+export const signedFlow = (v: any): string => {
   if (v === null || v === undefined || v === "") return "—";
   const n = Number(v);
   if (!isFinite(n)) return "—";
-  const r = Math.round(n / 1e4);
-  return `${r > 0 ? "+" : ""}${r}万`;
-};
-
-/** 资金（元）→ 万，带千分位；列表列统一用万为单位时用。 */
-export const signedWanGrouped = (v: any): string => {
-  if (v === null || v === undefined || v === "") return "—";
-  const n = Number(v);
-  if (!isFinite(n)) return "—";
-  const wan = Math.round(n / 1e4);
-  const txt = Math.abs(wan).toLocaleString("en-US");
-  return `${wan > 0 ? "+" : wan < 0 ? "-" : ""}${txt}万`;
-};
-
-/** 板块/ETF 资金：≥1 亿按「亿」两位小数，否则按「万」整数（板块资金动辄几十亿，万亿单位难读）。 */
-export const signedYi = (v: any): string => {
-  if (v === null || v === undefined || v === "") return "—";
-  const n = Number(v);
-  if (!isFinite(n)) return "—";
-  if (Math.abs(n) >= 1e8) {
-    const yi = Math.round((n / 1e8) * 100) / 100;
-    return `${yi > 0 ? "+" : ""}${yi.toFixed(2)}亿`;
-  }
-  const wan = Math.round(n / 1e4);
-  return `${wan > 0 ? "+" : ""}${wan}万`;
+  return `${n > 0 ? "+" : ""}${flowMoney(n)}`;
 };
 
 export const upDown = (v: any): "up" | "down" | "flat" => {

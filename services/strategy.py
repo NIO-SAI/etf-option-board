@@ -8,7 +8,8 @@ import logging
 import time
 
 from services import (decision, em, index_levels, kronos, market_service as ms, market_turnover,
-                      option_service as osvc, pick_tracker as tracker, user_settings as usv, vol)
+                      money as money_fmt, option_service as osvc, pick_tracker as tracker,
+                      user_settings as usv, vol)
 from services.indicators import atr, macd_state, pct_change, support_resistance, volume_stats
 from services.universe import ETF_BY_CODE, ETFS, TRACK_INDEX
 
@@ -185,7 +186,7 @@ def detect_signals(etf_ctx: dict, track: dict, national: dict, ext: list[dict],
     if abs(d5) > 8e7:
         sig.append({"type": "main_inflow", "level": "warn",
                     "dir": "bull" if d5 > 0 else "bear",
-                    "text": f"主力资金近5分钟净{'流入' if d5>0 else '流出'} {abs(d5)/1e8:.2f} 亿"})
+                    "text": f"主力资金近5分钟净{'流入' if d5>0 else '流出'} {money_fmt.money(abs(d5))}"})
 
     # 价格突动
     p3 = pct_change(closes, 3)

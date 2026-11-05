@@ -1,7 +1,7 @@
 import { Check, Eye, Loader2, Plus, Search } from "lucide-react";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
 import { EmptyState } from "@/components/ui/misc";
-import { clsUpDown, pct as fmtPct, signedWanGrouped } from "@/lib/format";
+import { clsUpDown, pct as fmtPct, signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export type FlowRow = {
@@ -164,7 +164,7 @@ export function FlowListPanel({
                     )}
                     <span className={cn("w-[7.2em] shrink-0 whitespace-nowrap text-right text-[10px] tabular-nums",
                       b.flow >= 0 ? "text-up" : "text-down")}>
-                      {signedWanGrouped(b.flow)}
+                      {signedFlow(b.flow)}
                     </span>
                     {onDetail && b.code.startsWith("BK") && (
                       <button

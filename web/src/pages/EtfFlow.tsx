@@ -10,7 +10,7 @@ import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
 import { joinCodes, parseCodes, readHashParams, writeHashParams } from "@/lib/urlState";
-import { signedYi } from "@/lib/format";
+import { signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const SCOPES = [
@@ -42,7 +42,7 @@ function DimCards({
             {c.label}
           </div>
           <div className={cn("mt-1 text-lg font-semibold tnum", (c.value ?? 0) >= 0 ? "text-up" : "text-down")}>
-            {c.value == null ? "—" : signedYi(c.value)}
+            {c.value == null ? "—" : signedFlow(c.value)}
           </div>
           <div className="mt-0.5 text-[10px] text-muted-foreground">{c.hint}</div>
         </div>
@@ -67,7 +67,7 @@ function LegendChips({
           <span className="inline-block size-1.5 rounded-full bg-primary/70" />
           <span className="text-foreground/90">{it.name}</span>
           <span className={cn("tnum", (it.value ?? 0) >= 0 ? "text-up" : "text-down")}>
-            {signedYi(it.value)}
+            {signedFlow(it.value)}
           </span>
         </span>
       ))}
