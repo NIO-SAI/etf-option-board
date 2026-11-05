@@ -929,6 +929,9 @@ export function BoardFlowChart({
     };
 
     const many = lines.length > 40;
+    // 线末标签一律显示（全选后也不再整批隐藏）。条数多时靠 labelLayout.hideOverlap
+    // 自动丢掉互相压住的标签，右侧留白同步加宽，避免标签被裁到画布外。
+    const labelGap = many ? 230 : 190;
     const series: any[] = lines.map((l, i) => {
       const baseColor = FLOW_COLORS[i % FLOW_COLORS.length];
       const dim = hoverCode && hoverCode !== l.code;
@@ -950,14 +953,14 @@ export function BoardFlowChart({
         emphasis: { focus: "series" as const, lineStyle: { width: 3.4 } },
         blur: { lineStyle: { opacity: 0.08 }, label: { opacity: 0.1 }, endLabel: { opacity: 0.1 } },
         endLabel: {
-          show: !many,
+          show: true,
           formatter: () => label,
           color,
           fontSize: 10,
           fontWeight: "bold" as const,
           distance: 6,
         },
-        labelLayout: { moveOverlap: "shiftY" as const },
+        labelLayout: { moveOverlap: "shiftY" as const, hideOverlap: true },
         // 悬停线本身退到分段线下面（半透明但保留宽度，保证鼠标还能命中这条线）
         z: focus ? 2 : 3,
         ...(focus ? { lineStyle: { width: 3, color, opacity: 0.25 } } : {}),
@@ -1078,7 +1081,7 @@ export function BoardFlowChart({
              </div>`).join("") + (rows.length > 12 ? `<div style="opacity:.6">…共 ${rows.length} 条</div>` : "");
         },
       },
-      grid: { top: 30, right: many ? 40 : 190, bottom: 34, left: 56 },
+      grid: { top: 30, right: labelGap, bottom: 34, left: 56 },
       xAxis: {
         type: "category",
         data: times,

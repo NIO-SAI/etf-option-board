@@ -5,6 +5,7 @@ import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/fr
 import { Badge } from "@/components/reui/badge";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
 import { FlowListPanel, type BatchMode, type SortKey, type FlowRow } from "@/components/FlowListPanel";
+import { DayTag } from "@/components/DayTag";
 import { BoardFlowChart, MoneyLinesChart, type FlowLine } from "@/components/charts";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
@@ -341,8 +342,8 @@ export function EtfFlowPage() {
               />
             </div>
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-              <span>数据日期 {data?.date ?? "—"}</span>
-              {data?.is_today === false && <Badge variant="warning-light">历史</Badge>}
+              <span>{data?.date ?? "—"}</span>
+              <DayTag date={data?.date} latest={health?.last?.date} />
               {health?.trading ? <Badge variant="success-light">交易中</Badge> : <Badge variant="outline">休市</Badge>}
               <button
                 type="button" onClick={() => refresh()} title="刷新" aria-label="刷新"

@@ -12,10 +12,10 @@ export type PageDef = { key: PageKey; hash: string; label: string; title: string
 
 export const PAGES: PageDef[] = [
   { key: "options", hash: "#/options", label: "期权看板", title: "ETF 期权日内决策看板" },
-  { key: "board-flow", hash: "#/board/flow", label: "概念资金分时", title: "板块资金 · 概念资金分时" },
-  { key: "board-multi", hash: "#/board/multi", label: "主力资金多日图", title: "板块资金 · 主力资金多日图" },
-  { key: "board-etf", hash: "#/board/etf", label: "ETF资金流", title: "板块资金 · ETF资金流" },
-  { key: "board-em", hash: "#/board/em", label: "东财资金分时", title: "板块资金 · 东财资金分时" },
+  { key: "board-flow", hash: "#/board/flow", label: "主力资金分时", title: "主力资金分时" },
+  { key: "board-multi", hash: "#/board/multi", label: "主力资金多日", title: "主力资金多日" },
+  { key: "board-etf", hash: "#/board/etf", label: "ETF资金流", title: "ETF资金流" },
+  { key: "board-em", hash: "#/board/em", label: "指数资金分时", title: "指数资金分时" },
 ];
 
 const BY_HASH = new Map(PAGES.map((p) => [p.hash, p.key]));

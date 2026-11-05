@@ -1108,11 +1108,35 @@ async def etf_flow_watch_remove(code: str = Query(...)):
 # 东财 4 维资金（机构/大单/中户/散户）
 # --------------------------------------------------------------------------
 @router.get("/em-flow/targets")
-async def em_flow_targets():
-    """4 维页的目标清单：核心指数 + 全 A 聚合。"""
+async def em_flow_targets(date: str | None = Query(None)):
+    """4 维页的目标清单：核心指数 + 全 A 聚合。
+
+    附带当日最新「机构 + 大单」主动净买额与涨跌幅，供左侧列表按同口径排序
+    （与「主力资金分时」列表一致：一行 = 名称 + 涨跌幅 + 资金）。
+    """
     from services.universe import INDICES
-    return {"indices": [{"code": i["secid"], "name": i["name"]} for i in INDICES],
-            "market": {"code": bf.EM_MARKET_CODE, "name": bf.EM_MARKET_NAME}}
+
+    if not date:
+        try:
+            dates = await asyncio.to_thread(bf.available_dates, 1, "em")
+        except Exception:  # noqa: BLE001
+            dates = []
+        date = dates[0] if dates else dt.date.today().isoformat()
+    try:
+        rows = await asyncio.to_thread(bf.latest_em_flows, date)
+    except Exception:  # noqa: BLE001
+        rows = []
+    by = {r["code"]: r for r in rows}
+
+    def item(code: str, name: str) -> dict:
+        r = by.get(code)
+        return {"code": code, "name": name,
+                "flow": (float(r["inst"]) + float(r["large"])) if r else None,
+                "pct": r.get("pct") if r else None}
+
+    return {"date": date,
+            "indices": [item(i["secid"], i["name"]) for i in INDICES],
+            "market": item(bf.EM_MARKET_CODE, bf.EM_MARKET_NAME)}
 
 
 @router.get("/em-flow/industries")
@@ -1129,8 +1153,16 @@ async def em_flow_industries(date: str | None = Query(None)):
     except Exception as exc:  # noqa: BLE001
         return {"date": date, "display": [], "all": [], "error": str(exc)}
     cfg = await asyncio.to_thread(bf.load_em_config)
-    display = cfg["items"] if cfg.get("customized") and cfg["items"] else bf.pick_em_industries(rank)
-    all_rows = [{"code": r["code"], "name": r["name"], "flow": r["flow"]}
+    by = {r["code"]: r for r in rank}
+    base = cfg["items"] if cfg.get("customized") and cfg["items"] else bf.pick_em_industries(rank)
+
+    def enrich(it: dict) -> dict:
+        r = by.get(it["code"]) or {}
+        return {"code": it["code"], "name": it.get("name") or r.get("name") or it["code"],
+                "flow": r.get("flow"), "pct": r.get("pct")}
+
+    display = [enrich(it) for it in base]
+    all_rows = [{"code": r["code"], "name": r["name"], "flow": r["flow"], "pct": r.get("pct")}
                 for r in sorted(rank, key=lambda r: -abs(float(r.get("flow") or 0)))[:200]]
     return {"date": date, "display": display, "all": all_rows,
             "customized": bool(cfg.get("customized")),
@@ -1206,10 +1238,12 @@ async def em_flow_series(target_type: str = Query("index", description="index / 
         out = bf.build_series({code: vals})
         return out["axis"], (out["series"][0]["values"] if out["series"] else [])
 
-    axis, inst = aligned([(t, a) for t, a, *_ in pts])
+    # pts 元组是 (time, inst, large, medium, retail)：large 在第 2 位，
+    # 之前写成 1/2/3 会整体错位一列（大单显示成机构、散户显示成中户）。
+    axis, inst = aligned([(p[0], p[1]) for p in pts])
     dims = {"inst": inst}
-    for idx, key in ((1, "large"), (2, "medium"), (3, "retail")):
-        _, dims[key] = aligned([(t, p[idx]) for p in pts for t in [p[0]]])
+    for idx, key in ((2, "large"), (3, "medium"), (4, "retail")):
+        _, dims[key] = aligned([(p[0], p[idx]) for p in pts])
 
     meta = await asyncio.to_thread(bf.read_em_meta, date, code)
     out = {"date": date, "code": code, "kind": kind, "axis": axis, "dims": dims,

@@ -28,7 +28,8 @@ const BATCHES: { key: BatchMode; label: string }[] = [
 
 /**
  * 板块/ETF 列表面板：搜索、排序、批量勾选、行内自定义与详情。
- * 概念资金分时 / 主力资金多日图 / ETF资金流 三页共用，保证结构与宽度一致（320px）。
+ * 主力资金分时 / 主力资金多日 / ETF资金流 / 指数资金分时 四页共用，
+ * 保证结构与宽度一致（320px）；不传 `onBatch` 时隐藏批量勾选行（单标的选择用）。
  */
 export function FlowListPanel({
   title, countText, rows, selected, onToggle,
@@ -56,7 +57,7 @@ export function FlowListPanel({
   sortDir: number;
   onSort: (k: SortKey) => void;
   sortOptions?: { key: SortKey; label: string }[];
-  onBatch: (mode: BatchMode) => void;
+  onBatch?: (mode: BatchMode) => void;
   emptyTitle?: string;
   emptyHint?: string;
   showPct?: boolean;
@@ -111,18 +112,20 @@ export function FlowListPanel({
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-1 text-[11px]">
-            {BATCHES.map((b) => (
-              <button
-                key={b.key}
-                type="button"
-                onClick={() => onBatch(b.key)}
-                className="rounded border border-border px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              >
-                {b.label}
-              </button>
-            ))}
-          </div>
+          {onBatch && (
+            <div className="flex flex-wrap gap-1 text-[11px]">
+              {BATCHES.map((b) => (
+                <button
+                  key={b.key}
+                  type="button"
+                  onClick={() => onBatch(b.key)}
+                  className="rounded border border-border px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="min-h-[240px] overflow-auto border-t border-border/60" style={{ maxHeight }}>
             {loading ? (

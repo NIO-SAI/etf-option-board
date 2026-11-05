@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Eye, Loader2, Plus, RefreshCw, Search } from "lucide-react";
+import { Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
-import { Badge } from "@/components/reui/badge";
 import { EmptyState, Skeleton } from "@/components/ui/misc";
+import { FlowListPanel } from "@/components/FlowListPanel";
+import { DayTag, isLiveDay } from "@/components/DayTag";
 import { BoardFlowChart, type FlowLine } from "@/components/charts";
 import { BoardDetailDrawer } from "@/components/BoardDetailDrawer";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
 import { joinCodes, parseCodes, readHashParams, writeHashParams } from "@/lib/urlState";
-import { clsUpDown, pct as fmtPct, signedFlow } from "@/lib/format";
+import { signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** 与 stock-webui 一致的五个口径 */
@@ -345,160 +346,59 @@ export function BoardFlowPage() {
   }, [type, date, selected]);
 
   const last = health?.last;
-  const updatedAt = date ? `${date} 历史数据` : `更新于 ${last?.last_ts?.slice(11) ?? "—"}`;
+  const latestDay = last?.date ?? "";
+  const live = isLiveDay(date, latestDay);
+  const updatedAt = live
+    ? `更新于 ${last?.last_ts?.slice(11) ?? "—"}`
+    : `${date} 历史数据`;
 
   return (
     <main className="grid gap-3 p-3 xl:grid-cols-[320px_minmax(0,1fr)]">
-      {/* 左：板块列表 + 批量控制 */}
-      <Frame spacing="sm" className="self-start xl:sticky xl:top-[52px]">
-        <FramePanel dense>
-          <FrameHeader className="flex-row items-center justify-between py-1.5">
-            <FrameTitle className="text-sm">板块列表</FrameTitle>
-            <span className="text-[11px] text-muted-foreground tnum">
-              共 {rows.length} 个 · 已选 {selectedCodes.length}
-            </span>
-          </FrameHeader>
-
-          <div className="flex flex-col gap-2 px-2 pb-2">
-            <label className="relative block">
-              <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" aria-hidden />
-              <input
-                id="board-flow-search"
-                name="search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="搜索..."
-                aria-label="搜索板块"
-                className="w-full rounded-md border border-border bg-card py-1 pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              />
-            </label>
-
-            <div className="flex items-center gap-1 text-[11px]">
-              <span className="text-muted-foreground">排序</span>
-              <div className="flex items-center gap-0.5 rounded-md border border-border bg-muted/40 p-0.5">
-                {(["pct", "speed", "flow"] as SortKey[]).map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    onClick={() => {
-                      if (sortKey === k) setSortDir((d) => -d);
-                      else { setSortKey(k); setSortDir(-1); }
-                    }}
-                    aria-pressed={sortKey === k}
-                    title={k === "pct" ? "按涨跌幅排序（再点切换升/降序）"
-                      : k === "speed" ? "按涨速排序（不显示列，再点切换升/降序）"
-                        : "按主力净流入排序（再点切换升/降序）"}
-                    className={cn("rounded px-2 py-0.5 font-medium transition-colors",
-                      sortKey === k
-                        ? "bg-primary text-primary-foreground shadow-xs"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground")}
-                  >
-                    {k === "pct" ? "涨幅" : k === "speed" ? "涨速" : "资金"}{sortKey === k ? (sortDir === -1 ? "↓" : "↑") : ""}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-1 text-[11px]">
-              {([["pos10", "流入Top10"], ["neg10", "流出Top10"], ["all", "全选"], ["none", "清空"], ["invert", "反选"]] as const).map(([k, label]) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => batch(k)}
-                  className="rounded border border-border px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <div className="max-h-[calc(100vh-19rem)] min-h-[240px] overflow-auto border-t border-border/60">
-              {!rankView ? (
-                <div className="flex flex-col gap-1 p-2">
-                  {Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-6 w-full" />)}
-                </div>
-              ) : rows.length === 0 ? (
-                <EmptyState title={type === "custom" ? "还没有自定义板块" : "无匹配板块"}
-                  hint={type === "custom" ? "在其他列表点行尾的 ＋ 图标即可加入自定义" : undefined} />
-              ) : (
-                rows.map((b) => {
-                  const on = !!selected[b.code];
-                  return (
-                    <div
-                      key={b.code}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => toggle(b.code)}
-                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(b.code); } }}
-                      onMouseEnter={() => { setHoverCode(on ? b.code : null); if (!on) void ensureTemp(b); }}
-                      onMouseLeave={() => { setHoverCode(null); setTempLine(null); }}
-                      className={cn(
-                        "flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-[11px] transition-colors",
-                        "hover:bg-muted/60",
-                        on && "bg-primary/5",
-                      )}
-                      title="单击勾选 / 取消"
-                    >
-                      <input type="checkbox" checked={on} readOnly aria-label={`勾选${b.name}`}
-                        className="size-3 shrink-0 accent-primary" />
-                      <span className={cn("min-w-0 flex-1 truncate", on ? "font-medium text-foreground" : "text-foreground/80")}>
-                        {b.name}
-                        {type === "index" && !b.code.startsWith("47.") && (
-                          <span className="ml-1 text-[10px] text-muted-foreground">({b.code.split(".")[1]})</span>
-                        )}
-                      </span>
-                      <span className={cn("w-[3.6em] shrink-0 text-right text-[10px] tnum", clsUpDown(b.pct))}>
-                        {b.pct == null ? "--" : fmtPct(b.pct, 2)}
-                      </span>
-                      <span className={cn("shrink-0 whitespace-nowrap text-right text-[10px] tnum", b.flow >= 0 ? "text-up" : "text-down")}>
-                        {signedFlow(b.flow)}
-                      </span>
-                      {b.code.startsWith("BK") && (
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); setDetailCode({ code: b.code, name: b.name }); }}
-                          title="查看板块详情"
-                          aria-label={`查看${b.name}详情`}
-                          className="inline-flex size-5 shrink-0 items-center justify-center rounded border border-border bg-card text-muted-foreground transition-colors hover:border-primary hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        >
-                          <Eye className="size-3" aria-hidden />
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); void toggleCustom(b); }}
-                        disabled={!!watchBusy[b.code]}
-                        title={b.watch ? "已加入自定义，点击移除" : "加入自定义"}
-                        aria-label={b.watch ? "移除自定义" : "添加自定义"}
-                        aria-pressed={!!b.watch}
-                        className={cn(
-                          "inline-flex size-5 shrink-0 items-center justify-center rounded border transition-colors",
-                          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                          b.watch
-                            ? "border-warning/60 bg-warning/15 text-warning hover:border-destructive hover:text-destructive"
-                            : "border-border bg-card text-muted-foreground hover:border-primary hover:bg-primary/10 hover:text-primary",
-                          watchBusy[b.code] && "cursor-wait opacity-60",
-                        )}
-                      >
-                        {watchBusy[b.code]
-                          ? <Loader2 className="size-3 animate-spin" aria-hidden />
-                          : b.watch ? <Check className="size-3" aria-hidden /> : <Plus className="size-3" aria-hidden />}
-                      </button>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        </FramePanel>
-      </Frame>
+      <FlowListPanel
+        title="板块列表"
+        countText={`共 ${rows.length} 个 · 已选 ${selectedCodes.length}`}
+        rows={rows.map((b) => ({
+          code: b.code, name: b.name, flow: b.flow, pct: b.pct ?? null,
+          speed: b.speed, type: b.type, watch: watchSet.has(b.code), py: b.py,
+        }))}
+        selected={selected}
+        onToggle={toggle}
+        search={search}
+        onSearch={setSearch}
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onSort={(k) => {
+          if (k === sortKey) setSortDir((d) => -d);
+          else { setSortKey(k); setSortDir(-1); }
+        }}
+        onBatch={batch}
+        onDetail={(r) => setDetailCode({ code: r.code, name: r.name })}
+        onToggleWatch={(r) => {
+          const row = rows.find((x) => x.code === r.code);
+          if (row) void toggleCustom(row);
+        }}
+        watchBusy={watchBusy}
+        onHoverRow={(code) => {
+          if (!code) { setHoverCode(null); setTempLine(null); return; }
+          const on = !!selected[code];
+          setHoverCode(on ? code : null);
+          if (!on) {
+            const b = rows.find((r) => r.code === code);
+            if (b) void ensureTemp(b);
+          }
+        }}
+        loading={!rankView}
+        emptyTitle={type === "custom" ? "还没有自定义板块" : "无匹配板块"}
+        emptyHint={type === "custom" ? "在其他列表点行尾的 ＋ 图标即可加入自定义" : undefined}
+        maxHeight="calc(100vh - 19rem)"
+      />
 
       {/* 右：分时图 */}
       <Frame spacing="sm" className="flex min-h-0 flex-col xl:sticky xl:top-[52px] xl:h-[calc(100vh-104px)]">
         <FramePanel dense className="flex min-h-0 flex-1 flex-col">
           <FrameHeader className="flex-row flex-wrap items-center justify-between gap-2 py-1.5">
             <div className="flex items-center gap-2">
-              <FrameTitle className="text-sm">板块资金分时</FrameTitle>
+              <FrameTitle className="text-sm">主力资金分时</FrameTitle>
               <div className="flex items-center gap-0.5 rounded-md bg-muted/60 p-0.5">
                 {TYPES.map((t) => (
                   <button
@@ -513,7 +413,7 @@ export function BoardFlowPage() {
                   </button>
                 ))}
               </div>
-              {date && date !== health?.last?.date && <Badge variant="warning-light">历史</Badge>}
+              <DayTag date={date} latest={latestDay} />
             </div>
             <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
               <select

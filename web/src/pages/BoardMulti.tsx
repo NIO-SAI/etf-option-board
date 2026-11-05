@@ -5,6 +5,7 @@ import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/fr
 import { Badge } from "@/components/reui/badge";
 import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
 import { FlowListPanel, type BatchMode, type SortKey } from "@/components/FlowListPanel";
+import { DayTag } from "@/components/DayTag";
 import { BoardDetailDrawer } from "@/components/BoardDetailDrawer";
 import { BoardFlowChart, type FlowLine } from "@/components/charts";
 import { api } from "@/lib/api";
@@ -22,7 +23,7 @@ const TYPES = [
 /** 不限制曲线条数：勾选多少就画多少（用户要求） */
 const MAX_LINES = Number.MAX_SAFE_INTEGER;
 
-/** 主力资金多日图：左侧列表（搜索/排序/批量勾选）+ 右侧分钟级累计资金曲线。 */
+/** 主力资金多日：左侧列表（搜索/排序/批量勾选）+ 右侧分钟级累计资金曲线。 */
 export function BoardMultiPage() {
   const initial = useMemo(() => readHashParams(), []);
   const initCodes = parseCodes(initial.codes);
@@ -210,6 +211,8 @@ export function BoardMultiPage() {
   };
 
   const dates = intraday?.dates ?? data?.dates ?? [];
+  const rangeEnd = end || intraday?.end || data?.end || "";
+  const latestDay = health?.last?.date ?? "";
 
   return (
     <main className="grid gap-3 p-3 xl:grid-cols-[360px_minmax(0,1fr)]">
@@ -254,7 +257,8 @@ export function BoardMultiPage() {
         <FramePanel dense className="flex min-h-0 flex-1 flex-col">
           <FrameHeader className="flex-row flex-wrap items-center justify-between gap-2 py-1.5">
             <div className="flex items-center gap-2">
-              <FrameTitle className="text-sm">主力资金多日图</FrameTitle>
+              <FrameTitle className="text-sm">主力资金多日</FrameTitle>
+              <DayTag date={rangeEnd} latest={latestDay} />
               <Tabs tabs={TYPES} value={type} onChange={(k) => { setType(k); setSelected({}); setSearch(""); touched.current = false; }} />
             </div>
             <div className="flex flex-wrap items-center gap-1.5 text-[11px]">

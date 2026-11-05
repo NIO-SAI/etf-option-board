@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { Dialog, EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
+import { FlowListPanel, type SortKey } from "@/components/FlowListPanel";
+import { DayTag } from "@/components/DayTag";
 import { MoneyLinesChart } from "@/components/charts";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
@@ -19,28 +21,67 @@ const TARGETS = [
 const DIM_LABEL: Record<string, string> = {
   inst: "机构（超大单）", large: "大单", medium: "中户", retail: "散户",
 };
+/** 4 维各自的单笔金额口径（东财按单子大小拆分后的主动净买额） */
+const DIM_HINT: Record<string, string> = {
+  inst: "单笔 ≥ 100 万", large: "单笔 20 ~ 100 万",
+  medium: "单笔 4 ~ 20 万", retail: "单笔 < 4 万",
+};
 
-/** 东财资金分时（工单 07）：指数 / 行业 / 全 A 的 4 维资金曲线。 */
+type Row = { code: string; name: string; flow: number | null; pct: number | null };
+
+/**
+ * 指数资金分时（原「东财资金分时」）：指数 / 行业 / 全 A 的 4 维主动净买额曲线。
+ * 列表与顶部按钮结构对齐「主力资金分时」：左列表搜索/排序，右图例区切口径 + 日期标签。
+ */
 export function EmFlowPage() {
   const initial = useMemo(() => readHashParams(), []);
   const [kind, setKind] = useState(initial.kind === "industry" ? "industry" : "index");
   const [code, setCode] = useState(initial.code ?? "");
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("flow");
+  const [sortDir, setSortDir] = useState(-1);
   const [mode, setMode] = useState<"line" | "stack">("line");
   const [cfgOpen, setCfgOpen] = useState(false);
 
   const { data: health } = usePolling(() => api.boardHealth(), 60_000, [], { kind: "ctx", code: "board-health" });
-  const interval = kind === "industry" ? 60_000 : 30_000;
+  const interval = 30_000;
 
-  const { data: targets } = usePolling(() => api.emFlowTargets(), 3600_000, [], { kind: "ctx", code: "em-targets" });
+  const { data: targets } = usePolling(() => api.emFlowTargets(), 60_000, [], { kind: "ctx", code: "em-targets" });
   const { data: industries, refresh: refreshIndustries } = usePolling(
     () => api.emFlowIndustries(), 300_000, [], { kind: "ctx", code: "em-industries" });
 
-  // 目标缺省：指数取第一个、行业取展示列表第一个、全A 固定
+  const options: Row[] = useMemo(() => {
+    if (kind === "index") {
+      return (targets?.indices ?? []).map((i: any) => ({
+        code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null,
+      }));
+    }
+    return (industries?.display ?? []).map((i: any) => ({
+      code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null,
+    }));
+  }, [kind, targets, industries]);
+
+  // 目标缺省：指数取第一个、行业取展示列表第一个；当前选中不在本口径列表里也回落
   const effectiveCode = useMemo(() => {
-    if (code) return code;
-    if (kind === "index") return targets?.indices?.[0]?.code ?? "";
-    return industries?.display?.[0]?.code ?? "";
-  }, [code, kind, targets, industries]);
+    if (code && options.some((o) => o.code === code)) return code;
+    return options[0]?.code ?? "";
+  }, [code, options]);
+
+  const rows = useMemo(() => {
+    const kw = search.trim();
+    let list = options;
+    if (kw) list = list.filter((o) => o.name.includes(kw) || o.code.toLowerCase().includes(kw.toLowerCase()));
+    return [...list].sort((a, b) => {
+      const va = (sortKey === "pct" ? a.pct : a.flow) ?? 0;
+      const vb = (sortKey === "pct" ? b.pct : b.flow) ?? 0;
+      return (va - vb) * sortDir;
+    });
+  }, [options, search, sortKey, sortDir]);
+
+  const selected = useMemo(
+    () => (effectiveCode ? { [effectiveCode]: true } : {}),
+    [effectiveCode],
+  );
 
   const { data: series, refresh, error } = usePolling(
     () => (effectiveCode ? api.emFlowSeries(kind, effectiveCode) : Promise.resolve(null)),
@@ -52,8 +93,8 @@ export function EmFlowPage() {
   useEffect(() => onGlobalRefresh(() => { void refresh(); }), [refresh]);
 
   useEffect(() => {
-    writeHashParams({ kind, code: code || undefined });
-  }, [kind, code]);
+    writeHashParams({ kind, code: effectiveCode || undefined });
+  }, [kind, effectiveCode]);
 
   const dimSeries = useMemo(() => {
     if (!series?.axis?.length) return [];
@@ -62,60 +103,75 @@ export function EmFlowPage() {
     }));
   }, [series]);
 
-  const nameOf = useMemo(() => {
-    if (kind === "index") return targets?.indices?.find((i: any) => i.code === effectiveCode)?.name ?? effectiveCode;
-    return industries?.display?.find((i: any) => i.code === effectiveCode)?.name ?? effectiveCode;
-  }, [kind, effectiveCode, targets, industries]);
+  /** 4 维当前「主动净买额」：取分时最后一个有效点 */
+  const dimCards = useMemo(() => {
+    const lastOf = (key: string) => {
+      const arr = (series?.dims as any)?.[key] as (number | null)[] | undefined;
+      const vals = (arr ?? []).filter((v) => v != null);
+      return vals.length ? (vals[vals.length - 1] as number) : null;
+    };
+    const colors: Record<string, string> = {
+      inst: "#ef4444", large: "#f59e0b", medium: "#8b5cf6", retail: "#22c55e",
+    };
+    return Object.keys(DIM_LABEL).map((key) => ({
+      key, label: DIM_LABEL[key], hint: DIM_HINT[key] ?? "",
+      value: lastOf(key), color: colors[key] ?? "#a1a1aa",
+    }));
+  }, [series]);
 
-  const options: { code: string; name: string }[] =
-    kind === "index" ? (targets?.indices ?? []) : (industries?.display ?? []);
+  const nameOf = useMemo(
+    () => options.find((o) => o.code === effectiveCode)?.name ?? effectiveCode,
+    [options, effectiveCode],
+  );
+
+  const latestDay = health?.last?.date ?? "";
 
   return (
-    <main className="grid gap-3 p-3 xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
-      <Frame spacing="sm" className="self-start">
-        <FramePanel dense>
-          <FrameHeader className="flex-row items-center justify-between">
-            <FrameTitle className="text-sm">东财资金分时</FrameTitle>
-            {health?.trading ? <Badge variant="success-light">交易中</Badge> : <Badge variant="outline">休市</Badge>}
-          </FrameHeader>
-          <div className="flex flex-col gap-2 px-3 pb-3 text-[11px] text-muted-foreground">
-            <Tabs tabs={TARGETS} value={kind} onChange={(k) => { setKind(k); setCode(""); }} />
-            <div className="flex flex-col gap-1">
-              <span>标的（{options.length}）</span>
-              <div
-                role="listbox"
-                aria-label="4 维资金标的"
-                className="max-h-[calc(100vh-24rem)] min-h-[180px] overflow-auto rounded-md border border-border/60"
-              >
-                {options.length === 0 ? (
-                  <div className="px-2 py-3 text-center text-[11px] text-muted-foreground">暂无标的</div>
-                ) : options.map((o) => {
-                  const active = o.code === effectiveCode;
-                  return (
-                    <button
-                      key={o.code}
-                      type="button"
-                      role="option"
-                      aria-selected={active}
-                      onClick={() => setCode(o.code)}
-                      className={cn(
-                        "flex w-full items-center justify-between gap-2 border-b border-border/30 px-2 py-1 text-left text-[11px] transition-colors last:border-b-0",
-                        active ? "bg-primary/10 font-medium text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                      )}
-                    >
-                      <span className="truncate">{o.name}</span>
-                      <span className="shrink-0 text-[10px] opacity-60">{o.code.startsWith("BK") ? "行业" : o.code.startsWith("47.") ? "全A" : "指数"}</span>
-                    </button>
-                  );
-                })}
-              </div>
+    <main className="grid gap-3 p-3 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <FlowListPanel
+        title="标的列表"
+        countText={`共 ${rows.length} 个 · 已选 ${rows.some((r) => r.code === effectiveCode) ? 1 : 0}`}
+        rows={rows.map((r) => ({
+          code: r.code, name: r.name, flow: r.flow ?? 0, pct: r.pct,
+          type: r.code.startsWith("BK") ? "industry" : "index",
+        }))}
+        selected={selected}
+        onToggle={(c) => setCode(c)}
+        search={search}
+        onSearch={setSearch}
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onSort={(k) => {
+          if (k === sortKey) setSortDir((d) => -d);
+          else { setSortKey(k); setSortDir(-1); }
+        }}
+        sortOptions={[{ key: "flow", label: "资金" }, { key: "pct", label: "涨幅" }]}
+        loading={kind === "index" ? !targets : !industries}
+        emptyTitle={kind === "index" ? "暂无指数数据" : "暂无行业数据"}
+        emptyHint={kind === "industry" ? "稍后重试或检查采集状态" : undefined}
+        maxHeight="calc(100vh - 15rem)"
+      />
+
+      <Frame spacing="sm" className="flex min-h-0 flex-col xl:sticky xl:top-[52px] xl:h-[calc(100vh-104px)]">
+        <FramePanel dense className="flex min-h-0 flex-1 flex-col">
+          <FrameHeader className="flex-row flex-wrap items-center justify-between gap-2 py-1.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <FrameTitle className="text-sm">{nameOf || "指数资金分时"}</FrameTitle>
+              <Tabs tabs={TARGETS} value={kind} onChange={(k) => { setKind(k); setCode(""); setSearch(""); }} />
+              <DayTag date={series?.date} latest={latestDay} />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              <Tabs
+                tabs={[{ key: "line", label: "分线" }, { key: "stack", label: "堆叠" }]}
+                value={mode}
+                onChange={(k) => setMode(k as "line" | "stack")}
+              />
+              <span className="tnum text-muted-foreground">{series?.date ?? "—"}</span>
               <button
                 type="button"
                 onClick={() => setCfgOpen(true)}
                 disabled={kind !== "industry"}
-                className={cn("inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-1 transition-colors",
+                className={cn("inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 transition-colors",
                   kind === "industry" ? "text-foreground hover:bg-muted" : "cursor-not-allowed opacity-50")}
                 title="行业展示配置（自定义 Top40）"
               >
@@ -130,50 +186,51 @@ export function EmFlowPage() {
               >
                 <RefreshCw className="size-3" aria-hidden />
               </button>
-              <span className="tnum">{series?.date ?? ""}</span>
+              {health?.trading ? <Badge variant="success-light">交易中</Badge> : <Badge variant="outline">休市</Badge>}
             </div>
-            <p className="leading-relaxed">
-              横轴为连续竞价时段，纵轴为当日累计净流入。指数/全 A 每 30 秒采集，行业每 60 秒采集；
-              行业默认取 |主力净流入| 前 {industries?.default_limit ?? 40} 个。
-            </p>
-          </div>
-        </FramePanel>
-      </Frame>
-
-      <Frame spacing="sm">
-        <FramePanel dense>
-          <FrameHeader className="flex-row items-center justify-between">
-            <div className="flex min-w-0 items-baseline gap-2">
-              <FrameTitle className="text-sm">{nameOf}</FrameTitle>
-              <span className="truncate text-[10px] text-muted-foreground">4 维资金（机构 / 大单 / 中户 / 散户）</span>
-            </div>
-            <Tabs
-              tabs={[{ key: "line", label: "分线" }, { key: "stack", label: "堆叠" }]}
-              value={mode}
-              onChange={(k) => setMode(k as "line" | "stack")}
-            />
           </FrameHeader>
-          <div className="px-2 pb-2">
+
+          <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
             {error ? (
-              <EmptyState title="接口失败" hint={String(error)} />
+              <EmptyState title="接口失败" hint={String(error)} className="flex-1" />
             ) : !effectiveCode ? (
-              <EmptyState title="没有可用的标的" hint="行业列表为空，稍后重试或检查采集状态" />
+              <EmptyState title="没有可用的标的" hint="行业列表为空，稍后重试或检查采集状态" className="flex-1" />
             ) : !series ? (
-              <Skeleton className="h-[380px] w-full" />
-            ) : !dimSeries.length ? (
-              <EmptyState title="暂无 4 维数据" hint={series.error ?? "该标的当日还没有累积到分时点"} />
+              <Skeleton className="m-1 h-[380px]" />
             ) : (
               <>
-                <MoneyLinesChart id={`em-${kind}-${effectiveCode}`} axis={series.axis}
-                  series={dimSeries as any} height={420} maxLines={5} mode={mode} />
-                <div className="flex flex-wrap gap-x-3 gap-y-1 px-1 pt-1 text-[10px] text-muted-foreground">
-                  {dimSeries.map((s: any) => (
-                    <span key={s.code} className="inline-flex items-center gap-1">
-                      <span className="inline-block size-1.5 rounded-full bg-primary/70" />
-                      {s.name}
-                      <span className="tnum text-foreground/80">{signedFlow(s.values[s.values.length - 1])}</span>
-                    </span>
-                  ))}
+                {!!dimSeries.length && (
+                  <div className="grid grid-cols-2 gap-1.5 px-0.5 pb-2 sm:grid-cols-4">
+                    {dimCards.map((c) => (
+                      <div
+                        key={c.key}
+                        className="rounded-lg border border-border/60 bg-background/50 px-2 py-1.5"
+                        style={{ borderLeft: `3px solid ${c.color}` }}
+                      >
+                        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                          <span className="inline-block size-1.5 rounded-full" style={{ background: c.color }} />
+                          {c.label}主动净买额
+                        </div>
+                        <div className={cn("mt-0.5 text-sm font-semibold tnum",
+                          (c.value ?? 0) >= 0 ? "text-up" : "text-down")}>
+                          {c.value == null ? "—" : signedFlow(c.value)}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">{c.hint}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!dimSeries.length ? (
+                  <EmptyState title="暂无 4 维数据" hint={series.error ?? "该标的当日还没有累积到分时点"} className="flex-1" />
+                ) : (
+                  <div className="min-h-0 flex-1">
+                    <MoneyLinesChart id={`em-${kind}-${effectiveCode}`} axis={series.axis}
+                      series={dimSeries as any} height="100%" maxLines={5} mode={mode} />
+                  </div>
+                )}
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-2 px-1 text-[10px] text-muted-foreground">
+                  <span>纵轴为当日累计主动净买额（亿元）· 机构 / 大单 / 中户 / 散户 按单笔金额划分</span>
+                  <span>指数/全 A 每 30 秒采集，行业每 60 秒采集 · 默认取 |主力净流入| 前 {industries?.default_limit ?? 40} 个行业</span>
                 </div>
               </>
             )}
@@ -251,7 +308,7 @@ function EmIndustryConfig({
   };
 
   return (
-    <Dialog open={open} onClose={onClose} title="行业展示配置（4 维资金）">
+    <Dialog open={open} onClose={onClose} title="行业展示配置（4 维主动净买额）">
       <div className="flex flex-col gap-3 text-xs">
         <div className="flex flex-wrap items-center gap-2">
           <select
