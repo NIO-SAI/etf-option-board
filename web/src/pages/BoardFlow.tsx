@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
 import { joinCodes, parseCodes, readHashParams, writeHashParams } from "@/lib/urlState";
-import { signedFlow } from "@/lib/format";
+import { dateWithWeek, signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** 与 stock-webui 一致的五个口径 */
@@ -83,6 +83,10 @@ export function BoardFlowPage() {
   );
   const { data: watchView, refresh: refreshWatch } = usePolling(
     () => api.boardWatch(), 300_000, [], { kind: "ctx", code: "board-watch" });
+  // 财联社「热门」：热门行业/概念 + 盘面异动，后端模糊匹配到本地板块
+  const { data: hotView } = usePolling(
+    () => api.boardClsHot(date || undefined), 300_000, [date],
+    { kind: "ctx", code: `cls-hot:${date || "latest"}` });
   // 自选的本地真实来源：点击 + 立即翻转（乐观更新），服务端返回后以 watchView 对齐
   const [watchItems, setWatchItems] = useState<{ code: string; name: string }[]>([]);
   const [watchBusy, setWatchBusy] = useState<Record<string, boolean>>({});
@@ -122,12 +126,30 @@ export function BoardFlowPage() {
     [indexView, watchSet],
   );
 
+  /** 「热门」：财联社匹配结果；拉不到时回退到 |主力净流入| 前 100 */
+  const hotRows: Bar[] = useMemo(() => {
+    const byCode = new Map(allBoards.map((b) => [b.code, b] as const));
+    const items = (hotView?.items ?? []).map((r: any) => {
+      const base = byCode.get(r.code);
+      return {
+        code: r.code,
+        name: r.name || base?.name || r.code,
+        type: r.type || base?.type || "concept",
+        flow: r.flow ?? base?.flow ?? 0,
+        pct: r.pct ?? base?.pct ?? null,
+        speed: base?.speed ?? 0,
+        watch: watchSet.has(r.code),
+        py: base?.py,
+      } as Bar;
+    });
+    if (items.length) return items;
+    return [...allBoards].sort((a, b) => Math.abs(b.flow) - Math.abs(a.flow)).slice(0, 100);
+  }, [hotView, allBoards, watchSet]);
+
   /** 当前口径的原始列表（未搜索、未排序之外的过滤） */
   const baseRows: Bar[] = useMemo(() => {
     if (type === "index") return indexRows;
-    if (type === "hot") {
-      return [...allBoards].sort((a, b) => Math.abs(b.flow) - Math.abs(a.flow)).slice(0, 100);
-    }
+    if (type === "hot") return hotRows;
     if (type === "custom") {
       const byCode = new Map([...allBoards, ...indexRows].map((b) => [b.code, b] as const));
       return watchItems
@@ -135,7 +157,7 @@ export function BoardFlowPage() {
         .map((b: any) => ({ ...b, watch: true }));
     }
     return allBoards.filter((b) => b.type === type);
-  }, [type, allBoards, indexRows, watchItems]);
+  }, [type, allBoards, indexRows, watchItems, hotRows]);
 
   /** 搜索 + 排序后的可见列表 */
   const rows: Bar[] = useMemo(() => {
@@ -409,7 +431,7 @@ export function BoardFlowPage() {
                 onChange={(e) => setDate(e.target.value)}
                 className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
-                {dates.map((d) => <option key={d} value={d}>{d}</option>)}
+                {dates.map((d) => <option key={d} value={d}>{dateWithWeek(d)}</option>)}
               </select>
               <button
                 type="button"

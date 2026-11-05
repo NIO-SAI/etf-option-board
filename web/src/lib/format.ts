@@ -12,6 +12,19 @@ export const gamma = (v: any): string => {
   return n.toLocaleString("zh-CN", { minimumFractionDigits: d, maximumFractionDigits: d });
 };
 
+const WEEK_CN = ["日", "一", "二", "三", "四", "五", "六"];
+
+/** 日期加星期：`2026-11-05` → `2026-11-05（四）`，用于下拉菜单。非 YYYY-MM-DD 原样返回。 */
+export const dateWithWeek = (d?: string | null): string => {
+  const s = String(d ?? "");
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return s;
+  // 用 UTC 构造，避免本地时区把日期推前/推后一天导致星期错位
+  const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (!isFinite(t)) return s;
+  return `${s}（${WEEK_CN[new Date(t).getUTCDay()]}）`;
+};
+
 export const pct = (v: any, d = 2): string =>
   v === null || v === undefined || isNaN(Number(v))
     ? "—"

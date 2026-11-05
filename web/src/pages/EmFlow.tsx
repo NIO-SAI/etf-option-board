@@ -16,11 +16,16 @@ import { cn } from "@/lib/utils";
 
 const TARGETS = [
   { key: "concept", label: "概念" },
-  { key: "index", label: "指数" },
   { key: "industry", label: "行业" },
+  { key: "index", label: "指数" },
+  { key: "hot", label: "热门" },
 ];
 const DIM_LABEL: Record<string, string> = {
   inst: "机构（超大单）", large: "大单", medium: "中户", retail: "散户",
+};
+/** 图表右侧标签用的短名（全名太长，留白只有 210px） */
+const DIM_SHORT: Record<string, string> = {
+  inst: "机构", large: "大单", medium: "中户", retail: "散户",
 };
 /** 4 维各自的单笔金额口径（东财按单子大小拆分后的主动净买额） */
 const DIM_HINT: Record<string, string> = {
@@ -28,17 +33,24 @@ const DIM_HINT: Record<string, string> = {
   medium: "单笔 4 ~ 20 万", retail: "单笔 < 4 万",
 };
 
-type Row = { code: string; name: string; flow: number | null; pct: number | null };
+type Row = {
+  code: string; name: string; flow: number | null; pct: number | null;
+  /** 该行所属口径（热门里概念/行业混排，取分时要用行自身的 kind） */
+  kind?: "concept" | "industry" | "index";
+};
+
+type Kind = "concept" | "industry" | "index" | "hot";
 
 /**
- * 四维资金（原「指数资金分时」）：概念 / 指数 / 行业的 4 维主动净买额曲线。
+ * 四维资金（原「指数资金分时」）：概念 / 行业 / 指数 / 热门的 4 维主动净买额曲线。
  * 列表与顶部按钮结构对齐「主力资金分时」：左列表搜索/排序（单选、无勾选框），
  * 右侧图为该目标的机构 / 大单 / 中户 / 散户。
  */
 export function EmFlowPage() {
   const initial = useMemo(() => readHashParams(), []);
-  const [kind, setKind] = useState(
-    initial.kind === "industry" ? "industry" : initial.kind === "concept" ? "concept" : "index");
+  const initKind = initial.kind;
+  const [kind, setKind] = useState<Kind>(
+    initKind === "industry" || initKind === "concept" || initKind === "hot" ? initKind : "index");
   const [code, setCode] = useState(initial.code ?? "");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("flow");
@@ -54,18 +66,40 @@ export function EmFlowPage() {
     () => api.emFlowIndustries(), 300_000, [], { kind: "ctx", code: "em-industries" });
   const { data: concepts } = usePolling(
     () => api.emFlowConcepts(), 300_000, [], { kind: "ctx", code: "em-concepts" });
+  // 财联社「热门板块」（热门行业/概念 + 异动）→ 后端模糊匹配到本地板块
+  const { data: hotView } = usePolling(
+    () => api.boardClsHot(), 300_000, [], { kind: "ctx", code: "cls-hot" });
+
+  /** CLS 拉不到时的回退：概念 + 行业按涨幅取前 40（与「热门」口径一致） */
+  const fallbackHot: Row[] = useMemo(() => {
+    const pick = (arr: any[], k: "concept" | "industry"): Row[] =>
+      (arr ?? []).map((i: any) => ({
+        code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null, kind: k,
+      }));
+    return [...pick(concepts?.display, "concept"), ...pick(industries?.display, "industry")]
+      .sort((a, b) => (b.pct ?? -999) - (a.pct ?? -999))
+      .slice(0, 40);
+  }, [concepts, industries]);
 
   const options: Row[] = useMemo(() => {
     if (kind === "index") {
       return (targets?.indices ?? []).map((i: any) => ({
-        code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null,
+        code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null, kind: "index" as const,
       }));
+    }
+    if (kind === "hot") {
+      const items = (hotView?.items ?? []).map((i: any) => ({
+        code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null,
+        kind: (i.type === "industry" ? "industry" : "concept") as "concept" | "industry",
+      }));
+      return items.length ? items : fallbackHot;
     }
     const src = kind === "concept" ? concepts?.display : industries?.display;
     return (src ?? []).map((i: any) => ({
       code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null,
+      kind: kind as "concept" | "industry",
     }));
-  }, [kind, targets, industries, concepts]);
+  }, [kind, targets, industries, concepts, hotView, fallbackHot]);
 
   // 目标缺省：指数取第一个、行业取展示列表第一个；当前选中不在本口径列表里也回落
   const effectiveCode = useMemo(() => {
@@ -89,11 +123,17 @@ export function EmFlowPage() {
     [effectiveCode],
   );
 
+  // 热门 tab 混排概念/行业：分时要按行自身口径查（em-flow/series 一次只认一个 target_type）
+  const seriesKind = useMemo(() => {
+    if (kind !== "hot") return kind;
+    return options.find((o) => o.code === effectiveCode)?.kind ?? "concept";
+  }, [kind, options, effectiveCode]);
+
   const { data: series, refresh, error } = usePolling(
-    () => (effectiveCode ? api.emFlowSeries(kind, effectiveCode) : Promise.resolve(null)),
+    () => (effectiveCode ? api.emFlowSeries(seriesKind, effectiveCode) : Promise.resolve(null)),
     interval,
-    [kind, effectiveCode, interval],
-    { kind: "emseries", code: `${kind}:${effectiveCode}` },
+    [seriesKind, effectiveCode, interval],
+    { kind: "emseries", code: `${seriesKind}:${effectiveCode}` },
   );
 
   useEffect(() => onGlobalRefresh(() => { void refresh(); }), [refresh]);
@@ -105,7 +145,7 @@ export function EmFlowPage() {
   const dimSeries = useMemo(() => {
     if (!series?.axis?.length) return [];
     return Object.entries(series.dims ?? {}).map(([k, v]) => ({
-      code: k, name: DIM_LABEL[k] ?? k, values: v as (number | null)[],
+      code: k, name: DIM_SHORT[k] ?? k, values: v as (number | null)[],
     }));
   }, [series]);
 
@@ -153,9 +193,17 @@ export function EmFlowPage() {
         }}
         sortOptions={[{ key: "flow", label: "资金" }, { key: "pct", label: "涨幅" }]}
         showCheckbox={false}
-        loading={kind === "index" ? !targets : kind === "concept" ? !concepts : !industries}
-        emptyTitle={kind === "index" ? "暂无指数数据" : kind === "concept" ? "暂无概念数据" : "暂无行业数据"}
-        emptyHint={kind === "index" ? undefined : "稍后重试或检查采集状态"}
+        loading={kind === "index" ? !targets
+          : kind === "concept" ? !concepts
+            : kind === "hot" ? !hotView && !fallbackHot.length
+              : !industries}
+        emptyTitle={kind === "index" ? "暂无指数数据"
+          : kind === "concept" ? "暂无概念数据"
+            : kind === "hot" ? "财联社热门板块暂不可用"
+              : "暂无行业数据"}
+        emptyHint={kind === "index" ? undefined
+          : kind === "hot" ? (hotView?.error ?? "稍后重试（财联社接口 5 分钟缓存）")
+            : "稍后重试或检查采集状态"}
         maxHeight="calc(100vh - 15rem)"
       />
 
@@ -164,7 +212,7 @@ export function EmFlowPage() {
           <FrameHeader className="flex-row flex-wrap items-center justify-between gap-2 py-1.5">
             <div className="flex min-w-0 items-center gap-2">
               <FrameTitle className="text-sm">{nameOf || "四维资金"}</FrameTitle>
-              <Tabs tabs={TARGETS} value={kind} onChange={(k) => { setKind(k); setCode(""); setSearch(""); }} />
+              <Tabs tabs={TARGETS} value={kind} onChange={(k) => { setKind(k as Kind); setCode(""); setSearch(""); }} />
               <DayTag date={series?.date} latest={latestDay} />
             </div>
             <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -201,7 +249,9 @@ export function EmFlowPage() {
             {error ? (
               <EmptyState title="接口失败" hint={String(error)} className="flex-1" />
             ) : !effectiveCode ? (
-              <EmptyState title="没有可用的标的" hint="行业列表为空，稍后重试或检查采集状态" className="flex-1" />
+              <EmptyState title="没有可用的标的"
+                hint={kind === "hot" ? "财联社热门板块为空，且没有可回退的板块" : "行业列表为空，稍后重试或检查采集状态"}
+                className="flex-1" />
             ) : !series ? (
               <Skeleton className="m-1 h-[380px]" />
             ) : (
@@ -231,13 +281,17 @@ export function EmFlowPage() {
                   <EmptyState title="暂无 4 维数据" hint={series.error ?? "该标的当日还没有累积到分时点"} className="flex-1" />
                 ) : (
                   <div className="min-h-0 flex-1">
-                    <MoneyLinesChart id={`em-${kind}-${effectiveCode}`} axis={series.axis}
-                      series={dimSeries as any} height="100%" maxLines={5} mode={mode} />
+                    <MoneyLinesChart id={`em-${seriesKind}-${effectiveCode}`} axis={series.axis}
+                      series={dimSeries as any} height="100%" maxLines={5} mode={mode} endLabels />
                   </div>
                 )}
                 <div className="mt-1 flex flex-wrap items-center justify-between gap-2 px-1 text-[10px] text-muted-foreground">
                   <span>纵轴为当日累计主动净买额（亿元）· 机构 / 大单 / 中户 / 散户 按单笔金额划分</span>
-                  <span>指数每 30 秒采集，行业 / 概念每 60 秒 · 行业、概念默认各取 |主力净流入| 前 {industries?.default_limit ?? 40} 个</span>
+                  <span>
+                    {kind === "hot"
+                      ? "热门 = 财联社热门行业/概念板块 + 盘面异动，模糊匹配到本地板块（5 分钟缓存）；拉不到时回退涨幅前 40"
+                      : `指数每 30 秒采集，行业 / 概念每 60 秒 · 行业、概念默认各取 |主力净流入| 前 ${industries?.default_limit ?? 40} 个`}
+                  </span>
                 </div>
               </>
             )}

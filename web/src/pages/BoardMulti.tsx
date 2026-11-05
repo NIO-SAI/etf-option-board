@@ -12,7 +12,7 @@ import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
 import { joinCodes, parseCodes, readHashParams, writeHashParams } from "@/lib/urlState";
-import { signedFlow } from "@/lib/format";
+import { dateWithWeek, signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const TYPES = [
@@ -268,7 +268,7 @@ export function BoardMultiPage() {
                 className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground"
               >
                 <option value="">默认起</option>
-                {(data?.available_dates ?? []).map((d: string) => <option key={d} value={d}>{d}</option>)}
+                {(data?.available_dates ?? []).map((d: string) => <option key={d} value={d}>{dateWithWeek(d)}</option>)}
               </select>
               <span className="text-muted-foreground">至</span>
               <select
@@ -277,7 +277,7 @@ export function BoardMultiPage() {
                 className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground"
               >
                 <option value="">默认止</option>
-                {(data?.available_dates ?? []).map((d: string) => <option key={d} value={d}>{d}</option>)}
+                {(data?.available_dates ?? []).map((d: string) => <option key={d} value={d}>{dateWithWeek(d)}</option>)}
               </select>
               <span className="flex items-center gap-0.5 rounded-md border border-border bg-muted/40 p-0.5">
                 {[3, 5, 8].map((n) => (

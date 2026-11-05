@@ -66,6 +66,9 @@ export const api = {
   boardSeries: (codes: string, date?: string, type = "concept") =>
     get(`/board/series?codes=${encodeURIComponent(codes)}&type=${type}${date ? `&date=${date}` : ""}`),
   boardDates: (limit = 60) => get(`/board/dates?limit=${limit}`),
+  /** 财联社「热门板块」：热门行业/概念 + 盘面异动，模糊匹配到本地板块 */
+  boardClsHot: (date?: string) =>
+    get(`/board/cls-hot${date ? `?date=${date}` : ""}`),
   boardDetail: (code: string, date?: string) =>
     get(`/board/detail?code=${encodeURIComponent(code)}${date ? `&date=${date}` : ""}`),
   boardMulti: (start?: string, end?: string, type = "concept") =>

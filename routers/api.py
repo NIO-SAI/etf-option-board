@@ -13,7 +13,8 @@ import logging
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
-from services import (alerts, board_collector as bcol, boardflow as bf, decision,
+from services import (alerts, board_collector as bcol, boardflow as bf, cls_hot,
+                      decision,
                       pinyin as pinyin_svc,
                       deploy as deploy_svc, em, index_levels, kronos, llm,
                       market_service as ms, monitor, option_playbook as playbook,
@@ -675,6 +676,37 @@ async def board_rank(type: str = Query("concept",
                         if want_watch and not watch_codes
                         else "暂无采集数据（交易时段每 30 秒采集一次）")
     return out
+
+
+@router.get("/board/cls-hot")
+async def board_cls_hot(date: str | None = Query(None)):
+    """财联社「热门板块」：热门行业/概念板块 + 盘面异动 → 模糊匹配本地板块。
+
+    只做名称匹配，不写库；拉不到数据时 `items=[]` + `error`，前端回退到按资金排序。
+    """
+    if not date:
+        try:
+            dates = await asyncio.to_thread(bf.available_dates, 1)
+        except Exception:  # noqa: BLE001
+            dates = []
+        date = dates[0] if dates else dt.date.today().isoformat()
+    try:
+        rows = await asyncio.to_thread(bf.read_rank, date)
+    except Exception as exc:  # noqa: BLE001
+        return {"date": date, "items": [], "error": f"板块库读取失败: {exc}"}
+
+    boards = [{"code": r["code"], "name": r["name"], "kind": r.get("type"),
+               "flow": r.get("flow"), "pct": r.get("pct")}
+              for r in rows if str(r.get("code", "")).startswith("BK")]
+    res = await cls_hot.hot_boards(boards)
+    items = []
+    for it in res.get("items") or []:
+        items.append({"code": it["code"], "name": it["name"], "type": it.get("kind"),
+                      "flow": it.get("flow"), "pct": it.get("pct"),
+                      "cls_name": it.get("cls_name"), "source": it.get("source")})
+    return {"date": date, "items": items,
+            "error": res.get("error"),
+            "updated": dt.datetime.fromtimestamp(res.get("at") or 0).strftime("%H:%M:%S")}
 
 
 @router.get("/board/watch")

@@ -3,6 +3,7 @@ import { Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { alignToAxis, minuteOf, sameDayAs, trimSession } from "@/lib/series";
 import { signedFlow } from "@/lib/format";
+import { FlowEndLabels, type EndLabelItem } from "@/components/charts/endLabels";
 import { cn } from "@/lib/utils";
 
 const AXIS = "#71717a";
@@ -676,8 +677,10 @@ export function Sparkline({ data, up, height = 24, width = 54 }: { data: number[
 }
 
 /** 板块资金多线图：统一时间轴、前值填充后的累计净流入（元 → 亿/万显示）。 */
+const MONEY_COLORS = ["#ef4444", "#f59e0b", "#a855f7", "#3b82f6", "#14b8a6", "#ec4899", "#84cc16", "#f97316"];
+
 export function MoneyLinesChart({
-  id, axis, series, height = 320, maxLines = 8, mode = "line", vLines, showEndLabel = false,
+  id, axis, series, height = 320, maxLines = 8, mode = "line", vLines, endLabels = false,
 }: {
   id: string;
   axis: string[];
@@ -688,15 +691,15 @@ export function MoneyLinesChart({
   mode?: "line" | "stack";
   /** 在这些 x 轴刻度上画竖向虚线（多日图用来分隔交易日） */
   vLines?: string[];
-  /** 线末显示「名称 + 最新值」标签（多日图用，参考 stock-webui 右侧示例） */
-  showEndLabel?: boolean;
+  /** 右侧「虚线 + 名称/值」标签（四维资金用） */
+  endLabels?: boolean;
 }) {
-  const colors = ["#ef4444", "#f59e0b", "#a855f7", "#3b82f6", "#14b8a6", "#ec4899", "#84cc16", "#f97316"];
   const shown = (series ?? []).slice(0, maxLines);
+  const [chart, setChart] = useState<any>(null);
   const option = useMemo(() => ({
     animation: false,
-    color: colors,
-    grid: { left: 54, right: showEndLabel ? 220 : 12, top: 10, bottom: 26 },
+    color: MONEY_COLORS,
+    grid: { left: 54, right: endLabels ? LABEL_GUTTER : 12, top: 10, bottom: 22 },
     tooltip: {
       trigger: "axis",
       axisPointer: { type: "cross" },
@@ -745,23 +748,29 @@ export function MoneyLinesChart({
         ? { stack: "total", areaStyle: { opacity: 0.35 }, lineStyle: { width: 1 } }
         : { lineStyle: { width: s.watch ? 2.4 : 1.4 } }),
       data: s.values,
-      ...(showEndLabel ? {
-        endLabel: {
-          show: true,
-          distance: 6,
-          fontSize: 10,
-          fontWeight: "bold" as const,
-          color: "#a1a1aa",
-          formatter: (pp: any) => {
-            const arr = pp.value as any;
-            const v = Array.isArray(arr) ? arr[1] : arr;
-            return `${s.name} ${signedFlow(v)}`;
-          },
-        },
-        labelLayout: { moveOverlap: "shiftY" as const },
-      } : {}),
     })),
-  }), [axis, shown, mode, vLines, showEndLabel]);
+  }), [axis, shown, mode, vLines, endLabels]);
+
+  const labels = useMemo<EndLabelItem[]>(() => {
+    if (!endLabels) return [];
+    const out: EndLabelItem[] = [];
+    shown.forEach((s, i) => {
+      let idx = -1;
+      for (let k = s.values.length - 1; k >= 0; k--) {
+        if (s.values[k] != null) { idx = k; break; }
+      }
+      if (idx < 0) return;
+      const v = s.values[idx] as number;
+      out.push({
+        id: s.code,
+        text: `${s.name} ${signedFlow(v)}`,
+        color: MONEY_COLORS[i % MONEY_COLORS.length],
+        coord: [idx, v],
+        weight: Math.abs(v),
+      });
+    });
+    return out;
+  }, [shown, endLabels]);
 
   // 参考线：半小时竖虚线（单日）/ 日分隔线（多日）+ y=0 横线
   const withGuides = (opt: any) => {
@@ -778,7 +787,17 @@ export function MoneyLinesChart({
   };
 
   if (!axis.length) return null;
-  return <ReactECharts key={id} option={withGuides(option)} notMerge style={{ height }} />;
+  const labelVersion = `${axis.length}:${shown.map((x) => x.code).join(",")}`;
+  return (
+    <div className="relative" style={{ height }}>
+      <ReactECharts key={id} option={withGuides(option)} notMerge style={{ height: "100%" }}
+        onChartReady={setChart} />
+      {endLabels && (
+        <FlowEndLabels chart={chart} items={labels} version={labelVersion}
+          gridTop={10} gridRight={LABEL_GUTTER} gridBottom={22} />
+      )}
+    </div>
+  );
 }
 
 /** 板块资金详情：累计净流入折线 + 每分钟增量柱（同一时间轴，单位元）。 */
@@ -898,6 +917,28 @@ export type FlowLine = {
   checked?: boolean;
 };
 
+/** 右侧标签区的固定留白（px）：虚线 + 文字都画在这块空白里 */
+const LABEL_GUTTER = 210;
+
+/** 多线叠加图的统一时间轴（资金流行情的 HH:MM）。 */
+function flowTimes(lines: FlowLine[], temp?: FlowLine | null): string[] {
+  const set = new Set<string>();
+  lines.forEach((l) => l.points.forEach(([t]) => set.add(t)));
+  if (temp) temp.points.forEach(([t]) => set.add(t));
+  return [...set].sort();
+}
+
+/** 累计资金（元）→ 亿元（2 位小数）并按时间轴补点。 */
+function flowValues(pts: [string, number][], times: string[]): (number | null)[] {
+  const map = new Map(pts);
+  let last: number | null = null;
+  return times.map((t) => {
+    const v = map.get(t);
+    if (v !== undefined) last = v;
+    return last == null ? null : Math.round((last / 1e8) * 100) / 100;
+  });
+}
+
 /** 板块资金分时：多条线叠加，线末标签显示「名称 + 资金 + 涨跌幅」，悬停时其余线变淡。 */
 export function BoardFlowChart({
   id, lines, hoverCode, temp, height = 420, onHoverCode, vLines,
@@ -912,55 +953,71 @@ export function BoardFlowChart({
   /** 多日图：在这些刻度画竖向虚线做日分隔 */
   vLines?: string[];
 }) {
-  const option = useMemo(() => {
-    const timeSet = new Set<string>();
-    lines.forEach((l) => l.points.forEach(([t]) => timeSet.add(t)));
-    if (temp) temp.points.forEach(([t]) => timeSet.add(t));
-    const times = [...timeSet].sort();
+  const [chart, setChart] = useState<any>(null);
+  const times = useMemo(() => flowTimes(lines, temp), [lines, temp]);
 
-    const toValues = (pts: [string, number][]) => {
-      const map = new Map(pts);
-      let last: number | null = null;
-      return times.map((t) => {
-        const v = map.get(t);
-        if (v !== undefined) last = v;
-        return last == null ? null : Math.round((last / 1e8) * 100) / 100;
+  // 右侧标签：虚线把线末连到标签，标签上下避让（不再整批隐藏）
+  const labels = useMemo<EndLabelItem[]>(() => {
+    const out: EndLabelItem[] = [];
+    lines.forEach((l, i) => {
+      const vals = flowValues(l.points, times);
+      let idx = -1;
+      for (let k = vals.length - 1; k >= 0; k--) {
+        if (vals[k] != null) { idx = k; break; }
+      }
+      if (idx < 0) return;
+      const last = l.points.length ? l.points[l.points.length - 1][1] : null;
+      const pctStr = typeof l.pct === "number" ? `(${l.pct >= 0 ? "+" : ""}${l.pct.toFixed(2)}%)` : "";
+      out.push({
+        id: l.code,
+        text: `${l.name} ${last == null ? "—" : signedFlow(last)}${pctStr}`,
+        color: FLOW_COLORS[i % FLOW_COLORS.length],
+        coord: [idx, vals[idx] as number],
+        weight: Math.abs(vals[idx] as number),
+        active: hoverCode === l.code,
       });
-    };
+    });
+    if (temp) {
+      const vals = flowValues(temp.points, times);
+      let idx = -1;
+      for (let k = vals.length - 1; k >= 0; k--) {
+        if (vals[k] != null) { idx = k; break; }
+      }
+      if (idx >= 0) {
+        out.push({
+          id: "_temp_hover",
+          text: `${temp.name} ${signedFlow(temp.points[temp.points.length - 1][1])}`,
+          color: "#ff5722",
+          coord: [idx, vals[idx] as number],
+          weight: Number.MAX_SAFE_INTEGER,
+          active: true,
+          dashed: true,
+        });
+      }
+    }
+    return out;
+  }, [lines, temp, times, hoverCode]);
 
+  const option = useMemo(() => {
     const many = lines.length > 40;
-    // 线末标签一律显示（全选后也不再整批隐藏）。条数多时靠 labelLayout.hideOverlap
-    // 自动丢掉互相压住的标签，右侧留白同步加宽，避免标签被裁到画布外。
-    const labelGap = many ? 230 : 190;
     const series: any[] = lines.map((l, i) => {
       const baseColor = FLOW_COLORS[i % FLOW_COLORS.length];
       const dim = hoverCode && hoverCode !== l.code;
       const focus = hoverCode === l.code;
       const last = l.points.length ? l.points[l.points.length - 1][1] : null;
-      // 悬停时这条线会被「分段红绿」覆盖（见下方 seg 系列），这里只保留末端标签与底衬
+      // 悬停时这条线会被「分段红绿」覆盖（见下方 seg 系列），这里只保留底衬
       const color = focus ? ((last ?? 0) >= 0 ? "#ef4444" : "#22c55e") : baseColor;
-      const pctStr = typeof l.pct === "number" ? `(${l.pct >= 0 ? "+" : ""}${l.pct.toFixed(2)}%)` : "";
-      const label = `${l.name}  ${last == null ? "—" : signedFlow(last)}${pctStr}`;
       return {
         id: l.code,
         name: l.name,
         type: "line" as const,
-        data: toValues(l.points),
+        data: flowValues(l.points, times),
         showSymbol: false,
         smooth: 0.15,
         lineStyle: { width: focus ? 3 : 1.5, color, opacity: dim ? 0.16 : 1 },
         itemStyle: { color },
         emphasis: { focus: "series" as const, lineStyle: { width: 3.4 } },
-        blur: { lineStyle: { opacity: 0.08 }, label: { opacity: 0.1 }, endLabel: { opacity: 0.1 } },
-        endLabel: {
-          show: true,
-          formatter: () => label,
-          color,
-          fontSize: 10,
-          fontWeight: "bold" as const,
-          distance: 6,
-        },
-        labelLayout: { moveOverlap: "shiftY" as const, hideOverlap: true },
+        blur: { lineStyle: { opacity: 0.08 }, label: { opacity: 0.1 } },
         // 悬停线本身退到分段线下面（半透明但保留宽度，保证鼠标还能命中这条线）
         z: focus ? 2 : 3,
         ...(focus ? { lineStyle: { width: 3, color, opacity: 0.25 } } : {}),
@@ -971,7 +1028,7 @@ export function BoardFlowChart({
     // 连续同向的分钟合并成一条折线，方向反转才切段——800+ 个点也不会产生上千个 series。
     const focused = hoverCode ? lines.find((l) => l.code === hoverCode) : null;
     if (focused && focused.points.length > 1) {
-      const vals = toValues(focused.points);
+      const vals = flowValues(focused.points, times);
       let segStart = 0;
       let segUp: boolean | null = null;
       const flush = (end: number) => {
@@ -1034,18 +1091,13 @@ export function BoardFlowChart({
         id: "_temp_hover",
         name: temp.name,
         type: "line" as const,
-        data: toValues(temp.points),
+        data: flowValues(temp.points, times),
         showSymbol: false,
         smooth: 0.15,
         lineStyle: { width: 2.6, color, type: "dashed" as const, opacity: 1 },
         itemStyle: { color },
         emphasis: { disabled: true as any },
         blur: { lineStyle: { opacity: 1 } },
-        endLabel: {
-          show: true,
-          formatter: () => `${temp.name}  ${signedFlow(temp.points.length ? temp.points[temp.points.length - 1][1] : null)}`,
-          color, fontSize: 10, fontWeight: "bold" as const, distance: 6,
-        },
         z: 6,
       } as any);
     }
@@ -1081,7 +1133,7 @@ export function BoardFlowChart({
              </div>`).join("") + (rows.length > 12 ? `<div style="opacity:.6">…共 ${rows.length} 条</div>` : "");
         },
       },
-      grid: { top: 30, right: labelGap, bottom: 34, left: 56 },
+      grid: { top: 30, right: LABEL_GUTTER, bottom: 34, left: 56 },
       xAxis: {
         type: "category",
         data: times,
@@ -1113,29 +1165,33 @@ export function BoardFlowChart({
     };
   }, [lines, hoverCode, temp, vLines]);
 
-
-
-  const times = useMemo(() => {
-    const s = new Set<string>();
-    lines.forEach((l) => l.points.forEach(([t]) => s.add(t)));
-    return s.size;
-  }, [lines]);
-
-  if (!times) return null;
+  if (!times.length) return null;
+  const labelVersion = `${times.length}:${lines.length}:${hoverCode ?? ""}:${temp?.code ?? ""}:${vLines?.length ?? 0}`;
   return (
-    <ReactECharts
-      key={id}
-      option={option}
-      notMerge
-      style={{ height }}
-      onEvents={{
-        mouseover: (p: any) => {
-          const id2 = String(p?.seriesId ?? "");
-          if (id2.includes("_seg_") || id2 === "_temp_hover") return;
-          if (id2 && id2 !== hoverCode) onHoverCode?.(id2);
-        },
-        globalout: () => onHoverCode?.(null),
-      }}
-    />
+    <div className="relative" style={{ height }}>
+      <ReactECharts
+        key={id}
+        option={option}
+        notMerge
+        style={{ height: "100%" }}
+        onChartReady={setChart}
+        onEvents={{
+          mouseover: (p: any) => {
+            const id2 = String(p?.seriesId ?? "");
+            if (id2.includes("_seg_") || id2 === "_temp_hover") return;
+            if (id2 && id2 !== hoverCode) onHoverCode?.(id2);
+          },
+          globalout: () => onHoverCode?.(null),
+        }}
+      />
+      <FlowEndLabels
+        chart={chart}
+        items={labels}
+        version={labelVersion}
+        gridTop={30}
+        gridRight={LABEL_GUTTER}
+        gridBottom={34}
+      />
+    </div>
   );
 }
