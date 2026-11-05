@@ -318,3 +318,64 @@ class TestDensifyAxis:
 
     def test_align_forward_fills(self):
         assert bf.align_to_axis([("09:58", 1.0), ("10:00", 3.0)], ["09:58", "09:59", "10:00"]) == [1.0, 1.0, 3.0]
+
+
+class TestDailyFlowConsistency:
+    """详情页「近 20 日」柱必须和「当日资金分时」末端一致（2026-11-04 实测对不上）。"""
+
+    @pytest.fixture()
+    def temp_db(self, tmp_path, monkeypatch):
+        from services import boardflow as b
+        monkeypatch.setattr(b, "_DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(b, "_DB_FILE", str(tmp_path / "board_flow.db"))
+        b.init_db()
+        return b
+
+    @staticmethod
+    def seed(b, date, rank_flow, ts, points):
+        with b._db() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO rank_snapshots(date,code,name,type,flow,pct,rank,ts)"
+                " VALUES(?,?,?,?,?,?,?,?)",
+                (date, "BK0001", "甲板块", "concept", rank_flow, 1.0, 1, ts))
+            for t, v in points:
+                conn.execute("INSERT OR REPLACE INTO flow_points(date,code,time,flow) VALUES(?,?,?,?)",
+                             (date, "BK0001", t, v))
+
+    def test_post_close_snapshot_uses_last_point(self, temp_db):
+        b = temp_db
+        # 收盘后 19:08 又更新了一版（分时末端 15:00 是 192.54 亿）
+        self.seed(b, "2026-11-04", 195.89e8, "2026-11-04 19:08",
+                  [("14:59", 192.0e8), ("15:00", 192.54e8)])
+        h = b.read_history("BK0001", 20)
+        assert h[-1]["date"] == "2026-11-04"
+        assert h[-1]["flow"] == pytest.approx(192.54e8)
+
+    def test_intraday_snapshot_is_kept(self, temp_db):
+        b = temp_db
+        # 快照就是盘中/收盘时写的（15:00），无需覆盖
+        self.seed(b, "2026-11-03", 111.0e8, "2026-11-03 15:00",
+                  [("15:00", 100.0e8)])
+        assert b.read_history("BK0001", 20)[-1]["flow"] == pytest.approx(111.0e8)
+
+    def test_truncated_session_keeps_snapshot(self, temp_db):
+        b = temp_db
+        # 当天采集中断（最后一点 10:30），分时末端不代表全天 → 保留快照
+        self.seed(b, "2026-11-04", 195.89e8, "2026-11-04 19:08",
+                  [("10:29", 10.0e8), ("10:30", 12.0e8)])
+        assert b.read_history("BK0001", 20)[-1]["flow"] == pytest.approx(195.89e8)
+
+    def test_rank_range_and_daily_flow_share_rule(self, temp_db):
+        b = temp_db
+        self.seed(b, "2026-11-04", 195.89e8, "2026-11-04 19:08",
+                  [("15:00", 192.54e8)])
+        rows = b.read_rank_range("2026-11-04", "2026-11-04")
+        assert rows[0]["flow"] == pytest.approx(192.54e8)
+        assert b.daily_flow("BK0001", "2026-11-04", 195.89e8) == pytest.approx(192.54e8)
+
+    def test_until_limits_history_window(self, temp_db):
+        b = temp_db
+        self.seed(b, "2026-11-03", 10.0e8, "2026-11-03 15:00", [("15:00", 10.0e8)])
+        self.seed(b, "2026-11-04", 20.0e8, "2026-11-04 15:00", [("15:00", 20.0e8)])
+        h = b.read_history("BK0001", 20, "2026-11-03")
+        assert [x["date"] for x in h] == ["2026-11-03"]

@@ -33,6 +33,14 @@ KEEP_RANK_DAYS = 120
 _SESSION_AM = ("09:30", "11:30")
 _SESSION_PM = ("13:00", "15:00")
 
+# 「当日资金流」两处口径对齐用（2026-11-05）：
+# 排行快照在收盘后可能被更新一版（实测 2026-11-04 半导体 19:08 写回 195.89 亿，
+# 而当日分时末端 15:00 是 192.54 亿），详情页「近 20 日」柱与「当日资金分时」图
+# 就对不上。凡该交易日快照晚于 _POST_CLOSE_HM 才有更新的，一律改用当日分时
+# 最后一个点（且该点须到 _SESSION_LAST 之后，否则说明当天采集中断，保留快照值）。
+_POST_CLOSE_HM = "15:30"
+_SESSION_LAST = "14:55"
+
 _LOCK = threading.Lock()
 
 _SCHEMA = """
@@ -458,15 +466,59 @@ def save_watch(items: list[dict]) -> bool:
         return False
 
 
-def read_history(code: str, days: int = 20) -> list[dict]:
-    """某板块近 N 个交易日的资金流（来自每日最后一轮排行快照）。"""
+def read_history(code: str, days: int = 20, until: str | None = None) -> list[dict]:
+    """某板块近 N 个交易日的资金流（来自每日最后一轮排行快照）。
+
+    收盘后被更新过的交易日，取值改用当日分时末端（见 `_daily_flow_fix`），
+    保证「近 20 日」柱与「当日资金分时」图的终点是同一个数。
+    `until` 给历史回看用：只取该日（含）之前的快照，避免看 11-04 时把 11-05 也画进来。
+    """
+    sql = "SELECT date, flow, pct, rank FROM rank_snapshots WHERE code=?"
+    args: list = [code]
+    if until:
+        sql += " AND date<=?"
+        args.append(until)
+    sql += " ORDER BY date DESC LIMIT ?"
+    args.append(max(1, int(days)))
     with _db() as conn:
-        cur = conn.execute(
-            "SELECT date, flow, pct, rank FROM rank_snapshots WHERE code=? ORDER BY date DESC LIMIT ?",
-            (code, max(1, int(days))))
+        cur = conn.execute(sql, args)
         rows = [{"date": d, "flow": float(f), "pct": float(p or 0), "rank": r}
                 for d, f, p, r in cur.fetchall()]
+        fix = _daily_flow_fix(conn, [r["date"] for r in rows])
+    for r in rows:
+        v = fix.get((r["date"], code))
+        if v is not None:
+            r["flow"] = v
     return list(reversed(rows))
+
+
+def daily_flow(code: str, date: str, fallback: float | None = None) -> float | None:
+    """单个板块某交易日的资金流（与 read_history 同口径，供详情页头部用）。"""
+    with _db() as conn:
+        fix = _daily_flow_fix(conn, [date])
+    return fix.get((date, code), fallback)
+
+
+def _daily_flow_fix(conn: sqlite3.Connection,
+                    dates: Iterable[str]) -> dict[tuple[str, str], float]:
+    """盘后有更新过的交易日 → 用当日分时最后一点覆盖资金流。返回 {(date, code): flow}。"""
+    uniq = [d for d in dict.fromkeys(dates or []) if d]
+    if not uniq:
+        return {}
+    qs = ",".join("?" * len(uniq))
+    late = [d for d, ts in conn.execute(
+        f"SELECT date, MAX(ts) FROM rank_snapshots WHERE date IN ({qs}) GROUP BY date", uniq)
+        if ts and ts[11:16] > _POST_CLOSE_HM]
+    if not late:
+        return {}
+    qs2 = ",".join("?" * len(late))
+    rows = conn.execute(
+        f"""SELECT p.date, p.code, p.flow FROM flow_points p
+            JOIN (SELECT date, code, MAX(time) AS mt FROM flow_points
+                   WHERE date IN ({qs2}) GROUP BY date, code) m
+              ON m.date = p.date AND m.code = p.code AND m.mt = p.time
+            WHERE p.time >= ?""", [*late, _SESSION_LAST]).fetchall()
+    return {(d, c): float(f) for d, c, f in rows}
 
 
 def align_against(axis: list[str], mapping: dict[str, float]) -> list[float | None]:
@@ -475,7 +527,11 @@ def align_against(axis: list[str], mapping: dict[str, float]) -> list[float | No
 
 
 def read_rank_range(start: str, end: str, board_type: str | None = None) -> list[dict]:
-    """区间内每个交易日的排行快照（一日一行/板块）。"""
+    """区间内每个交易日的排行快照（一日一行/板块）。
+
+    盘后被更新过的交易日同样改用当日分时末端（见 `_daily_flow_fix`），
+    否则「主力资金多日图」的区间累计会和详情页「近 20 日」对不上。
+    """
     sql = ("SELECT date, code, name, type, flow, pct FROM rank_snapshots "
            "WHERE date BETWEEN ? AND ?")
     args: list = [start, end]
@@ -486,7 +542,13 @@ def read_rank_range(start: str, end: str, board_type: str | None = None) -> list
     with _db() as conn:
         cur = conn.execute(sql, args)
         cols = [c[0] for c in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
+        rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+        fix = _daily_flow_fix(conn, {r["date"] for r in rows})
+    for r in rows:
+        v = fix.get((r["date"], r["code"]))
+        if v is not None:
+            r["flow"] = v
+    return rows
 
 
 def aggregate_daily(rows: Iterable[dict], dates: list[str]) -> list[dict]:

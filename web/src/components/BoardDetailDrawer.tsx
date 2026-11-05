@@ -96,7 +96,7 @@ export function BoardDetailDrawer({
             )}
           </Section>
 
-          <Section title="近 20 个交易日资金流" hint={errors.history ?? `覆盖 ${history.length} 个交易日`}>
+          <Section title="近 20 个交易日资金流" hint={errors.history ?? `覆盖 ${history.length} 个交易日 · 每日取当日分时末端，与上方分时图一致`}>
             {history.length ? (
               <FlowHistoryChart id={`bh-${d.code}`} dates={history.map((h: any) => h.date)}
                 values={history.map((h: any) => h.flow)} />

@@ -799,6 +799,8 @@ async def board_detail(code: str = Query(..., description="BK 板块代码"),
         if row:
             out.update({"name": row["name"], "type": row["type"],
                         "flow": row["flow"], "pct": row["pct"], "rank": row["rank"]})
+            # 头部「主力净流入」与 20 日柱/当日分时同口径（盘后被更新过的日期取分时末端）
+            out["flow"] = await asyncio.to_thread(bf.daily_flow, code, date, row["flow"])
     except Exception as exc:  # noqa: BLE001
         out["errors"]["meta"] = str(exc)
 
@@ -816,7 +818,7 @@ async def board_detail(code: str = Query(..., description="BK 板块代码"),
 
     # 3) 近 20 个交易日资金流（本地库）
     try:
-        out["history"] = await asyncio.to_thread(bf.read_history, code, 20)
+        out["history"] = await asyncio.to_thread(bf.read_history, code, 20, date)
     except Exception as exc:  # noqa: BLE001
         out["history"] = None
         out["errors"]["history"] = str(exc)
