@@ -18,6 +18,8 @@ import { cn } from "@/lib/utils";
 const TYPES = [
   { key: "concept", label: "概念" },
   { key: "industry", label: "行业" },
+  { key: "index", label: "指数" },
+  { key: "hot", label: "热门" },
   { key: "custom", label: "自定义" },
 ];
 /** 不限制曲线条数：勾选多少就画多少（用户要求） */
@@ -53,7 +55,18 @@ export function BoardMultiPage() {
   );
 
   const { data: watchView, refresh: refreshWatch } = usePolling(
-    () => api.boardWatch(), 300_000, [], { kind: "ctx", code: "board-watch" });
+    () => api.boardWatch(), 300_000, []);
+  // 指数：多日区间没有板块快照，列表口径取「区间末」那天的 4 维快照（机构+大单）
+  const { data: indexView } = usePolling(
+    () => api.boardIndexRank(end || undefined),
+    interval,
+    [end, interval],
+    { kind: "brank", code: `mindex:${end || "latest"}` },
+  );
+  // 热门：财联社热门行业/概念 + 盘面异动 → 模糊匹配到的板块
+  const { data: hotView } = usePolling(
+    () => api.boardClsHot(end || undefined), 300_000, [end],
+    { kind: "ctx", code: `mcls:${end || "latest"}` });
   useEffect(() => {
     if (Array.isArray(watchView?.items)) setWatchItems(watchView.items);
   }, [watchView]);
@@ -69,13 +82,46 @@ export function BoardMultiPage() {
   }, [items]);
   const sourceItems = useMemo(() => {
     if (type === "custom") {
-      // 多日图是板块维度（BK），指数（1.xxxxxx）没有板块日快照，这里只列板块
-      return watchItems.filter((w) => w.code.startsWith("BK")).map((w) => byCode[w.code] ?? {
-        code: w.code, name: w.name, type: "concept", total: 0, pct: 0, days: 0, values: [], watch: true,
-      }).map((i) => ({ ...i, watch: true }));
+      // 三页共用同一份自选：BK 板块用区间累计，指数（1.xxxxxx）用区间末那天的 4 维快照
+      const idx = new Map<string, any>(
+        (indexView?.items ?? []).map((r: any) => [r.code, r] as [string, any]),
+      );
+      return watchItems.map((w) => {
+        const hit = byCode[w.code];
+        if (hit) return { ...hit, watch: true };
+        const ix = idx.get(w.code);
+        if (ix) {
+          return {
+            code: ix.code, name: ix.name, type: "index",
+            total: ix.flow ?? 0, pct: ix.pct ?? null, py: ix.py, watch: true,
+          };
+        }
+        return {
+          code: w.code, name: w.name, type: w.code.startsWith("BK") ? "concept" : "index",
+          total: 0, pct: null, py: undefined, watch: true,
+        };
+      });
+    }
+    if (type === "index") {
+      return (indexView?.items ?? []).map((r: any) => ({
+        code: r.code, name: r.name, type: "index",
+        total: r.flow ?? 0, pct: r.pct ?? null, py: r.py,
+      }));
+    }
+    if (type === "hot") {
+      // BK 板块优先用区间累计（与概念/行业口径一致），匹配不到的再用当日快照
+      return (hotView?.items ?? []).map((r: any) => {
+        const agg = byCode[r.code];
+        return {
+          code: r.code, name: r.name, type: r.type ?? "concept",
+          total: agg?.total ?? r.flow ?? 0,
+          pct: agg?.pct ?? r.pct ?? null,
+          py: agg?.py,
+        };
+      });
     }
     return items.filter((i) => i.type === type);
-  }, [type, items, watchItems, byCode]);
+  }, [type, items, watchItems, byCode, indexView, hotView]);
 
   const rows = useMemo(() => {
     const kw = search.trim().toLowerCase();
@@ -99,7 +145,7 @@ export function BoardMultiPage() {
       const codes = new Set(sourceItems.map((i) => i.code));
       const keep = Object.keys(prev).filter((c) => codes.has(c));
       if (keep.length) return prev;
-      if (type === "custom") {
+      if (type === "custom" || type === "index" || type === "hot") {
         return Object.fromEntries(sourceItems.map((i) => [i.code, true]));
       }
       return Object.fromEntries(sourceItems.slice(0, 3).map((i) => [i.code, true]));
@@ -252,9 +298,10 @@ export function BoardMultiPage() {
             if (row) void ensureTemp(row);
           }
         }}
-        loading={!data}
-        emptyTitle="暂无区间数据"
-        emptyHint={data?.error ?? undefined}
+        loading={type === "index" ? !indexView : type === "hot" ? !hotView : !data}
+        emptyTitle={type === "custom" ? "还没有自定义板块" : type === "hot" ? "财联社热门板块暂不可用" : "暂无区间数据"}
+        emptyHint={type === "custom" ? "在其他列表点行尾的 ＋ 图标即可加入自定义（三页共用）"
+          : type === "hot" ? (hotView?.error ?? undefined) : (data?.error ?? undefined)}
         maxHeight="calc(100vh - 20rem)"
       />
 

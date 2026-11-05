@@ -19,6 +19,7 @@ const TARGETS = [
   { key: "industry", label: "行业" },
   { key: "index", label: "指数" },
   { key: "hot", label: "热门" },
+  { key: "custom", label: "自定义" },
 ];
 const DIM_LABEL: Record<string, string> = {
   inst: "机构（超大单）", large: "大单", medium: "中户", retail: "散户",
@@ -39,7 +40,7 @@ type Row = {
   kind?: "concept" | "industry" | "index";
 };
 
-type Kind = "concept" | "industry" | "index" | "hot";
+type Kind = "concept" | "industry" | "index" | "hot" | "custom";
 
 /**
  * 四维资金（原「指数资金分时」）：概念 / 行业 / 指数 / 热门的 4 维主动净买额曲线。
@@ -50,7 +51,8 @@ export function EmFlowPage() {
   const initial = useMemo(() => readHashParams(), []);
   const initKind = initial.kind;
   const [kind, setKind] = useState<Kind>(
-    initKind === "industry" || initKind === "concept" || initKind === "hot" ? initKind : "index");
+    initKind === "industry" || initKind === "concept" || initKind === "hot" || initKind === "custom"
+      ? initKind : "index");
   const [code, setCode] = useState(initial.code ?? "");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("flow");
@@ -69,6 +71,15 @@ export function EmFlowPage() {
   // 财联社「热门板块」（热门行业/概念 + 异动）→ 后端模糊匹配到本地板块
   const { data: hotView, refresh: refreshHot } = usePolling(
     () => api.boardClsHot(), 300_000, [], { kind: "ctx", code: "cls-hot" });
+  // 自定义：与「主力资金分时」「主力资金多日」共用同一份自选（data/board_watch.json）
+  const { data: watchView, refresh: refreshWatch } = usePolling(
+    () => api.boardWatch(), 300_000, []);
+  const [watchItems, setWatchItems] = useState<{ code: string; name: string }[]>([]);
+  const [watchBusy, setWatchBusy] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (Array.isArray(watchView?.items)) setWatchItems(watchView.items);
+  }, [watchView]);
+  const watchSet = useMemo(() => new Set(watchItems.map((i) => i.code)), [watchItems]);
 
   /** CLS 拉不到时的回退：概念 + 行业按涨幅取前 40（与「热门」口径一致） */
   const fallbackHot: Row[] = useMemo(() => {
@@ -94,12 +105,26 @@ export function EmFlowPage() {
       }));
       return items.length ? items : fallbackHot;
     }
+    if (kind === "custom") {
+      // 用三份列表拼一个 code → 行 的索引，尽量带上资金/涨幅；找不到就只显示名称
+      const lookup = new Map<string, Row>();
+      const put = (arr: any[], k: Row["kind"]) => (arr ?? []).forEach((i: any) => {
+        lookup.set(i.code, { code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null, kind: k });
+      });
+      put(targets?.indices, "index");
+      put(concepts?.display, "concept");
+      put(industries?.display, "industry");
+      return watchItems.map((w) => lookup.get(w.code) ?? {
+        code: w.code, name: w.name, flow: null, pct: null,
+        kind: w.code.startsWith("BK") ? "concept" : "index",
+      });
+    }
     const src = kind === "concept" ? concepts?.display : industries?.display;
     return (src ?? []).map((i: any) => ({
       code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null,
       kind: kind as "concept" | "industry",
     }));
-  }, [kind, targets, industries, concepts, hotView, fallbackHot]);
+  }, [kind, targets, industries, concepts, hotView, fallbackHot, watchItems]);
 
   // 目标缺省：指数取第一个、行业取展示列表第一个；当前选中不在本口径列表里也回落
   const effectiveCode = useMemo(() => {
@@ -123,9 +148,9 @@ export function EmFlowPage() {
     [effectiveCode],
   );
 
-  // 热门 tab 混排概念/行业：分时要按行自身口径查（em-flow/series 一次只认一个 target_type）
+  // 热门/自定义混排概念、行业、指数：分时要按行自身口径查（em-flow/series 一次只认一个 target_type）
   const seriesKind = useMemo(() => {
-    if (kind !== "hot") return kind;
+    if (kind === "concept" || kind === "industry" || kind === "index") return kind;
     return options.find((o) => o.code === effectiveCode)?.kind ?? "concept";
   }, [kind, options, effectiveCode]);
 
@@ -141,11 +166,11 @@ export function EmFlowPage() {
   const doRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await Promise.all([refresh(), refreshHot()]);
+      await Promise.all([refresh(), refreshHot(), refreshWatch()]);
     } finally {
       setRefreshing(false);
     }
-  }, [refresh, refreshHot]);
+  }, [refresh, refreshHot, refreshWatch]);
   useEffect(() => onGlobalRefresh(() => { void doRefresh(); }), [doRefresh]);
 
   useEffect(() => {
@@ -175,6 +200,29 @@ export function EmFlowPage() {
     }));
   }, [series]);
 
+  /** 加入/移除自定义（与另外两页同一份数据，乐观更新 + 失败回滚） */
+  const toggleWatch = async (b: { code: string; name: string }) => {
+    if (watchBusy[b.code]) return;
+    const isWatched = watchSet.has(b.code);
+    setWatchBusy((m) => ({ ...m, [b.code]: true }));
+    setWatchItems((prev) => (isWatched
+      ? prev.filter((i) => i.code !== b.code)
+      : [...prev, { code: b.code, name: b.name }]));
+    try {
+      const res = isWatched ? await api.boardWatchRemove(b.code) : await api.boardWatchAdd(b.code, b.name);
+      if (res?.error) throw new Error(res.error);
+      toast(isWatched ? `已从自定义移除：${b.name}` : `已添加到自定义：${b.name}`);
+      void refreshWatch();
+    } catch (e: any) {
+      setWatchItems((prev) => (isWatched
+        ? [...prev, { code: b.code, name: b.name }]
+        : prev.filter((i) => i.code !== b.code)));
+      toast("自定义操作失败", { description: String(e?.message ?? e) });
+    } finally {
+      setWatchBusy((m) => ({ ...m, [b.code]: false }));
+    }
+  };
+
   const nameOf = useMemo(
     () => options.find((o) => o.code === effectiveCode)?.name ?? effectiveCode,
     [options, effectiveCode],
@@ -190,6 +238,7 @@ export function EmFlowPage() {
         rows={rows.map((r) => ({
           code: r.code, name: r.name, flow: r.flow ?? 0, pct: r.pct,
           type: r.code.startsWith("BK") ? "industry" : "index",
+          watch: watchSet.has(r.code),
         }))}
         selected={selected}
         onToggle={(c) => setCode(c)}
@@ -203,17 +252,22 @@ export function EmFlowPage() {
         }}
         sortOptions={[{ key: "flow", label: "资金" }, { key: "pct", label: "涨幅" }]}
         showCheckbox={false}
+        onToggleWatch={(r) => void toggleWatch({ code: r.code, name: r.name })}
+        watchBusy={watchBusy}
         loading={kind === "index" ? !targets
           : kind === "concept" ? !concepts
             : kind === "hot" ? !hotView && !fallbackHot.length
-              : !industries}
+              : kind === "custom" ? !watchView
+                : !industries}
         emptyTitle={kind === "index" ? "暂无指数数据"
           : kind === "concept" ? "暂无概念数据"
             : kind === "hot" ? "财联社热门板块暂不可用"
-              : "暂无行业数据"}
+              : kind === "custom" ? "还没有自定义标的"
+                : "暂无行业数据"}
         emptyHint={kind === "index" ? undefined
           : kind === "hot" ? (hotView?.error ?? "稍后重试（财联社接口 5 分钟缓存）")
-            : "稍后重试或检查采集状态"}
+            : kind === "custom" ? "在其他列表点行尾的 ＋ 图标加入；三页共用同一份自定义"
+              : "稍后重试或检查采集状态"}
         maxHeight="calc(100vh - 15rem)"
       />
 

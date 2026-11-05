@@ -82,7 +82,7 @@ export function BoardFlowPage() {
     { kind: "brank", code: `index:${date || "latest"}` },
   );
   const { data: watchView, refresh: refreshWatch } = usePolling(
-    () => api.boardWatch(), 300_000, [], { kind: "ctx", code: "board-watch" });
+    () => api.boardWatch(), 300_000, []);
   // 财联社「热门」：热门行业/概念 + 盘面异动，后端模糊匹配到本地板块
   const { data: hotView, refresh: refreshHot } = usePolling(
     () => api.boardClsHot(date || undefined), 300_000, [date],
