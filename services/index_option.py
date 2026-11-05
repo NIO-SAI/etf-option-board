@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+from typing import Iterable
 
 from config import settings
 from services import bs, em, iv_history as ivh
@@ -36,7 +37,7 @@ FUT_OPTS = [
     {"code": "HO", "name": "上证50", "underlying": "1.000016", "track": "上证50"},
     # 中证500：仅股指期货 IC（主力合约为 8.060130），无期权链
     {"code": "IC", "name": "中证500", "underlying": "1.000905", "track": "中证500",
-     "options": False, "futures": "8.060130"},
+     "options": False, "futures": "8.060130", "fut_prefix": "IC"},
 ]
 _BY_CODE = {f["code"]: f for f in FUT_OPTS}
 
@@ -172,6 +173,8 @@ async def chain(symbol: str) -> dict:
         "front_month": front,
         "count": len(contracts),
         "contracts": contracts,
+        # 没有期权的品种（中证500/IC）：期权链位置改列全部真实期货合约
+        "futures": (await futures_contracts(symbol, s)) if not has_options else None,
         "stats": osvc._chain_stats(contracts, s, front, symbol),
     }
 
@@ -407,6 +410,75 @@ async def _futures_basis(secid: str, spot: float) -> dict | None:
         return None
     return {"price": round(px, 2), "basis_pct": round((px / spot - 1) * 100, 3),
             "spot": round(spot, 2), "source": "future"}
+
+
+# 期货合约的 clist 字段：f2 最新价、f3 涨跌幅、f4 涨跌、f5 成交量（手）、
+# f6 成交额（元）、f15/f16 高低、f17 开、f18 昨结、f108 持仓量（手）
+_FUT_FIELDS = "f12,f13,f14,f2,f3,f4,f5,f6,f15,f16,f17,f18,f108"
+# 连续/主力这类合成合约不是可交割合约，不进列表
+_FUT_SYNTHETIC = ("连续", "主力")
+
+
+async def futures_contracts(product: str, spot: float | None = None) -> list[dict]:
+    """某品种在中金所上市的**全部真实期货合约**（按到期月升序）。
+
+    中证500 只有 IC 期货、没有对应期权，期权链位置改列这些合约；
+    基差用各自最新价与现货比（负=贴水），主力合约按持仓量最大标出。
+    """
+    fut = _BY_CODE.get(product.upper())
+    prefix = (fut or {}).get("fut_prefix")
+    if not fut or not prefix:
+        return []
+    try:
+        rows = await em.clist(f"m:{_FUTURES_MARKET}", _FUT_FIELDS, pz=200, ttl=20.0)
+    except Exception as exc:  # noqa: BLE001 — 合约列表拿不到就空着，不阻塞页面
+        log.debug("期货合约拉取失败 %s: %s", product, exc)
+        return []
+    if not spot:
+        spot = await _spot_price(fut["underlying"])
+    return parse_futures(rows, prefix, spot)
+
+
+def parse_futures(rows: Iterable[dict], prefix: str,
+                  spot: float | None = None) -> list[dict]:
+    """中金所期货 clist 行 → 可交割合约列表（纯函数，过滤连续/主力等合成合约）。
+
+    按到期月升序；基差 = 合约价/现货 − 1（负数为贴水）；持仓量最大的标为「主力」。
+    """
+    out: list[dict] = []
+    for r in rows or []:
+        name = r.get("f14") or ""
+        if not name.startswith(prefix) or any(k in name for k in _FUT_SYNTHETIC):
+            continue
+        tail = name[len(prefix):]
+        if not tail.isdigit():
+            continue
+        month = int(tail)
+        out.append({
+            "code": name, "secid": f"{_FUTURES_MARKET}.{r.get('f12')}",
+            "month": month, "expiry": expiry(month).isoformat(),
+            "price": em.num(r.get("f2")), "pct": em.num(r.get("f3")),
+            "change": em.num(r.get("f4")),
+            "volume": em.num(r.get("f5")), "amount": em.num(r.get("f6")),
+            "high": em.num(r.get("f15")), "low": em.num(r.get("f16")),
+            "open": em.num(r.get("f17")), "prev_settle": em.num(r.get("f18")),
+            "oi": em.num(r.get("f108")),
+        })
+    out.sort(key=lambda c: c["month"])
+    main = max(out, key=lambda c: c.get("oi") or 0) if out else None
+    for c in out:
+        c["basis_pct"] = (round((c["price"] / spot - 1) * 100, 3)
+                          if spot and c.get("price") else None)
+        c["is_main"] = bool(main and c["code"] == main["code"])
+    return out
+
+
+async def _spot_price(secid: str) -> float:
+    try:
+        q = await em.stock_get(secid, "f43", ttl=20.0)
+    except Exception:  # noqa: BLE001
+        return 0.0
+    return em.num((q or {}).get("f43")) or 0.0
 
 
 async def overview() -> dict:

@@ -139,3 +139,41 @@ class TestUniverse:
 
     def test_by_code_covers_every_listed_product(self):
         assert set(idx._BY_CODE) == {f["code"] for f in idx.FUT_OPTS}
+
+
+class TestFuturesContracts:
+    """中证500(IC) 的期权链位置改列全部真实期货合约。"""
+
+    ROWS = [
+        {"f12": "061111", "f14": "IC2611", "f2": 6736.0, "f3": 1.93, "f5": 38706,
+         "f108": 52401, "f6": 5.2e10},
+        {"f12": "061112", "f14": "IC2612", "f2": 6700.6, "f3": 1.8, "f5": 146657,
+         "f108": 183038, "f6": 1.96e11},
+        {"f12": "060130", "f14": "IC主力合约", "f2": 6700.6, "f108": 183038},
+        {"f12": "060121", "f14": "IC下月连续", "f2": 6700.6},
+        {"f12": "061103", "f14": "IC2703", "f2": 6563.6, "f108": 62919},
+        {"f12": "151112", "f14": "IM2612", "f2": 6567.0, "f108": 999999},
+    ]
+
+    def test_keeps_only_real_contracts_sorted_by_month(self):
+        out = idx.parse_futures(self.ROWS, "IC", 6736.9)
+        assert [c["code"] for c in out] == ["IC2611", "IC2612", "IC2703"]
+        assert [c["month"] for c in out] == [2611, 2612, 2703]
+
+    def test_main_is_largest_open_interest(self):
+        out = idx.parse_futures(self.ROWS, "IC", 6736.9)
+        main = [c["code"] for c in out if c["is_main"]]
+        assert main == ["IC2612"]
+
+    def test_basis_vs_spot(self):
+        out = {c["code"]: c for c in idx.parse_futures(self.ROWS, "IC", 6700.6)}
+        assert out["IC2612"]["basis_pct"] == 0.0          # 与现货持平
+        assert out["IC2703"]["basis_pct"] < 0             # 远月贴水
+
+    def test_expiry_is_third_friday(self):
+        out = idx.parse_futures(self.ROWS, "IC", None)
+        assert out[0]["expiry"] == "2026-11-20"
+        assert out[0]["basis_pct"] is None                # 缺现货时不编造基差
+
+    def test_no_prefix_no_rows(self):
+        assert idx.parse_futures(self.ROWS, "XX", 6700.0) == []

@@ -329,6 +329,59 @@ const levelBadge = (level?: string) => {
   return <Badge variant={l.variant}>{l.label}</Badge>;
 };
 
+/** 没有期权的股指品种（中证500/IC）：期权链位置改列该品种在中金所的全部真实期货合约。 */
+export function FutContracts({ items, spot }: { items: any[]; spot?: number | null }) {
+  if (!items?.length) {
+    return <EmptyState title="暂无期货合约数据" hint="中金所合约列表未返回，稍后自动重试" />;
+  }
+  return (
+    <div className="p-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <span>
+          中金所股指期货 · 共 {items.length} 个合约（该品种无对应期权）
+          {spot ? <span className="ml-2 tnum">现货 {nf(spot, 2)}</span> : null}
+        </span>
+        <span className="tnum">基差 = 合约价 ÷ 现货 − 1</span>
+      </div>
+      <table className="w-full border-collapse text-[11px]">
+        <thead>
+          <tr className="text-left text-muted-foreground">
+            <th className="px-1 py-1 font-normal">合约</th>
+            <th className="px-1 py-1 font-normal">到期</th>
+            <th className="px-1 py-1 text-right font-normal">最新价</th>
+            <th className="px-1 py-1 text-right font-normal">涨跌幅</th>
+            <th className="px-1 py-1 text-right font-normal">基差</th>
+            <th className="px-1 py-1 text-right font-normal">成交量(手)</th>
+            <th className="px-1 py-1 text-right font-normal">持仓量(手)</th>
+            <th className="px-1 py-1 text-right font-normal">成交额</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((c: any) => (
+            <tr key={c.code} className="border-t border-border/40 hover:bg-muted/40">
+              <td className="whitespace-nowrap px-1 py-1">
+                <span className="font-medium">{c.code}</span>
+                {c.is_main && <Badge variant="outline" className="ml-1 shrink-0 text-[9px] leading-4">主力</Badge>}
+              </td>
+              <td className="px-1 py-1 text-muted-foreground tnum">{c.expiry ?? "—"}</td>
+              <td className="px-1 py-1 text-right tnum">{c.price == null ? "—" : nf(c.price, 1)}</td>
+              <td className={cn("px-1 py-1 text-right tnum", clsUpDown(c.pct))}>{c.pct == null ? "—" : pct(c.pct)}</td>
+              <td className={cn("px-1 py-1 text-right tnum", clsUpDown(c.basis_pct))}>
+                {c.basis_pct == null ? "—"
+                  : (() => { const v = Math.abs(Number(c.basis_pct)) < 0.005 ? 0 : Number(c.basis_pct);
+                    return `${v > 0 ? "+" : ""}${v.toFixed(2)}%`; })()}
+              </td>
+              <td className="px-1 py-1 text-right tnum">{c.volume == null ? "—" : Math.round(c.volume).toLocaleString()}</td>
+              <td className="px-1 py-1 text-right tnum">{c.oi == null ? "—" : Math.round(c.oi).toLocaleString()}</td>
+              <td className="px-1 py-1 text-right tnum">{c.amount == null ? "—" : flowMoney(c.amount)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function SignalFeed({ signals, loading }: { signals: any[]; loading?: boolean }) {
   if (loading) {
     return (

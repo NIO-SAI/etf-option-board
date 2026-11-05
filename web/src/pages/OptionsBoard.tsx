@@ -3,7 +3,7 @@ import { Loader2, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, PanelRigh
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { Badge } from "@/components/reui/badge";
 import { IntradayChart, LineToggle } from "@/components/charts";
-import { BiasBar, BiasBarSkeleton, CandidateList, CandidateSkeleton, EtfList, ExpiryCalendar, OptionTQuote, PlanCard, SignalFeed, TopPicksList } from "@/components/panels";
+import { BiasBar, BiasBarSkeleton, CandidateList, CandidateSkeleton, EtfList, ExpiryCalendar, FutContracts, OptionTQuote, PlanCard, SignalFeed, TopPicksList } from "@/components/panels";
 import { ContractDetail, KronosPredict, LlmPanel } from "@/components/detail";
 import { AlertCenter } from "@/components/AlertCenter";
 import { EmptyState, Skeleton } from "@/components/ui/misc";
@@ -302,9 +302,8 @@ export function OptionsBoard() {
         <Frame spacing="sm">
           <FramePanel dense>
             {chainReady && chain?.options === false ? (
-              <EmptyState className="m-3"
-                title="中金所暂无该品种股指期权"
-                hint="中证500 目前只有 IC 股指期货；本页展示指数行情、主力资金流与期现基差。" />
+              // 中证500 没有股指期权：这个位置改列全部 IC 期货合约（含基差/持仓）
+              <FutContracts items={chain?.futures ?? []} spot={chain?.underlying?.price} />
             ) : chainReady && !chain.error ? (
               <OptionTQuote
                 chain={chain}
