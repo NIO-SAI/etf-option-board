@@ -52,31 +52,6 @@ function DimCards({
   );
 }
 
-/** 图表顶部的卡片式图例：名称 + 当前值（可换行，超过 30 条提示总数）。 */
-function LegendChips({
-  items, more = 0,
-}: {
-  items: { key: string; name: string; value: number | null }[];
-  more?: number;
-}) {
-  if (!items.length) return null;
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 px-2 pb-1.5 text-[10px] text-muted-foreground">
-      {items.map((it) => (
-        <span key={it.key}
-          className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-1.5 py-0.5">
-          <span className="inline-block size-1.5 rounded-full bg-primary/70" />
-          <span className="text-foreground/90">{it.name}</span>
-          <span className={cn("tnum", (it.value ?? 0) >= 0 ? "text-up" : "text-down")}>
-            {signedFlow(it.value)}
-          </span>
-        </span>
-      ))}
-      {more > 0 && <span>…共 {items.length + more} 条</span>}
-    </div>
-  );
-}
-
 /** ETF 资金流：左侧列表（搜索/排序/批量/自选）+ 右侧多线叠加 / 4 维拆解。 */
 export function EtfFlowPage() {
   const initial = useMemo(() => readHashParams(), []);
@@ -150,7 +125,10 @@ export function EtfFlowPage() {
   }, [baseKey, scope]);
 
   const selectedCodes = rows.filter((r) => selected[r.code]).map((r) => r.code);
-  const chartCodes = selectedCodes;
+  // 4 维拆解是单标的视图：只认第一次勾选的那只，点其它行 = 切换目标（不累积多选）
+  const dimView = view === "4dim";
+  const dimTarget = selectedCodes[0] ?? rows[0]?.code ?? null;
+  const chartCodes = dimView ? (dimTarget ? [dimTarget] : []) : selectedCodes;
   const codesKey = chartCodes.join(",");
 
   const { data: series } = usePolling(
@@ -179,6 +157,11 @@ export function EtfFlowPage() {
 
   const toggle = (code: string) => {
     touched.current = true;
+    if (dimView) {
+      // 4 维拆解：单击即切换目标，不保留多选
+      setSelected({ [code]: true });
+      return;
+    }
     setSelected((prev) => {
       const next = { ...prev };
       if (next[code]) delete next[code];
@@ -298,9 +281,9 @@ export function EtfFlowPage() {
     <main className="grid gap-3 p-3 xl:grid-cols-[320px_minmax(0,1fr)]">
       <FlowListPanel
         title="ETF 列表"
-        countText={`共 ${rows.length} 只 · 已选 ${selectedCodes.length}`}
+        countText={dimView ? `共 ${rows.length} 只 · 单击切换` : `共 ${rows.length} 只 · 已选 ${selectedCodes.length}`}
         rows={rows}
-        selected={selected}
+        selected={dimView ? (dimTarget ? { [dimTarget]: true } : {}) : selected}
         onToggle={toggle}
         search={search}
         onSearch={setSearch}
@@ -311,10 +294,11 @@ export function EtfFlowPage() {
           else { setSortKey(k); setSortDir(-1); }
         }}
         sortOptions={[{ key: "pct", label: "涨幅" }, { key: "flow", label: "资金" }]}
-        onBatch={batch}
+        onBatch={dimView ? undefined : batch}
+        showCheckbox={!dimView}
         onToggleWatch={toggleWatch}
         watchBusy={watchBusy}
-        onHoverRow={(code) => {
+        onHoverRow={dimView ? () => {} : (code) => {
           if (!code) { setHoverCode(null); setTempLine(null); return; }
           const on = !!selected[code];
           setHoverCode(on ? code : null);
@@ -365,23 +349,13 @@ export function EtfFlowPage() {
               ) : !series?.axis?.length ? (
                 <EmptyState title="暂无分时数据" hint={(series as any)?.error ?? "加载中…"} className="flex-1" />
               ) : (
-                <>
-                  <LegendChips
-                    items={etfLines.slice(0, 30).map((l) => ({
-                      key: l.code,
-                      name: l.name,
-                      value: l.points.length ? l.points[l.points.length - 1][1] : null,
-                    }))}
-                    more={Math.max(0, etfLines.length - 30)}
-                  />
-                  <div className="min-h-0 flex-1">
-                    <BoardFlowChart id="etf-flow-lines" lines={etfLines} hoverCode={hoverCode}
-                      temp={tempLine} height="100%" onHoverCode={setHoverCode} />
-                  </div>
-                </>
+                <div className="min-h-0 flex-1">
+                  <BoardFlowChart id="etf-flow-lines" lines={etfLines} hoverCode={hoverCode}
+                    temp={tempLine} height="100%" onHoverCode={setHoverCode} />
+                </div>
               )
             ) : !dimCode ? (
-              <EmptyState title="还没有选中 ETF" hint="先勾选一只，再看它的 4 维资金结构" className="flex-1" />
+              <EmptyState title="还没有选中 ETF" hint="点左侧任意一只，看它的 4 维资金结构" className="flex-1" />
             ) : (
               <>
                 <DimCards cards={dimCards} />

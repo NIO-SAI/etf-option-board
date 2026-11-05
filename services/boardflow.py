@@ -771,9 +771,10 @@ def update_etf_watch(add: dict | None = None, remove: str | None = None) -> tupl
 
 
 # --------------------------------------------------------------------------
-# 东财 4 维资金（机构/大单/中户/散户）：指数 + 行业 + 全 A
+# 东财 4 维资金（机构/大单/中户/散户）：指数 + 行业 + 概念 + 全 A
 # --------------------------------------------------------------------------
 EM_DEFAULT_INDUSTRIES = 40
+EM_DEFAULT_CONCEPTS = 40
 
 EM_MARKET_CODE = "47.800000"
 EM_MARKET_NAME = "东方财富全A"
@@ -859,11 +860,21 @@ def read_em_meta(date: str, code: str) -> dict:
     return {"name": row[0], "kind": row[1]} if row else {}
 
 
-def pick_em_industries(rank: list[dict], limit: int = EM_DEFAULT_INDUSTRIES) -> list[dict]:
-    """按 |主力净流入| 取前 N 个行业作为 4 维采集/展示目标（纯函数）。"""
+def pick_em_boards(rank: list[dict], limit: int) -> list[dict]:
+    """按 |主力净流入| 取前 N 个板块（行业/概念共用，纯函数）。"""
     rows = [r for r in rank or [] if str(r.get("code", "")).startswith("BK")]
     rows.sort(key=lambda r: -abs(float(r.get("flow") or 0)))
     return [{"code": r["code"], "name": r.get("name") or r["code"]} for r in rows[:max(1, limit)]]
+
+
+def pick_em_industries(rank: list[dict], limit: int = EM_DEFAULT_INDUSTRIES) -> list[dict]:
+    """按 |主力净流入| 取前 N 个行业作为 4 维采集/展示目标（纯函数）。"""
+    return pick_em_boards(rank, limit)
+
+
+def pick_em_concepts(rank: list[dict], limit: int = EM_DEFAULT_CONCEPTS) -> list[dict]:
+    """按 |主力净流入| 取前 N 个概念作为 4 维采集/展示目标（纯函数）。"""
+    return pick_em_boards(rank, limit)
 
 
 def load_em_config() -> dict:

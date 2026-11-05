@@ -92,6 +92,7 @@ export const api = {
   // 东财 4 维资金
   emFlowTargets: () => get("/em-flow/targets"),
   emFlowIndustries: () => get("/em-flow/industries"),
+  emFlowConcepts: () => get("/em-flow/concepts"),
   emFlowSeries: (kind: string, code: string) =>
     get(`/em-flow/series?target_type=${kind}&code=${encodeURIComponent(code)}`),
   emFlowConfigAdd: async (code: string, name: string) =>

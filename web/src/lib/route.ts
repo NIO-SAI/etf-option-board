@@ -15,7 +15,7 @@ export const PAGES: PageDef[] = [
   { key: "board-flow", hash: "#/board/flow", label: "主力资金分时", title: "主力资金分时" },
   { key: "board-multi", hash: "#/board/multi", label: "主力资金多日", title: "主力资金多日" },
   { key: "board-etf", hash: "#/board/etf", label: "ETF资金流", title: "ETF资金流" },
-  { key: "board-em", hash: "#/board/em", label: "指数资金分时", title: "指数资金分时" },
+  { key: "board-em", hash: "#/board/em", label: "四维资金", title: "四维资金" },
 ];
 
 const BY_HASH = new Map(PAGES.map((p) => [p.hash, p.key]));

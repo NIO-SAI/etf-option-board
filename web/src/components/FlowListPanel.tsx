@@ -39,6 +39,7 @@ export function FlowListPanel({
   onBatch,
   emptyTitle = "无匹配数据", emptyHint,
   showPct = true,
+  showCheckbox = true,
   onToggleWatch,
   watchBusy,
   onDetail,
@@ -61,6 +62,8 @@ export function FlowListPanel({
   emptyTitle?: string;
   emptyHint?: string;
   showPct?: boolean;
+  /** 是否显示行首勾选框。单标的选择（四维资金 / ETF 4 维拆解）传 false，只靠行高亮表示当前目标。 */
+  showCheckbox?: boolean;
   onToggleWatch?: (row: FlowRow) => void;
   watchBusy?: Record<string, boolean>;
   onDetail?: (row: FlowRow) => void;
@@ -152,8 +155,10 @@ export function FlowListPanel({
                     )}
                     title="单击勾选 / 取消"
                   >
-                    <input type="checkbox" checked={on} readOnly aria-label={`勾选${b.name}`}
-                      className="size-3 shrink-0 accent-primary" />
+                    {showCheckbox && (
+                      <input type="checkbox" checked={on} readOnly aria-label={`勾选${b.name}`}
+                        className="size-3 shrink-0 accent-primary" />
+                    )}
                     <span className={cn("min-w-0 flex-1 truncate", on ? "font-medium text-foreground" : "text-foreground/80")}>
                       {b.name}
                       {b.type === "index" && !b.code.startsWith("47.") && (

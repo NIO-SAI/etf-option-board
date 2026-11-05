@@ -1139,9 +1139,11 @@ async def em_flow_targets(date: str | None = Query(None)):
             "market": item(bf.EM_MARKET_CODE, bf.EM_MARKET_NAME)}
 
 
-@router.get("/em-flow/industries")
-async def em_flow_industries(date: str | None = Query(None)):
-    """行业展示列表（自定义优先，否则按 |主力净流入| 前 40）+ 全量候选。"""
+async def _em_board_list(date: str | None, board_type: str) -> dict:
+    """板块（行业/概念）展示列表 + 全量候选（含最新主力净流入与涨跌幅）。
+
+    行业有自定义展示配置（`em_flow_config.json`），概念固定按 |主力净流入| 取前 N。
+    """
     if not date:
         try:
             dates = await asyncio.to_thread(bf.available_dates, 1)
@@ -1149,12 +1151,17 @@ async def em_flow_industries(date: str | None = Query(None)):
             dates = []
         date = dates[0] if dates else dt.date.today().isoformat()
     try:
-        rank = await asyncio.to_thread(bf.read_rank, date, "industry")
+        rank = await asyncio.to_thread(bf.read_rank, date, board_type)
     except Exception as exc:  # noqa: BLE001
         return {"date": date, "display": [], "all": [], "error": str(exc)}
-    cfg = await asyncio.to_thread(bf.load_em_config)
+
+    limit = bf.EM_DEFAULT_CONCEPTS if board_type == "concept" else bf.EM_DEFAULT_INDUSTRIES
+    pick = bf.pick_em_concepts if board_type == "concept" else bf.pick_em_industries
+    cfg = {"customized": False, "items": []}
+    if board_type != "concept":
+        cfg = await asyncio.to_thread(bf.load_em_config)
     by = {r["code"]: r for r in rank}
-    base = cfg["items"] if cfg.get("customized") and cfg["items"] else bf.pick_em_industries(rank)
+    base = cfg["items"] if cfg.get("customized") and cfg["items"] else pick(rank)
 
     def enrich(it: dict) -> dict:
         r = by.get(it["code"]) or {}
@@ -1166,7 +1173,19 @@ async def em_flow_industries(date: str | None = Query(None)):
                 for r in sorted(rank, key=lambda r: -abs(float(r.get("flow") or 0)))[:200]]
     return {"date": date, "display": display, "all": all_rows,
             "customized": bool(cfg.get("customized")),
-            "default_limit": bf.EM_DEFAULT_INDUSTRIES}
+            "default_limit": limit}
+
+
+@router.get("/em-flow/industries")
+async def em_flow_industries(date: str | None = Query(None)):
+    """行业展示列表（自定义优先，否则按 |主力净流入| 前 40）+ 全量候选。"""
+    return await _em_board_list(date, "industry")
+
+
+@router.get("/em-flow/concepts")
+async def em_flow_concepts(date: str | None = Query(None)):
+    """概念展示列表（按 |主力净流入| 前 40）+ 全量候选。"""
+    return await _em_board_list(date, "concept")
 
 
 @router.post("/em-flow/config/add")
@@ -1199,11 +1218,11 @@ async def em_flow_config_reset():
 
 
 @router.get("/em-flow/series")
-async def em_flow_series(target_type: str = Query("index", description="index / industry / market"),
+async def em_flow_series(target_type: str = Query("index", description="index / industry / concept / market"),
                          code: str = Query(""),
                          date: str | None = Query(None)):
     """单个目标的 4 维资金分时（累计）。"""
-    kind = target_type if target_type in ("index", "industry", "market") else "index"
+    kind = target_type if target_type in ("index", "industry", "concept", "market") else "index"
     if not date:
         try:
             dates = await asyncio.to_thread(bf.available_dates, 1, "em")
@@ -1219,10 +1238,10 @@ async def em_flow_series(target_type: str = Query("index", description="index / 
             code = INDICES[0]["secid"]
         else:
             try:
-                rank = await asyncio.to_thread(bf.read_rank, date, "industry")
+                rank = await asyncio.to_thread(bf.read_rank, date, kind)
             except Exception:  # noqa: BLE001
                 rank = []
-            picked = bf.pick_em_industries(rank, 1)
+            picked = bf.pick_em_boards(rank, 1)
             code = picked[0]["code"] if picked else ""
 
     if not code:
@@ -1249,7 +1268,7 @@ async def em_flow_series(target_type: str = Query("index", description="index / 
     out = {"date": date, "code": code, "kind": kind, "axis": axis, "dims": dims,
            "name": meta.get("name") or code}
     if not axis:
-        out["error"] = "当日 4 维分时点不足（服务启动后从下一分钟开始累积）"
+        out["error"] = "该标的当日还没有 4 维分时点（新纳入采集的板块从下一个交易时段开始累积）"
     return out
 
 
@@ -1272,7 +1291,7 @@ async def board_index_rank(date: str | None = Query(None)):
 
     items = []
     for r in rows:
-        if r.get("kind") == "industry":
+        if r.get("kind") in ("industry", "concept"):
             continue
         nm = names.get(r["code"]) or r.get("name") or r["code"]
         items.append({"code": r["code"], "name": nm, "type": "index",

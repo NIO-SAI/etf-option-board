@@ -11,7 +11,7 @@ A 股 6 只可交易期权的宽基 ETF 的**日内决策看板**。后端 FastA
 Vite + Tailwind v4，深色看板，SSE 弹窗+声音告警。
 
 顶栏是一排页面标签（hash 路由 `#/options` 与 `#/board/*`）：**期权看板**外加从 stock-webui
-移植的**板块资金四页**（主力资金分时 / 主力资金多日 / ETF资金流 / 指数资金分时），
+移植的**板块资金四页**（主力资金分时 / 主力资金多日 / ETF资金流 / 四维资金），
 四页共用 `services/boardflow.py` 的本地 SQLite。规格见 `.scratch/board-flow/spec.md`、
 取舍见 `docs/adr/0003-板块资金单写路径与本地缓存.md`。
 四页的「实时 / 历史」标签统一由 `web/src/components/DayTag.tsx` 给出（所选日期 = 库里最新

@@ -228,6 +228,19 @@ class TestEmFlow:
         picked = bf.pick_em_industries(rank, limit=2)
         assert [p["code"] for p in picked] == ["BK2", "BK3"]
 
+    def test_pick_concepts_uses_same_abs_flow_rule(self):
+        """概念标签与行业共用同一套挑选规则：只要 BK 板块、按 |主力净流入| 取前 N。"""
+        rank = [
+            {"code": "BK11", "name": "概念甲", "flow": 3e8},
+            {"code": "BK12", "name": "概念乙", "flow": -8e8},
+            {"code": "BK13", "name": "概念丙", "flow": 5e8},
+            {"code": "000001", "name": "非板块", "flow": 9e9},
+        ]
+        picked = bf.pick_em_concepts(rank, limit=2)
+        assert [p["code"] for p in picked] == ["BK12", "BK13"]
+        assert picked[0]["name"] == "概念乙"
+        assert bf.pick_em_concepts([], limit=5) == []
+
 
 class TestPruneCoversAllTables:
     """ETF / 4 维 表也要按窗口裁剪（曾漏掉，库会无限增长）。

@@ -15,6 +15,7 @@ import { signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const TARGETS = [
+  { key: "concept", label: "概念" },
   { key: "index", label: "指数" },
   { key: "industry", label: "行业" },
 ];
@@ -30,12 +31,14 @@ const DIM_HINT: Record<string, string> = {
 type Row = { code: string; name: string; flow: number | null; pct: number | null };
 
 /**
- * 指数资金分时（原「东财资金分时」）：指数 / 行业 / 全 A 的 4 维主动净买额曲线。
- * 列表与顶部按钮结构对齐「主力资金分时」：左列表搜索/排序，右图例区切口径 + 日期标签。
+ * 四维资金（原「指数资金分时」）：概念 / 指数 / 行业的 4 维主动净买额曲线。
+ * 列表与顶部按钮结构对齐「主力资金分时」：左列表搜索/排序（单选、无勾选框），
+ * 右侧图为该目标的机构 / 大单 / 中户 / 散户。
  */
 export function EmFlowPage() {
   const initial = useMemo(() => readHashParams(), []);
-  const [kind, setKind] = useState(initial.kind === "industry" ? "industry" : "index");
+  const [kind, setKind] = useState(
+    initial.kind === "industry" ? "industry" : initial.kind === "concept" ? "concept" : "index");
   const [code, setCode] = useState(initial.code ?? "");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("flow");
@@ -49,6 +52,8 @@ export function EmFlowPage() {
   const { data: targets } = usePolling(() => api.emFlowTargets(), 60_000, [], { kind: "ctx", code: "em-targets" });
   const { data: industries, refresh: refreshIndustries } = usePolling(
     () => api.emFlowIndustries(), 300_000, [], { kind: "ctx", code: "em-industries" });
+  const { data: concepts } = usePolling(
+    () => api.emFlowConcepts(), 300_000, [], { kind: "ctx", code: "em-concepts" });
 
   const options: Row[] = useMemo(() => {
     if (kind === "index") {
@@ -56,10 +61,11 @@ export function EmFlowPage() {
         code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null,
       }));
     }
-    return (industries?.display ?? []).map((i: any) => ({
+    const src = kind === "concept" ? concepts?.display : industries?.display;
+    return (src ?? []).map((i: any) => ({
       code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null,
     }));
-  }, [kind, targets, industries]);
+  }, [kind, targets, industries, concepts]);
 
   // 目标缺省：指数取第一个、行业取展示列表第一个；当前选中不在本口径列表里也回落
   const effectiveCode = useMemo(() => {
@@ -130,7 +136,7 @@ export function EmFlowPage() {
     <main className="grid gap-3 p-3 xl:grid-cols-[320px_minmax(0,1fr)]">
       <FlowListPanel
         title="标的列表"
-        countText={`共 ${rows.length} 个 · 已选 ${rows.some((r) => r.code === effectiveCode) ? 1 : 0}`}
+        countText={`共 ${rows.length} 个 · 单击切换`}
         rows={rows.map((r) => ({
           code: r.code, name: r.name, flow: r.flow ?? 0, pct: r.pct,
           type: r.code.startsWith("BK") ? "industry" : "index",
@@ -146,9 +152,10 @@ export function EmFlowPage() {
           else { setSortKey(k); setSortDir(-1); }
         }}
         sortOptions={[{ key: "flow", label: "资金" }, { key: "pct", label: "涨幅" }]}
-        loading={kind === "index" ? !targets : !industries}
-        emptyTitle={kind === "index" ? "暂无指数数据" : "暂无行业数据"}
-        emptyHint={kind === "industry" ? "稍后重试或检查采集状态" : undefined}
+        showCheckbox={false}
+        loading={kind === "index" ? !targets : kind === "concept" ? !concepts : !industries}
+        emptyTitle={kind === "index" ? "暂无指数数据" : kind === "concept" ? "暂无概念数据" : "暂无行业数据"}
+        emptyHint={kind === "index" ? undefined : "稍后重试或检查采集状态"}
         maxHeight="calc(100vh - 15rem)"
       />
 
@@ -156,7 +163,7 @@ export function EmFlowPage() {
         <FramePanel dense className="flex min-h-0 flex-1 flex-col">
           <FrameHeader className="flex-row flex-wrap items-center justify-between gap-2 py-1.5">
             <div className="flex min-w-0 items-center gap-2">
-              <FrameTitle className="text-sm">{nameOf || "指数资金分时"}</FrameTitle>
+              <FrameTitle className="text-sm">{nameOf || "四维资金"}</FrameTitle>
               <Tabs tabs={TARGETS} value={kind} onChange={(k) => { setKind(k); setCode(""); setSearch(""); }} />
               <DayTag date={series?.date} latest={latestDay} />
             </div>
@@ -230,7 +237,7 @@ export function EmFlowPage() {
                 )}
                 <div className="mt-1 flex flex-wrap items-center justify-between gap-2 px-1 text-[10px] text-muted-foreground">
                   <span>纵轴为当日累计主动净买额（亿元）· 机构 / 大单 / 中户 / 散户 按单笔金额划分</span>
-                  <span>指数/全 A 每 30 秒采集，行业每 60 秒采集 · 默认取 |主力净流入| 前 {industries?.default_limit ?? 40} 个行业</span>
+                  <span>指数每 30 秒采集，行业 / 概念每 60 秒 · 行业、概念默认各取 |主力净流入| 前 {industries?.default_limit ?? 40} 个</span>
                 </div>
               </>
             )}

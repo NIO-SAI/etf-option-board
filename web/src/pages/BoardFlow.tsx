@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
-import { EmptyState, Skeleton } from "@/components/ui/misc";
+import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
 import { FlowListPanel } from "@/components/FlowListPanel";
 import { DayTag, isLiveDay } from "@/components/DayTag";
 import { BoardFlowChart, type FlowLine } from "@/components/charts";
@@ -399,20 +399,7 @@ export function BoardFlowPage() {
           <FrameHeader className="flex-row flex-wrap items-center justify-between gap-2 py-1.5">
             <div className="flex items-center gap-2">
               <FrameTitle className="text-sm">主力资金分时</FrameTitle>
-              <div className="flex items-center gap-0.5 rounded-md bg-muted/60 p-0.5">
-                {TYPES.map((t) => (
-                  <button
-                    key={t.key}
-                    type="button"
-                    onClick={() => { setType(t.key); setSearch(""); }}
-                    aria-pressed={type === t.key}
-                    className={cn("rounded px-2 py-0.5 text-[11px] transition-colors",
-                      type === t.key ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground")}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
+              <Tabs tabs={TYPES} value={type} onChange={(k) => { setType(k); setSearch(""); }} />
               <DayTag date={date} latest={latestDay} />
             </div>
             <div className="flex flex-wrap items-center gap-1.5 text-[11px]">

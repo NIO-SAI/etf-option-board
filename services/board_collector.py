@@ -210,14 +210,15 @@ async def _etf_cycle() -> None:
 # --------------------------------------------------------------------------
 _EM_INDEX_INTERVAL = 30
 _EM_INDUSTRY_INTERVAL = 60
-_em_last = {"index": 0.0, "industry": 0.0}
+_EM_CONCEPT_INTERVAL = 60
+_em_last = {"index": 0.0, "industry": 0.0, "concept": 0.0}
 _EM_FIELDS = "f57,f58,f140,f143,f146,f149,f170"
 
 
 async def _em_fetch(secid: str, kind: str, name: str = "") -> dict | None:
     q = await em.stock_get(secid, _EM_FIELDS, ttl=20.0)
     row = bf.parse_em_flow(secid, kind, q, name)
-    if row and kind == "industry":
+    if row and kind in ("industry", "concept"):
         # 存 BK 代码，查询统一用 BKxxxx（与板块排行、前端下拉一致）
         row["code"] = secid.split(".", 1)[-1]
     return row
@@ -247,6 +248,15 @@ async def _em_cycle(now: dt.datetime) -> None:
         picked = cfg["items"] if cfg.get("customized") and cfg.get("items") else bf.pick_em_industries(rank)
         # 板块 secid 必须是 90.BKxxxx（只传 BK 代码会全部失败并触发重试，拖慢整轮）
         targets += [(f"90.{t['code']}", "industry", t["name"]) for t in picked]
+
+    if mono - _em_last["concept"] >= _EM_CONCEPT_INTERVAL:
+        _em_last["concept"] = mono
+        try:
+            crank = await asyncio.to_thread(bf.read_rank, date, "concept")
+        except Exception:
+            crank = []
+        targets += [(f"90.{t['code']}", "concept", t["name"])
+                    for t in bf.pick_em_concepts(crank)]
 
     if not targets:
         return
