@@ -152,7 +152,7 @@ export function EtfList({
   etfs, futOpts = [], quotes, trendsMap, directions = {}, indices = [], selected, onSelect,
 }: {
   etfs: any[];
-  /** 股指期权标的（IO/MO/HO）。与 ETF 并列展示，但标「中金所」以示规则不同。 */
+  /** 股指品种（IO/HO/MO 期权 + 仅期货的 IC）。与 ETF 并列展示，但标「中金所」以示规则不同。 */
   futOpts?: any[];
   quotes: Record<string, any>;
   trendsMap: Record<string, number[]>;
@@ -222,7 +222,7 @@ export function EtfList({
           })}
           {futOpts.length > 0 && (
             <>
-              <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground">股指期权（{futOpts.length}）</div>
+              <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground">股指期权/期货（{futOpts.length}）</div>
               {futOpts.map((f) => {
                 const q = quotes[f.code];
                 const on = f.code === selected;

@@ -108,7 +108,7 @@ export function OptionsBoard() {
   }, [etfQuotes]);
 
   const etfs = universe?.etfs ?? [];
-  // 股指期权 IO/MO/HO 与 ETF 并列进左栏；选它时整页数据源切到 /strategy/{symbol}
+  // 股指品种 IO/HO/MO（期权）+ IC（仅期货）与 ETF 并列进左栏；选中后整页数据源切到 /strategy/{symbol}
   // 与 /etf/{symbol}（后端已按代码前缀分流），组件不变。
   const futOpts: any[] = universe?.fut_opts ?? [];
   const isFut = futOpts.some((f: any) => f.code === etfCode);
@@ -285,6 +285,8 @@ export function OptionsBoard() {
                 ) : ctx?.trends?.length ? (
                   <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexFlow={ctx.track?.flow ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} signals={revSignals?.items ?? []} prevClose={ctx.trends_prev_close ?? ctx.quote?.prev_close ?? null} indexPrevClose={ctx.track?.trends_prev_close ?? ctx.track?.quote?.prev_close ?? null}
                     name={isFut ? "指数" : "标的ETF"}
+                    flowStyle={isFut ? "bar" : "line"}
+                    flowLabel={isFut ? "指数主力净流入" : "标的主力净流入"}
                     support={support} resistance={resistance}
                     plan={strategy?.levels ? { entry: strategy.levels.entry_break, stop: strategy.levels.stop, target: strategy.levels.target } : null}
                     showLevels={lineToggles.levels} showPlan={lineToggles.plan}
@@ -299,7 +301,11 @@ export function OptionsBoard() {
 
         <Frame spacing="sm">
           <FramePanel dense>
-            {chainReady && !chain.error ? (
+            {chainReady && chain?.options === false ? (
+              <EmptyState className="m-3"
+                title="中金所暂无该品种股指期权"
+                hint="中证500 目前只有 IC 股指期货；本页展示指数行情、主力资金流与期现基差。" />
+            ) : chainReady && !chain.error ? (
               <OptionTQuote
                 chain={chain}
                 cacheTag={<CacheTag meta={chainCache} onRefresh={refreshChain} />}

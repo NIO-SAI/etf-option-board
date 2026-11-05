@@ -47,6 +47,9 @@ async def _fut_chain(code: str, month: int | None = None) -> dict:
     fut = ch.get("fut") or {}
     ch["etf"] = {"code": fut.get("code"), "name": fut.get("name"),
                  "secid": fut.get("underlying"), "track": fut.get("track")}
+    # 中证500(IC) 没有中金所股指期权：只回现货/期货基差上下文，别再造空链
+    if ch.get("options") is False:
+        return ch
     ch["t_quote"] = osvc.t_quote(ch, month)
     ch["ranked"] = {
         "call": osvc.rank_candidates(ch, "call", 6),
@@ -100,7 +103,7 @@ async def health():
 
 @router.get("/universe")
 async def universe():
-    # fut_opts：股指期权 IO/MO/HO 与 ETF 并列进左栏（前端按 code 是否在此判定数据源）。
+    # fut_opts：股指期权 IO/HO/MO 与股指期货 IC（无期权链）并列进左栏（前端按 code 是否在此判定数据源）。
     from services.index_option import FUT_OPTS
     return {"etfs": ETFS, "indices": INDICES, "external": EXTERNAL,
             "national_team_etfs": NATIONAL_TEAM_ETFS, "fut_opts": FUT_OPTS}
@@ -124,10 +127,10 @@ async def index_levels_view():
 
 @router.get("/etfs")
 async def etfs_quotes():
-    """6 只 ETF + 3 只股指期权标的的轻量快照（供左侧列表快速刷新）。
+    """6 只 ETF + 4 个股指品种（IO/HO/MO + 仅期货的 IC）的轻量快照（供左侧列表快速刷新）。
 
     股指期权按**标的指数**取价（IO→000300、MO→000852、HO→000016），
-    并把 code 改写成 IO/MO/HO——行情接口回的 f57 是纯指数代码，前端按 IO/MO/HO 索引。
+    并把 code 改写成 IO/HO/MO/IC——行情接口回的 f57 是纯指数代码，前端按品种代码索引。
     """
     from services.index_option import FUT_OPTS
     res = await asyncio.gather(*[ms.quote(e["secid"]) for e in ETFS],
@@ -144,7 +147,7 @@ async def etfs_quotes():
 
 @router.get("/directions")
 async def directions():
-    """6 只 ETF + 3 只股指期权的实时综合方向（看多/看空/观望）+ 当日最新变盘点，供左侧列表标签。
+    """6 只 ETF + 4 个股指品种的实时综合方向（看多/看空/观望）+ 当日最新变盘点，供左侧列表标签。
 
     注意：综合方向（strategy.bias_score 多因子合力，阈值 ±15）已把「变盘点」作为加分
     因子并入（reversal.factor，±15，60 分钟衰减），二者同源；此处另返回当日最新变盘点，
@@ -178,7 +181,7 @@ async def picks_top(n: int = 6, force: int = 0):
 
 @router.get("/etfs/spark")
 async def etfs_spark():
-    """6 只 ETF + 3 只股指期权 + 底栏两个大盘指数的日内收盘价序列（供列表迷你走势）。
+    """6 只 ETF + 4 个股指品种 + 底栏两个大盘指数的日内收盘价序列（供列表迷你走势）。
 
     板块代码（47.800005 A股平均股价）没有腾讯映射、push2 分时又被反爬打空，
     必须走 trends_or_snapshot 的 emdatah5 快照累积，否则永远是空曲线。
@@ -337,7 +340,7 @@ async def option_quote(secid: str):
 
 @router.get("/index-option/overview")
 async def index_option_overview():
-    """股指期权 IO/MO/HO 概览（方向评分 + 建议）。"""
+    """股指品种（IO/HO/MO 期权 + IC 期货）概览（方向评分 + 建议）。"""
     from services import index_option as idxo
     return await idxo.overview()
 

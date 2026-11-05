@@ -22,14 +22,21 @@ from services import strategy, vol
 
 log = logging.getLogger("indexopt")
 
-# 中金所三个品种：东财市场码 221，期权共用同一市场
+# 中金所品种：东财市场码 221 是期权，8 是股指期货。
+# 期权只有 IO(沪深300)/HO(上证50)/MO(中证1000)；**中证500 没有股指期权**，
+# 只有股指期货 IC，所以 IC 用 options=False 标记：页面照常展示指数行情/资金流/
+# 期现基差（基差直接用 IC 主力合约，见 _futures_basis），但没有期权链。
 _INDEX_MARKET = 221
+_FUTURES_MARKET = 8
 _INDEX_FIELDS = ("f12,f13,f14,f2,f3,f4,f5,f6,f15,f16,f17,f18,f31,f32,f108")
 
 FUT_OPTS = [
     {"code": "MO", "name": "中证1000", "underlying": "1.000852", "track": "中证1000"},
     {"code": "IO", "name": "沪深300", "underlying": "1.000300", "track": "沪深300"},
     {"code": "HO", "name": "上证50", "underlying": "1.000016", "track": "上证50"},
+    # 中证500：仅股指期货 IC（主力合约为 8.060130），无期权链
+    {"code": "IC", "name": "中证500", "underlying": "1.000905", "track": "中证500",
+     "options": False, "futures": "8.060130"},
 ]
 _BY_CODE = {f["code"]: f for f in FUT_OPTS}
 
@@ -132,9 +139,10 @@ async def chain(symbol: str) -> dict:
     if not fut:
         return {"error": f"未知股指期权品种 {symbol}"}
     today = dt.date.today()
+    has_options = fut.get("options", True)
     q, raw = await asyncio.gather(
         em.stock_get(fut["underlying"], "f43,f44,f45,f46,f47,f48,f57,f58,f60,f169,f170,f171"),
-        _raw_chain(symbol),
+        _raw_chain(symbol) if has_options else asyncio.sleep(0, result=[]),
     )
     s = em.num(q.get("f43")) if q else 0.0
     underlying = {
@@ -158,6 +166,7 @@ async def chain(symbol: str) -> dict:
     front = expiries[0]["month"] if expiries else None
     return {
         "symbol": symbol, "fut": fut, "underlying": underlying,
+        "options": has_options,
         "expiries": [e["month"] for e in expiries],
         "expiry_list": expiries,
         "front_month": front,
@@ -339,6 +348,8 @@ async def state(symbol: str) -> dict:
     flow = flow if isinstance(flow, dict) else None
     kline = kline if isinstance(kline, list) else []
     basis = _basis_info(ch, spot)
+    if basis is None and fut.get("futures"):
+        basis = await _futures_basis(fut["futures"], spot)
     b = bias(tr, [{"price": spot, "high": underlying.get("high"),
                    "low": underlying.get("low")}], flow, basis)
     ivrv = iv_rv(ch, kline)
@@ -377,6 +388,25 @@ def _basis_info(ch: dict, spot: float) -> dict | None:
     return {"price": round(fwd, 2),
             "basis_pct": round((fwd / spot - 1) * 100, 3),
             "spot": round(spot, 2)}
+
+
+async def _futures_basis(secid: str, spot: float) -> dict | None:
+    """没有期权链的品种（中证500/IC）用**股指期货主力合约**算期现基差。
+
+    期权品种的基差由平值认购/认沽反解隐含远期（见 _basis_info）；IC 没有期权，
+    直接取期货主力合约最新价与现货比，口径与前端「期指基差」一致。
+    """
+    if not spot:
+        return None
+    try:
+        q = await em.stock_get(secid, "f2,f12,f14,f43", ttl=20.0)
+    except Exception:  # noqa: BLE001 — 基差拿不到不影响主流程
+        return None
+    px = em.num((q or {}).get("f2")) or em.num((q or {}).get("f43"))
+    if not px:
+        return None
+    return {"price": round(px, 2), "basis_pct": round((px / spot - 1) * 100, 3),
+            "spot": round(spot, 2), "source": "future"}
 
 
 async def overview() -> dict:

@@ -106,6 +106,7 @@ export function IntradayChart({
   trends, indexTrends = [], indexName = "", flow, indexFlow = [], height = 240, title, id, signals = [],
   prevClose = null, indexPrevClose = null, name = "标的ETF", support = [], resistance = [],
   plan = null, showLevels = true, showPlan = true,
+  flowStyle = "line", flowLabel = "标的主力净流入",
 }: {
   trends: any[];
   indexTrends?: any[];
@@ -124,6 +125,10 @@ export function IntradayChart({
   plan?: any;
   showLevels?: boolean;
   showPlan?: boolean;
+  /** 主力净流入的画法：ETF 用线（避免和关联指数柱叠在一起）；股指期货/期权用柱。 */
+  flowStyle?: "line" | "bar";
+  /** 图例名：股指品种的「标的」就是指数本身，叫「指数主力净流入」更贴切。 */
+  flowLabel?: string;
 }) {
   const [legendSel, legendEvents] = useLegendSelected();
   const option = useMemo(() => {
@@ -233,7 +238,7 @@ export function IntradayChart({
         top: 0, left: 6, itemWidth: 12, itemHeight: 8, itemGap: 10,
         textStyle: { color: AXIS, fontSize: 10 },
         selected: legendSel,
-        data: [...(etfPct ? [name] : []), ...(hasIdx ? [idxLabel] : []), "标的主力净流入", ...(hasIdxFlow ? ["指数主力净流入"] : [])],
+        data: [...(etfPct ? [name] : []), ...(hasIdx ? [idxLabel] : []), flowLabel, ...(hasIdxFlow ? ["指数主力净流入"] : [])],
       },
       tooltip: {
         ...base.tooltip,
@@ -245,7 +250,7 @@ export function IntradayChart({
             let val = "—";
             if (p.value !== null && p.value !== undefined && isFinite(n)) {
               // 价格系列已是百分比；资金仍是金额（元），按统一口径「亿/万」显示
-              const isFlow = p.seriesName === "标的主力净流入" || p.seriesName === "指数主力净流入";
+              const isFlow = p.seriesName === flowLabel || p.seriesName === "指数主力净流入";
               val = isFlow ? signedFlow(n) : `${n.toFixed(2)}%`;
             }
             return `${p.marker}${p.seriesName} <b>${val}</b>`;
@@ -294,13 +299,16 @@ export function IntradayChart({
         { name: idxLabel, type: "line", yAxisIndex: 0, data: idxPct ?? [], showSymbol: false, connectNulls: false,
           lineStyle: { width: 1.3, color: "#d97706", type: "dashed" },
           ...(!etfPct && idxPct ? { markLine: zeroLine } : {}) },
-        { name: "标的主力净流入", type: "line", yAxisIndex: 2, data: mains, showSymbol: false,
-          lineStyle: { width: 1.3, color: "#7c3aed" } },
+        flowStyle === "bar"
+          ? { name: flowLabel, type: "bar", yAxisIndex: 2, data: mains, barWidth: "55%",
+              itemStyle: { color: (p: any) => ((p.value ?? 0) >= 0 ? "rgba(239,68,68,0.55)" : "rgba(34,197,94,0.55)") } }
+          : { name: flowLabel, type: "line", yAxisIndex: 2, data: mains, showSymbol: false,
+              lineStyle: { width: 1.3, color: "#7c3aed" } },
         { name: "指数主力净流入", type: "bar", yAxisIndex: 3, data: imains, barWidth: "55%",
           itemStyle: { color: (p: any) => (p.value >= 0 ? "rgba(239,68,68,0.5)" : "rgba(34,197,94,0.5)") } },
       ],
     };
-  }, [trends, indexTrends, indexName, flow, indexFlow, signals, prevClose, indexPrevClose, name, support, resistance, plan, showLevels, showPlan, legendSel]);
+  }, [trends, indexTrends, indexName, flow, indexFlow, signals, prevClose, indexPrevClose, name, support, resistance, plan, showLevels, showPlan, legendSel, flowStyle, flowLabel]);
   return <ReactECharts key={id} option={option} notMerge onEvents={legendEvents} style={{ height }} />;
 }
 

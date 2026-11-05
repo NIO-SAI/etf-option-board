@@ -121,3 +121,21 @@ class TestIvRvNote:
         chain = {"stats": {"atm_iv": 20.0, "atm_iv_pctl20": 90}}
         note = idx._iv_note(chain, {"atm_iv": 20.0, "rv20": 10.0, "ratio": 2.0})
         assert "90% 分位" in note and "偏贵" in note
+
+
+class TestUniverse:
+    """中证500 没有中金所股指期权，只有 IC 股指期货（2026-11-05 补入）。"""
+
+    def test_ic_present_without_option_chain(self):
+        fut = idx.FUT_OPTS and next((f for f in idx.FUT_OPTS if f["code"] == "IC"), None)
+        assert fut is not None
+        assert fut["underlying"] == "1.000905"          # 中证500 现货
+        assert fut["options"] is False                  # 没有期权链
+        assert fut["futures"] == "8.060130"             # IC 主力合约（算期现基差用）
+
+    def test_option_products_still_have_chains(self):
+        opt = [f for f in idx.FUT_OPTS if f.get("options", True)]
+        assert {f["code"] for f in opt} == {"IO", "HO", "MO"}
+
+    def test_by_code_covers_every_listed_product(self):
+        assert set(idx._BY_CODE) == {f["code"] for f in idx.FUT_OPTS}
