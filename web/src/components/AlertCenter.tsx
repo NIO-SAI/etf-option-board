@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, EmptyState, HoverTip } from "@/components/ui/misc";
 import { api } from "@/lib/api";
 import { subscribeAlerts } from "@/lib/alertBus";
-import { notifyPermission, requestNotifyPermission, autoPromptPermissionOnce, reportNotifyState } from "@/lib/notify";
+import { notifyPermission, requestNotifyPermission, autoPromptPermissionOnce, reportNotifyState, showNotification } from "@/lib/notify";
 import { clsUpDown, signedFlow } from "@/lib/format";
 import { AlertTriangle, BellRing, Volume2 } from "lucide-react";
 
@@ -66,6 +66,28 @@ export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void })
     else if (p === "denied") toast("浏览器通知被拒绝", { description: "请在地址栏左侧站点设置里重新允许通知。" });
   };
 
+  // 测试通知：只在本浏览器弹一条，走与真实告警相同的 showNotification；
+  // 不调 /api/admin/test-alert——那会推给所有在线设备并写进告警历史。
+  const onTest = async () => {
+    let p = notifyPermission();
+    if (p === "default") {
+      p = await requestNotifyPermission();
+      setPerm(p);
+    }
+    reportNotifyState("test");
+    if (p === "granted") {
+      const at = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+      showNotification({ title: "【测试】浏览器通知", text: `看到这条系统通知，说明盘中告警可以正常弹出（${at}）。` });
+      toast("已发送测试通知", {
+        description: "没看到系统弹窗？检查系统通知设置是否允许浏览器（macOS：系统设置 → 通知 → Google Chrome），以及是否开着专注/勿扰模式。",
+      });
+    } else if (p === "denied") {
+      toast("浏览器通知被拒绝", { description: "请在地址栏左侧站点设置里重新允许通知，再点一次测试。" });
+    } else if (p === "unsupported") {
+      toast("当前地址不支持浏览器通知", { description: "通知只在 HTTPS 或 localhost 下可用；跨设备请用 HTTPS 入口访问。" });
+    }
+  };
+
   // 切到告警对应标的：关闭弹窗；窄屏（单列）时右栏在下方，顺带滚到行情图
   const jump = (code?: string) => {
     if (!code || !onSelect) return;
@@ -96,6 +118,10 @@ export function AlertCenter({ onSelect }: { onSelect?: (code: string) => void })
           <FrameHeader className="flex-row items-center justify-between">
             <FrameTitle className="flex items-center gap-1.5 text-xs">
               <BellRing className="size-3.5 text-warning" /> 实时告警
+              <Button variant="outline" size="xs" className="h-5 px-1.5 text-[10px] font-normal" onClick={onTest}
+                title="在本浏览器弹一条测试通知，验证系统通知能否正常弹出（不推给其它设备、不进告警列表）">
+                测试通知
+              </Button>
             </FrameTitle>
             <span className="flex items-center gap-1.5">
               <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
