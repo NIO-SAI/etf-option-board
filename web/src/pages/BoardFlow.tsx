@@ -65,8 +65,11 @@ export function BoardFlowPage() {
   const { data: datesView } = usePolling(() => api.boardDates(60), 600_000, [], { kind: "ctx", code: "board-dates" });
   const dates: string[] = datesView?.dates ?? [];
 
+  // 排行响应里记下「这次请求用的日期」：usePolling 切 deps 时不清空旧 data，
+  // 直接拿 rankView.date 回填「今日」的落点，会把日期弹回上一次的历史日期，
+  // 请求还没来得及发就被改回历史 → 点「今日」看起来毫无反应。
   const { data: rankView, refresh: refreshRank } = usePolling(
-    () => api.boardRank("all", date || undefined),
+    () => api.boardRank("all", date || undefined).then((d) => ({ ...d, _asked: date })),
     interval,
     [interval, date],
     { kind: "brank", code: `all:${date || "latest"}` },
@@ -87,10 +90,12 @@ export function BoardFlowPage() {
   }, [watchView]);
   const watchSet = useMemo(() => new Set(watchItems.map((i) => i.code)), [watchItems]);
 
-  // 下拉不再提供「最新」伪选项：进入时把日期固定到库内最新交易日
+  // 下拉不再提供「最新」伪选项：进入时把日期固定到库内最新交易日。
+  // 只认「无日期请求」回来的响应，历史日期的旧响应不能当落点（见上面 _asked 注释）。
+  const latestDate = rankView?._asked === "" ? rankView?.date : "";
   useEffect(() => {
-    if (!date && rankView?.date) setDate(rankView.date);
-  }, [date, rankView?.date]);
+    if (!date && latestDate) setDate(latestDate);
+  }, [date, latestDate]);
 
   const refresh = useCallback(() => {
     cache.current = {};
@@ -576,7 +581,7 @@ export function BoardFlowPage() {
 
       <BoardDetailDrawer
         selected={detailCode}
-        date={date || rankView?.date || ""}
+        date={date || latestDate || ""}
         onClose={() => setDetailCode(null)}
       />
     </main>
