@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS etf_rank_snapshots (
     pct REAL NOT NULL DEFAULT 0,
     rank INTEGER,
     ts TEXT,
+    speed REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (date, code)
 );
 CREATE TABLE IF NOT EXISTS etf_flow_points (
@@ -287,6 +288,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(em_flow_points)").fetchall()}
     if "pct" not in cols:
         conn.execute("ALTER TABLE em_flow_points ADD COLUMN pct REAL NOT NULL DEFAULT 0")
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(etf_rank_snapshots)").fetchall()}
+    if "speed" not in cols:
+        conn.execute("ALTER TABLE etf_rank_snapshots ADD COLUMN speed REAL NOT NULL DEFAULT 0")
 
 
 def init_db() -> None:
@@ -532,7 +536,7 @@ def read_rank_range(start: str, end: str, board_type: str | None = None) -> list
     盘后被更新过的交易日同样改用当日分时末端（见 `_daily_flow_fix`），
     否则「主力资金多日图」的区间累计会和详情页「近 20 日」对不上。
     """
-    sql = ("SELECT date, code, name, type, flow, pct FROM rank_snapshots "
+    sql = ("SELECT date, code, name, type, flow, pct, speed FROM rank_snapshots "
            "WHERE date BETWEEN ? AND ?")
     args: list = [start, end]
     if board_type:
@@ -567,7 +571,7 @@ def aggregate_daily(rows: Iterable[dict], dates: list[str]) -> list[dict]:
         if item is None:
             item = acc[code] = {"code": code, "name": r.get("name") or code,
                                 "type": r.get("type"), "total": 0.0, "days": 0,
-                                "pct": 0.0, "last_date": "",
+                                "pct": 0.0, "speed": 0.0, "last_date": "",
                                 "values": [None] * len(dates)}
         flow = r.get("flow")
         try:
@@ -579,6 +583,11 @@ def aggregate_daily(rows: Iterable[dict], dates: list[str]) -> list[dict]:
         # 列表里的「涨幅」= 区间内各交易日涨跌幅之和（用户口径：统计区间累计涨幅）
         if str(r.get("date") or "") >= item["last_date"]:
             item["last_date"] = str(r.get("date") or "")
+            # 区间页的「涨速」取最新交易日的瞬时涨速
+            try:
+                item["speed"] = float(r.get("speed") or 0)
+            except (TypeError, ValueError):
+                pass
         try:
             item["pct"] = round(float(item["pct"] or 0) + float(r.get("pct") or 0), 4)
         except (TypeError, ValueError):
@@ -667,7 +676,7 @@ def parse_etf_quote(code: str, data: dict | None) -> dict | None:
     if data.get("f137") in (None, "", "-"):
         return None
     return {"code": code, "name": str(data.get("f58") or code),
-            "flow": num("f137"), "pct": num("f170"),
+            "flow": num("f137"), "pct": num("f170"), "speed": num("f22"),
             "super": num("f140"), "large": num("f143"),
             "medium": num("f146"), "small": num("f149")}
 
@@ -684,12 +693,12 @@ def save_etf_cycle(date: str, hhmm: str, rows: list[dict]) -> int:
             "ON CONFLICT(code) DO UPDATE SET name=excluded.name, type=excluded.type",
             [(r["code"], r["name"], r["type"]) for r in ranked])
         conn.executemany(
-            "INSERT INTO etf_rank_snapshots(date,code,name,type,flow,pct,rank,ts) "
-            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(date,code) DO UPDATE SET "
+            "INSERT INTO etf_rank_snapshots(date,code,name,type,flow,pct,rank,ts,speed) "
+            "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(date,code) DO UPDATE SET "
             "name=excluded.name, type=excluded.type, flow=excluded.flow, "
-            "pct=excluded.pct, rank=excluded.rank, ts=excluded.ts",
+            "pct=excluded.pct, rank=excluded.rank, ts=excluded.ts, speed=excluded.speed",
             [(date, r["code"], r["name"], r["type"], float(r["flow"]), float(r["pct"]),
-              i, ts) for i, r in enumerate(ranked, start=1)])
+              i, ts, float(r.get("speed") or 0)) for i, r in enumerate(ranked, start=1)])
         conn.executemany(
             "INSERT INTO etf_flow_points(date,code,time,main,super_,large,medium,small) "
             "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(date,code,time) DO UPDATE SET "
@@ -704,7 +713,8 @@ def save_etf_cycle(date: str, hhmm: str, rows: list[dict]) -> int:
 def read_etf_rank(date: str) -> list[dict]:
     with _db() as conn:
         cur = conn.execute(
-            "SELECT code,name,type,flow,pct,rank,ts FROM etf_rank_snapshots WHERE date=? ORDER BY flow DESC",
+            "SELECT code,name,type,flow,pct,rank,ts,speed FROM etf_rank_snapshots "
+            "WHERE date=? ORDER BY flow DESC",
             (date,))
         cols = [c[0] for c in cur.description]
         return [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -776,16 +786,17 @@ def update_etf_watch(add: dict | None = None, remove: str | None = None) -> tupl
 EM_DEFAULT_INDUSTRIES = 40
 EM_DEFAULT_CONCEPTS = 40
 
-EM_MARKET_CODE = "47.800000"
-EM_MARKET_NAME = "东方财富全A"
+# 不展示也不采集的指数（用户要求去掉）：47.800000 东方财富全A、1.000985 中证全指。
+# 库里可能还有历史行，读接口要一并过滤（见 /board/index-rank）。
+EM_HIDDEN: dict[str, str] = {"47.800000": "东方财富全A", "1.000985": "中证全指"}
 
 # 指数中文名（含未进 universe.INDICES 但历史数据里有的，如中证2000 2.932000）
 INDEX_NAMES: dict[str, str] = {
     "1.000001": "上证指数", "1.000016": "上证50", "1.000300": "沪深300",
     "1.000905": "中证500", "1.000852": "中证1000", "1.000688": "科创50",
-    "0.399006": "创业板指", "0.399001": "深证成指", "1.000985": "中证全指",
+    "0.399006": "创业板指", "0.399001": "深证成指",
     "0.899050": "北证50", "2.932000": "中证2000",
-    "47.800000": "东方财富全A", "47.800005": "A股平均股价",
+    "47.800005": "A股平均股价",
 }
 
 

@@ -696,6 +696,8 @@ export function MoneyLinesChart({
 }) {
   const shown = (series ?? []).slice(0, maxLines);
   const [chart, setChart] = useState<any>(null);
+  // 悬停右侧标签 → 对应分时线加粗并变红/绿，其余淡出（与主力资金分时一致）
+  const [hoverCode, setHoverCode] = useState<string | null>(null);
   const option = useMemo(() => ({
     animation: false,
     color: MONEY_COLORS,
@@ -738,18 +740,29 @@ export function MoneyLinesChart({
       axisLabel: { color: AXIS, fontSize: 10, formatter: (v: number) => signedFlow(v) },
       splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
     },
-    series: shown.map((s) => ({
-      name: s.name,
-      type: "line",
-      showSymbol: false,
-      smooth: false,
-      connectNulls: false,
-      ...(mode === "stack"
-        ? { stack: "total", areaStyle: { opacity: 0.35 }, lineStyle: { width: 1 } }
-        : { lineStyle: { width: s.watch ? 2.4 : 1.4 } }),
-      data: s.values,
-    })),
-  }), [axis, shown, mode, vLines, endLabels]);
+    series: shown.map((s, i) => {
+      const focus = hoverCode === s.code;
+      const dim = !!hoverCode && !focus;
+      let last: number | null = null;
+      for (let k = s.values.length - 1; k >= 0; k--) {
+        if (s.values[k] != null) { last = s.values[k] as number; break; }
+      }
+      const color = focus ? ((last ?? 0) >= 0 ? "#ef4444" : "#22c55e")
+        : MONEY_COLORS[i % MONEY_COLORS.length];
+      return {
+        name: s.name,
+        type: "line",
+        showSymbol: false,
+        smooth: false,
+        connectNulls: false,
+        z: focus ? 5 : 2,
+        ...(mode === "stack"
+          ? { stack: "total", areaStyle: { opacity: dim ? 0.07 : 0.35 }, lineStyle: { width: focus ? 2.6 : 1, opacity: dim ? 0.18 : 1, color } }
+          : { lineStyle: { width: focus ? 3.2 : s.watch ? 2.4 : 1.4, opacity: dim ? 0.18 : 1, color } }),
+        data: s.values,
+      };
+    }),
+  }), [axis, shown, mode, vLines, endLabels, hoverCode]);
 
   const labels = useMemo<EndLabelItem[]>(() => {
     if (!endLabels) return [];
@@ -767,10 +780,11 @@ export function MoneyLinesChart({
         color: MONEY_COLORS[i % MONEY_COLORS.length],
         coord: [idx, v],
         weight: Math.abs(v),
+        active: hoverCode === s.code,
       });
     });
     return out;
-  }, [shown, endLabels]);
+  }, [shown, endLabels, hoverCode]);
 
   // 参考线：半小时竖虚线（单日）/ 日分隔线（多日）+ y=0 横线
   const withGuides = (opt: any) => {
@@ -794,7 +808,8 @@ export function MoneyLinesChart({
         onChartReady={setChart} />
       {endLabels && (
         <FlowEndLabels chart={chart} items={labels} version={labelVersion}
-          gridTop={10} gridRight={LABEL_GUTTER} gridBottom={22} />
+          gridTop={10} gridRight={LABEL_GUTTER} gridBottom={22}
+          onHover={setHoverCode} />
       )}
     </div>
   );
@@ -1191,6 +1206,7 @@ export function BoardFlowChart({
         gridTop={30}
         gridRight={LABEL_GUTTER}
         gridBottom={34}
+        onHover={onHoverCode}
       />
     </div>
   );

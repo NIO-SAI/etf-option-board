@@ -35,7 +35,7 @@ const DIM_HINT: Record<string, string> = {
 };
 
 type Row = {
-  code: string; name: string; flow: number | null; pct: number | null;
+  code: string; name: string; flow: number | null; pct: number | null; speed?: number | null;
   /** 该行所属口径（热门里概念/行业混排，取分时要用行自身的 kind） */
   kind?: "concept" | "industry" | "index";
 };
@@ -98,12 +98,13 @@ export function EmFlowPage() {
   const options: Row[] = useMemo(() => {
     if (kind === "index") {
       return (targets?.indices ?? []).map((i: any) => ({
-        code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null, kind: "index" as const,
+        code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null,
+        speed: i.speed ?? 0, kind: "index" as const,
       }));
     }
     if (kind === "hot") {
       const items = (hotView?.items ?? []).map((i: any) => ({
-        code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null,
+        code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null, speed: i.speed ?? 0,
         kind: (i.type === "industry" ? "industry" : "concept") as "concept" | "industry",
       }));
       return items.length ? items : fallbackHot;
@@ -112,20 +113,21 @@ export function EmFlowPage() {
       // 用三份列表拼一个 code → 行 的索引，尽量带上资金/涨幅；找不到就只显示名称
       const lookup = new Map<string, Row>();
       const put = (arr: any[], k: Row["kind"]) => (arr ?? []).forEach((i: any) => {
-        lookup.set(i.code, { code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null, kind: k });
+        lookup.set(i.code, { code: i.code, name: i.name, flow: i.flow ?? null,
+                             pct: i.pct ?? null, speed: i.speed ?? 0, kind: k });
       });
       put(targets?.indices, "index");
       put(concepts?.display, "concept");
       put(industries?.display, "industry");
       return watchItems.map((w) => lookup.get(w.code) ?? {
-        code: w.code, name: w.name, flow: null, pct: null,
+        code: w.code, name: w.name, flow: null, pct: null, speed: 0,
         kind: w.code.startsWith("BK") ? "concept" : "index",
       });
     }
     const src = kind === "concept" ? concepts?.display : industries?.display;
     return (src ?? []).map((i: any) => ({
       code: i.code, name: i.name, flow: i.flow ?? null, pct: i.pct ?? null,
-      kind: kind as "concept" | "industry",
+      speed: i.speed ?? 0, kind: kind as "concept" | "industry",
     }));
   }, [kind, targets, industries, concepts, hotView, fallbackHot, watchItems]);
 
@@ -139,11 +141,9 @@ export function EmFlowPage() {
     const kw = search.trim();
     let list = options;
     if (kw) list = list.filter((o) => o.name.includes(kw) || o.code.toLowerCase().includes(kw.toLowerCase()));
-    return [...list].sort((a, b) => {
-      const va = (sortKey === "pct" ? a.pct : a.flow) ?? 0;
-      const vb = (sortKey === "pct" ? b.pct : b.flow) ?? 0;
-      return (va - vb) * sortDir;
-    });
+    const val = (r: Row) =>
+      sortKey === "pct" ? (r.pct ?? 0) : sortKey === "speed" ? (r.speed ?? 0) : (r.flow ?? 0);
+    return [...list].sort((a, b) => (val(a) - val(b)) * sortDir);
   }, [options, search, sortKey, sortDir]);
 
   const selected = useMemo(
@@ -255,7 +255,7 @@ export function EmFlowPage() {
           if (k === sortKey) setSortDir((d) => -d);
           else { setSortKey(k); setSortDir(-1); }
         }}
-        sortOptions={[{ key: "flow", label: "资金" }, { key: "pct", label: "涨幅" }]}
+        sortOptions={[{ key: "pct", label: "涨幅" }, { key: "speed", label: "涨速" }, { key: "flow", label: "资金" }]}
         showCheckbox={false}
         onToggleWatch={(r) => void toggleWatch({ code: r.code, name: r.name })}
         watchBusy={watchBusy}

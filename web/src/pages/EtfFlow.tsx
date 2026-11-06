@@ -15,8 +15,9 @@ import { signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const SCOPES = [
-  { key: "all", label: "全部" },
-  { key: "watch", label: "自选" },
+  { key: "wide", label: "宽基" },
+  { key: "narrow", label: "窄基" },
+  { key: "watch", label: "自定义" },
 ];
 // 不限制曲线条数（用户要求：能显示多少就显示多少）
 const MAX_LINES = Number.MAX_SAFE_INTEGER;
@@ -56,7 +57,9 @@ function DimCards({
 export function EtfFlowPage() {
   const initial = useMemo(() => readHashParams(), []);
   const initCodes = parseCodes(initial.codes);
-  const [scope, setScope] = useState(initial.scope ?? "all");
+  // 旧链接里的 scope=all 归到「宽基」；宽基=broad、窄基=sector
+  const [scope, setScope] = useState(() =>
+    initial.scope === "watch" ? "watch" : initial.scope === "narrow" ? "narrow" : "wide");
   const [view, setView] = useState<"series" | "4dim">(initial.view === "4dim" ? "4dim" : "series");
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("flow");
@@ -93,20 +96,23 @@ export function EtfFlowPage() {
   const all: FlowRow[] = useMemo(
     () => (data?.items ?? []).map((r: any) => ({
       code: r.code, name: r.name, type: r.type, flow: r.flow ?? 0,
-      pct: r.pct ?? null, watch: watchSet.has(r.code),
+      pct: r.pct ?? null, speed: r.speed ?? 0, watch: watchSet.has(r.code),
     })),
     [data, watchSet],
   );
-  const baseRows = useMemo(() => (scope === "watch" ? all.filter((r) => r.watch) : all), [all, scope]);
+  const baseRows = useMemo(() => {
+    if (scope === "watch") return all.filter((r) => r.watch);
+    if (scope === "wide") return all.filter((r) => r.type === "broad");
+    if (scope === "narrow") return all.filter((r) => r.type === "sector");
+    return all;
+  }, [all, scope]);
   const rows = useMemo(() => {
     const kw = search.trim().toLowerCase();
     let list = baseRows;
     if (kw) list = list.filter((r) => r.name.toLowerCase().includes(kw) || r.code.includes(kw));
-    return [...list].sort((a, b) => {
-      const va = sortKey === "pct" ? (a.pct ?? 0) : a.flow;
-      const vb = sortKey === "pct" ? (b.pct ?? 0) : b.flow;
-      return (va - vb) * sortDir;
-    });
+    const val = (r: FlowRow) =>
+      sortKey === "pct" ? (r.pct ?? 0) : sortKey === "speed" ? (r.speed ?? 0) : r.flow;
+    return [...list].sort((a, b) => (val(a) - val(b)) * sortDir);
   }, [baseRows, search, sortKey, sortDir]);
 
   const baseKey = useMemo(() => baseRows.map((r) => r.code).sort().join(","), [baseRows]);
@@ -293,7 +299,7 @@ export function EtfFlowPage() {
           if (k === sortKey) setSortDir((d) => -d);
           else { setSortKey(k); setSortDir(-1); }
         }}
-        sortOptions={[{ key: "pct", label: "涨幅" }, { key: "flow", label: "资金" }]}
+        sortOptions={[{ key: "pct", label: "涨幅" }, { key: "speed", label: "涨速" }, { key: "flow", label: "资金" }]}
         onBatch={dimView ? undefined : batch}
         showCheckbox={!dimView}
         onToggleWatch={toggleWatch}
@@ -308,8 +314,8 @@ export function EtfFlowPage() {
           }
         }}
         loading={!data}
-        emptyTitle={scope === "watch" ? "还没有自选 ETF" : "暂无 ETF 数据"}
-        emptyHint={scope === "watch" ? "在「全部」里点 + 加入自选" : undefined}
+        emptyTitle={scope === "watch" ? "还没有自定义 ETF" : "暂无 ETF 数据"}
+        emptyHint={scope === "watch" ? "在「宽基 / 窄基」里点行尾 ＋ 加入自定义" : undefined}
         maxHeight="calc(100vh - 20rem)"
       />
 

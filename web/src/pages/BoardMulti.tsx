@@ -140,11 +140,9 @@ export function BoardMultiPage() {
       list = list.filter((i) => i.name.includes(raw) || i.code.toLowerCase().includes(kw)
         || String(i.py ?? "").includes(kw));
     }
-    return [...list].sort((a, b) => {
-      const va = sortKey === "pct" ? (a.pct ?? 0) : a.total;
-      const vb = sortKey === "pct" ? (b.pct ?? 0) : b.total;
-      return (va - vb) * sortDir;
-    });
+    const val = (r: any) =>
+      sortKey === "pct" ? (r.pct ?? 0) : sortKey === "speed" ? (r.speed ?? 0) : r.total;
+    return [...list].sort((a, b) => (val(a) - val(b)) * sortDir);
   }, [sourceItems, search, sortKey, sortDir]);
 
   // 默认选前 3（手动改过就不再回填）
@@ -293,7 +291,7 @@ export function BoardMultiPage() {
           if (k === sortKey) setSortDir((d) => -d);
           else { setSortKey(k); setSortDir(-1); }
         }}
-        sortOptions={[{ key: "pct", label: "涨幅" }, { key: "flow", label: "资金" }]}
+        sortOptions={[{ key: "pct", label: "涨幅" }, { key: "speed", label: "涨速" }, { key: "flow", label: "资金" }]}
         onBatch={batch}
         onDetail={(r) => setDetailCode({ code: r.code, name: r.name })}
         onToggleWatch={toggleWatch}

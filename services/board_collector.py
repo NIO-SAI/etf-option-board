@@ -176,6 +176,22 @@ async def _fetch_etf(item: dict) -> dict | None:
     return row
 
 
+async def _etf_speeds(universe: list[dict]) -> dict[str, float]:
+    """ETF 涨速（f22）：ulist 批量取，一次覆盖当天采集范围（每 100 只一个请求）。"""
+    secids = [it["secid"] for it in universe if it.get("secid")]
+    out: dict[str, float] = {}
+    for i in range(0, len(secids), 100):
+        d = await em.get_json("https://push2.eastmoney.com/api/qt/ulist.np/get",
+                              {"fltt": 2, "invt": 2, "secids": ",".join(secids[i:i + 100]),
+                               "fields": "f12,f22"}, ttl=20.0)
+        for r in ((d or {}).get("data") or {}).get("diff") or []:
+            code = str(r.get("f12") or "")
+            v = r.get("f22")
+            if code and isinstance(v, (int, float)):
+                out[code] = float(v)
+    return out
+
+
 async def _etf_cycle() -> None:
     global _etf_universe, _etf_universe_date
     now = dt.datetime.now()
@@ -202,6 +218,12 @@ async def _etf_cycle() -> None:
     results = await asyncio.gather(*(one(it) for it in _etf_universe))
     rows = [r for r in results if r]
     if rows:
+        try:
+            speeds = await _etf_speeds(_etf_universe)
+            for r in rows:
+                r["speed"] = speeds.get(r["code"], 0.0)
+        except Exception as exc:  # noqa: BLE001 — 涨速拉不到不影响资金流采集
+            log.debug("ETF 涨速批量获取失败: %s", exc)
         await asyncio.to_thread(bf.save_etf_cycle, date, hhmm, rows)
 
 
@@ -238,7 +260,6 @@ async def _em_cycle(now: dt.datetime) -> None:
         targets += [(i["secid"], "index", i["name"]) for i in INDICES]
         # 历史数据里出现过、universe 里没有的指数（中证2000），保持继续采集
         targets.append(("2.932000", "index", "中证2000"))
-        targets.append((bf.EM_MARKET_CODE, "market", bf.EM_MARKET_NAME))
 
     if mono - _em_last["industry"] >= _EM_INDUSTRY_INTERVAL:
         _em_last["industry"] = mono

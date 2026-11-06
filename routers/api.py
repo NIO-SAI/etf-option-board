@@ -721,13 +721,13 @@ async def board_cls_hot(date: str | None = Query(None),
         return {"date": date, "items": [], "error": f"板块库读取失败: {exc}"}
 
     boards = [{"code": r["code"], "name": r["name"], "kind": r.get("type"),
-               "flow": r.get("flow"), "pct": r.get("pct")}
+               "flow": r.get("flow"), "pct": r.get("pct"), "speed": r.get("speed") or 0}
               for r in rows if str(r.get("code", "")).startswith("BK")]
     res = await cls_hot.hot_boards(boards, force=force)
     items = []
     for it in res.get("items") or []:
         items.append({"code": it["code"], "name": it["name"], "type": it.get("kind"),
-                      "flow": it.get("flow"), "pct": it.get("pct"),
+                      "flow": it.get("flow"), "pct": it.get("pct"), "speed": it.get("speed") or 0,
                       "cls_name": it.get("cls_name"), "source": it.get("source")})
     return {"date": date, "items": items,
             "error": res.get("error"),
@@ -1192,8 +1192,7 @@ async def em_flow_targets(date: str | None = Query(None)):
                 "pct": r.get("pct") if r else None}
 
     return {"date": date,
-            "indices": [item(i["secid"], i["name"]) for i in INDICES],
-            "market": item(bf.EM_MARKET_CODE, bf.EM_MARKET_NAME)}
+            "indices": [item(i["secid"], i["name"]) for i in INDICES]}
 
 
 async def _em_board_list(date: str | None, board_type: str) -> dict:
@@ -1223,10 +1222,11 @@ async def _em_board_list(date: str | None, board_type: str) -> dict:
     def enrich(it: dict) -> dict:
         r = by.get(it["code"]) or {}
         return {"code": it["code"], "name": it.get("name") or r.get("name") or it["code"],
-                "flow": r.get("flow"), "pct": r.get("pct")}
+                "flow": r.get("flow"), "pct": r.get("pct"), "speed": r.get("speed") or 0}
 
     display = [enrich(it) for it in base]
-    all_rows = [{"code": r["code"], "name": r["name"], "flow": r["flow"], "pct": r.get("pct")}
+    all_rows = [{"code": r["code"], "name": r["name"], "flow": r["flow"],
+                 "pct": r.get("pct"), "speed": r.get("speed") or 0}
                 for r in sorted(rank, key=lambda r: -abs(float(r.get("flow") or 0)))[:200]]
     return {"date": date, "display": display, "all": all_rows,
             "customized": bool(cfg.get("customized")),
@@ -1279,7 +1279,7 @@ async def em_flow_series(target_type: str = Query("index", description="index / 
                          code: str = Query(""),
                          date: str | None = Query(None)):
     """单个目标的 4 维资金分时（累计）。"""
-    kind = target_type if target_type in ("index", "industry", "concept", "market") else "index"
+    kind = target_type if target_type in ("index", "industry", "concept") else "index"
     if not date:
         try:
             dates = await asyncio.to_thread(bf.available_dates, 1, "em")
@@ -1288,9 +1288,7 @@ async def em_flow_series(target_type: str = Query("index", description="index / 
         date = dates[0] if dates else dt.date.today().isoformat()
 
     if not code:
-        if kind == "market":
-            code = bf.EM_MARKET_CODE
-        elif kind == "index":
+        if kind == "index":
             from services.universe import INDICES
             code = INDICES[0]["secid"]
         else:
@@ -1350,6 +1348,8 @@ async def board_index_rank(date: str | None = Query(None)):
     items = []
     for r in rows:
         if r.get("kind") in ("industry", "concept"):
+            continue
+        if r.get("code") in bf.EM_HIDDEN:  # 已下线的指数（东方财富全A / 中证全指）
             continue
         nm = names.get(r["code"]) or r.get("name") or r["code"]
         items.append({"code": r["code"], "name": nm, "type": "index",

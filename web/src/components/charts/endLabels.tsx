@@ -36,7 +36,7 @@ const LEAD = 54;
 const DASH_END_GAP = 4;
 
 export function FlowEndLabels({
-  chart, items, version, gridTop = 30, gridRight = 240, gridBottom = 34,
+  chart, items, version, gridTop = 30, gridRight = 240, gridBottom = 34, onHover,
 }: {
   chart: any;
   items: EndLabelItem[];
@@ -45,6 +45,8 @@ export function FlowEndLabels({
   gridTop?: number;
   gridRight?: number;
   gridBottom?: number;
+  /** 悬停标签 → 高亮对应的分时线（id 为 series code；悬停空白处回调 null） */
+  onHover?: (id: string | null) => void;
 }) {
   const [layout, setLayout] = useState<Layout>({ rows: [], labelX: 0 });
   const [tick, setTick] = useState(0);
@@ -147,19 +149,27 @@ export function FlowEndLabels({
             stroke={r.color} strokeWidth={1} strokeDasharray={r.dashed ? "2 3" : "3 3"} opacity={0.75} />
         ))}
       </svg>
-      {rows.map((r) => (
-        <span
-          key={`t-${r.id}`}
-          className="absolute overflow-hidden text-ellipsis whitespace-nowrap text-[10px] font-semibold leading-none"
-          style={{
-            left: labelX, top: r.ly, transform: "translateY(-50%)", color: r.color,
-            // 超长板块名兜底：绝不越过留白区右边界
-            maxWidth: Math.max(40, gridRight - LEAD - 6),
-          }}
-        >
-          {r.text}
-        </span>
-      ))}
+      {rows.map((r) => {
+        // 「_temp_hover」是临时预览线，没有对应的正式 series，不参与悬停联动
+        const hoverable = !!onHover && !r.id.startsWith("_");
+        return (
+          <span
+            key={`t-${r.id}`}
+            onMouseEnter={hoverable ? () => onHover!(r.id) : undefined}
+            onMouseLeave={hoverable ? () => onHover!(null) : undefined}
+            className={`absolute overflow-hidden text-ellipsis whitespace-nowrap text-[10px] leading-none ${
+              r.active ? "font-bold" : "font-semibold"}`}
+            style={{
+              left: labelX, top: r.ly, transform: "translateY(-50%)", color: r.color,
+              // 超长板块名兜底：绝不越过留白区右边界
+              maxWidth: Math.max(40, gridRight - LEAD - 6),
+              pointerEvents: hoverable ? "auto" : "none",
+            }}
+          >
+            {r.text}
+          </span>
+        );
+      })}
     </div>
   );
 }

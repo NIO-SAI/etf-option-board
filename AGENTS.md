@@ -160,6 +160,17 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
 - **分时缓存**：合约分时/买卖点走 `usePolling` 的 IndexedDB 缓存（kind=`trends`/`levels`），
   切合约先渲染缓存；**缓存比轮询周期新时不发首轮请求**，来回切标的/合约几乎不产生请求。
   盘中 15s、非交易 120s，页面切后台暂停。
+- **排序与口径（2026-11-06）**：四个资金页的排序统一为 `涨幅｜涨速｜资金`。涨速取东财
+  `f22`：板块在 `rank_snapshots.speed`（clist 采集），ETF 在 `etf_rank_snapshots.speed`
+  （采集器每轮用 `ulist.np/get` 批量取 100 只/次合并，stock/get 不返回 f22）；
+  多日页的「涨速」取区间最新交易日的瞬时值（`read_rank_range` 已带 speed）。
+  ETF资金流口径 tab = **宽基(broad)｜窄基(sector)｜自定义(自选)**，不再有「全部」；
+  旧链接 `scope=all` 自动归到宽基。**已下线两个指数**：47.800000 东方财富全A、
+  1.000985 中证全指（`bf.EM_HIDDEN`，采集与 `/board/index-rank`、`/em-flow/targets` 都不再出现）。
+- **右侧标签悬停联动（2026-11-06）**：`FlowEndLabels` 的标签 `pointer-events:auto`，
+  hover 回调 series code → 主力资金分时走 `onHoverCode`（该线变红/绿分段），
+  四维资金在 `MoneyLinesChart` 内本地 `hoverCode`（加粗+红绿、其余淡出）。
+  `_temp_hover` 临时线不参与联动。
 - **期权看板左侧迷你走势（2026-11-06）**：`/api/etfs/spark` 一次并发拉 12 条分时（6 ETF +
   4 股指 + 2 大盘指数），冷启动 1~6 秒。两层缓存：前端 `usePolling(..., 60_000, [],
   { kind: "trends", code: "etfs-spark" })` 存 IndexedDB（跨日失效），重开页面秒出；
