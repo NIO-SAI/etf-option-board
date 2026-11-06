@@ -392,3 +392,35 @@ class TestDailyFlowConsistency:
         self.seed(b, "2026-11-04", 20.0e8, "2026-11-04 15:00", [("15:00", 20.0e8)])
         h = b.read_history("BK0001", 20, "2026-11-03")
         assert [x["date"] for x in h] == ["2026-11-03"]
+
+
+class TestExtraEmTargets:
+    """自选/热门里不在 Top40 的板块也要纳入 4 维采集。"""
+
+    rank = [
+        {"code": "BK0001", "name": "半导体", "type": "concept", "flow": 1e8},
+        {"code": "BK0002", "name": "电力设备", "type": "industry", "flow": 2e8},
+        {"code": "1.000001", "name": "上证指数", "type": "index", "flow": 3e8},
+    ]
+
+    def test_takes_watch_and_hot_with_kind_from_rank(self):
+        out = bf.extra_em_targets(
+            self.rank,
+            [{"code": "BK0001", "name": "半导体"}, {"code": "1.000001", "name": "上证指数"}],
+            [{"code": "BK0002", "name": "电力设备", "kind": "industry"}],
+        )
+        assert [(x["code"], x["kind"]) for x in out] == [
+            ("BK0001", "concept"), ("BK0002", "industry"),
+        ]
+
+    def test_dedup_and_skip_non_bk(self):
+        out = bf.extra_em_targets(
+            self.rank,
+            [{"code": "BK0001", "name": "半导体"}, {"code": "BK0001", "name": "半导体"}],
+            [{"code": "BK0001", "name": "半导体"}, {"code": "1.000300", "name": "沪深300"}],
+        )
+        assert [x["code"] for x in out] == ["BK0001"]
+
+    def test_name_falls_back_to_rank(self):
+        out = bf.extra_em_targets(self.rank, [{"code": "BK0002"}], [])
+        assert out == [{"code": "BK0002", "name": "电力设备", "kind": "industry"}]

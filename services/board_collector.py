@@ -12,7 +12,7 @@ import datetime as dt
 import logging
 
 from services import boardflow as bf
-from services import em
+from services import cls_hot, em
 
 log = logging.getLogger("board_collector")
 
@@ -211,7 +211,9 @@ async def _etf_cycle() -> None:
 _EM_INDEX_INTERVAL = 30
 _EM_INDUSTRY_INTERVAL = 60
 _EM_CONCEPT_INTERVAL = 60
-_em_last = {"index": 0.0, "industry": 0.0, "concept": 0.0}
+_em_last = {"index": 0.0, "industry": 0.0, "concept": 0.0, "extra": 0.0}
+# 自选/热门补充目标：2 分钟一轮（它们通常不在 Top40 里，不补就永远没有 4 维曲线）
+_EM_EXTRA_INTERVAL = 120
 _EM_FIELDS = "f57,f58,f140,f143,f146,f149,f170"
 
 
@@ -258,8 +260,32 @@ async def _em_cycle(now: dt.datetime) -> None:
         targets += [(f"90.{t['code']}", "concept", t["name"])
                     for t in bf.pick_em_concepts(crank)]
 
+    if mono - _em_last["extra"] >= _EM_EXTRA_INTERVAL:
+        _em_last["extra"] = mono
+        try:
+            all_rank = await asyncio.to_thread(bf.read_rank, date)
+        except Exception:  # noqa: BLE001
+            all_rank = []
+        try:
+            watch = await asyncio.to_thread(bf.load_watch)
+        except Exception:  # noqa: BLE001
+            watch = []
+        hot_items: list[dict] = []
+        try:
+            boards = [{"code": r["code"], "name": r["name"], "kind": r.get("type")}
+                      for r in all_rank if str(r.get("code", "")).startswith("BK")]
+            hot_items = (await cls_hot.hot_boards(boards)).get("items") or []
+        except Exception as exc:  # noqa: BLE001
+            log.debug("em extra: 热门板块匹配失败 %s", exc)
+        targets += [(f"90.{t['code']}", t["kind"], t["name"])
+                    for t in bf.extra_em_targets(all_rank, watch, hot_items)]
+
     if not targets:
         return
+
+    # 同一标的可能同时命中 Top40 / 自选 / 热门：按 secid 去重，别重复请求
+    seen: set[str] = set()
+    targets = [t for t in targets if not (t[0] in seen or seen.add(t[0]))]
     sem = asyncio.Semaphore(8)
 
     async def one(t):

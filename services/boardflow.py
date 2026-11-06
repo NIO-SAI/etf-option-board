@@ -877,6 +877,39 @@ def pick_em_concepts(rank: list[dict], limit: int = EM_DEFAULT_CONCEPTS) -> list
     return pick_em_boards(rank, limit)
 
 
+def extra_em_targets(rank: list[dict], watch: list[dict],
+                     hot_items: list[dict]) -> list[dict]:
+    """4 维采集的补充目标：自选板块 + 当日财联社热门匹配到的板块。纯函数。
+
+    Top40 行业/概念是按 |主力净流入| 轮换的，自选与热门里的板块常常不在其中，
+    导致「四维资金」里这些标的永远没有曲线。这里把它们也纳入采集（按 BK 去重）。
+    """
+    kind_of: dict[str, str] = {}
+    name_of: dict[str, str] = {}
+    for r in rank or []:
+        c = str(r.get("code") or "")
+        if c.startswith("BK"):
+            kind_of[c] = r.get("type") or "concept"
+            name_of[c] = r.get("name") or c
+
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def add(code, name, kind):
+        c = str(code or "")
+        if not c.startswith("BK") or c in seen:
+            return
+        seen.add(c)
+        out.append({"code": c, "name": name or name_of.get(c) or c,
+                    "kind": kind or kind_of.get(c) or "concept"})
+
+    for w in watch or []:
+        add(w.get("code"), w.get("name"), kind_of.get(str(w.get("code") or "")))
+    for it in hot_items or []:
+        add(it.get("code"), it.get("name"), it.get("kind"))
+    return out
+
+
 def load_em_config() -> dict:
     """行业展示配置：{customized: bool, codes: [{code,name}]}；文件缺失即默认。"""
     try:

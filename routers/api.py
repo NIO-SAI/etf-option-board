@@ -1301,7 +1301,8 @@ async def em_flow_series(target_type: str = Query("index", description="index / 
     out = {"date": date, "code": code, "kind": kind, "axis": axis, "dims": dims,
            "name": meta.get("name") or code}
     if not axis:
-        out["error"] = "该标的当日还没有 4 维分时点（新纳入采集的板块从下一个交易时段开始累积）"
+        out["error"] = ("该标的还没有 4 维分时点：自选/热门板块每 2 分钟自动纳入采集，稍后刷新即可；"
+                        "概念/行业默认只采 |主力净流入| 前 40")
     return out
 
 
