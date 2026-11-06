@@ -109,53 +109,76 @@ export function HoverTip({
   );
 }
 
-export type RowTip = { text: string; x: number; y: number } | null;
+export type RowTipState = { text: string } | null;
 
 /**
  * 列表行「悬停 0.5 秒显示代码」的轻提示（原生 title 延迟约 1 秒且不可控）。
- * 由列表容器持有状态（只渲染一个 portal），行只负责上报 code 与锚点元素。
+ * 气泡固定在鼠标右下方（+14/+18），跟随鼠标移动时只改 DOM 样式，不触发 React 重渲染。
+ * 由列表容器持有状态（只渲染一个 portal），行只负责上报 code 与指针位置。
  */
 export function useRowTip(delay = 500) {
-  const [tip, setTip] = React.useState<RowTip>(null);
+  const [tip, setTip] = React.useState<RowTipState>(null);
+  const nodeRef = React.useRef<HTMLDivElement | null>(null);
+  const pos = React.useRef({ x: 0, y: 0 });
   const timer = React.useRef<any>(null);
+
+  const place = React.useCallback(() => {
+    const el = nodeRef.current;
+    if (!el) return;
+    const x = Math.max(8, Math.min(pos.current.x + 14, window.innerWidth - el.offsetWidth - 8));
+    const y = Math.max(8, Math.min(pos.current.y + 18, window.innerHeight - el.offsetHeight - 8));
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+  }, []);
+
   const hide = React.useCallback(() => {
     clearTimeout(timer.current);
     setTip(null);
   }, []);
+
   const enter = React.useCallback((e: React.MouseEvent<HTMLElement>, text: string) => {
     clearTimeout(timer.current);
-    const el = e.currentTarget;
+    pos.current = { x: e.clientX, y: e.clientY };
     if (!text) return;
-    timer.current = setTimeout(() => {
-      const r = el.getBoundingClientRect();
-      if (!r.width && !r.height) return;      // 行已被卸载
-      const y = Math.min(r.bottom - 4, window.innerHeight - 28);
-      setTip({ text, x: Math.min(r.left + 8, window.innerWidth - 140), y });
-    }, delay);
+    timer.current = setTimeout(() => setTip({ text }), delay);
   }, [delay]);
+
+  // 鼠标移动：更新坐标，气泡已显示时直接挪 DOM（不 setState）
+  const move = React.useCallback((e: React.MouseEvent<HTMLElement>) => {
+    pos.current = { x: e.clientX, y: e.clientY };
+    if (nodeRef.current) place();
+  }, [place]);
 
   // 卸载清定时器；提示显示期间滚动/缩放会错位，直接隐藏
   React.useEffect(() => () => clearTimeout(timer.current), []);
-  React.useEffect(() => {
+  // useLayoutEffect：气泡挂载后立刻定位（rAF 在后台标签页会被节流，不能依赖它）
+  React.useLayoutEffect(() => {
     if (!tip) return;
+    place();
     window.addEventListener("scroll", hide, true);
     window.addEventListener("resize", hide);
     return () => {
       window.removeEventListener("scroll", hide, true);
       window.removeEventListener("resize", hide);
     };
-  }, [tip, hide]);
+  }, [tip, place, hide]);
 
-  return { tip, enter, leave: hide };
+  return { tip, nodeRef, enter, move, leave: hide };
 }
 
-/** 配合 useRowTip 使用：渲染唯一那个提示气泡。 */
-export function RowCodeTip({ tip }: { tip: RowTip }) {
+/** 配合 useRowTip 使用：渲染唯一那个提示气泡（坐标由 useRowTip 直接改样式）。 */
+export function RowCodeTip({
+  tip, nodeRef,
+}: {
+  tip: RowTipState;
+  nodeRef: React.RefObject<HTMLDivElement | null>;
+}) {
   if (!tip) return null;
   return ReactDOM.createPortal(
     <div
+      ref={nodeRef}
       className="pointer-events-none fixed z-[120] whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-[11px] leading-snug text-popover-foreground shadow-lg"
-      style={{ left: tip.x, top: tip.y }}
+      style={{ left: 0, top: 0 }}
     >
       {tip.text}
     </div>,

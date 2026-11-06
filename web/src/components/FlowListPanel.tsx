@@ -73,7 +73,7 @@ export function FlowListPanel({
   loading?: boolean;
 }) {
   // 悬停 0.5 秒显示代码（原生 title 约 1 秒，太慢）
-  const { tip, enter, leave } = useRowTip();
+  const { tip, nodeRef, enter, move, leave } = useRowTip();
   return (
     <Frame spacing="sm" className="self-start xl:sticky xl:top-[52px]">
       <FramePanel dense>
@@ -150,6 +150,7 @@ export function FlowListPanel({
                     onClick={() => onToggle(b.code)}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(b.code); } }}
                     onMouseEnter={(e) => { enter(e, b.code); onHoverRow?.(b.code); }}
+                    onMouseMove={move}
                     onMouseLeave={() => { leave(); onHoverRow?.(null); }}
                     className={cn(
                       "flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-[11px] transition-colors hover:bg-muted/60",
@@ -212,7 +213,7 @@ export function FlowListPanel({
                 );
               })
             )}
-            <RowCodeTip tip={tip} />
+            <RowCodeTip tip={tip} nodeRef={nodeRef} />
           </div>
         </div>
       </FramePanel>

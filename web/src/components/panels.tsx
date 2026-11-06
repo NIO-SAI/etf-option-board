@@ -165,7 +165,7 @@ export function EtfList({
   onSelect: (c: string) => void;
 }) {
   // 悬停 0.5 秒显示代码
-  const { tip, enter, leave } = useRowTip();
+  const { tip, nodeRef, enter, move, leave } = useRowTip();
 
   // 大盘指数（只读补充信息，非期权标的；固定清单保证始终显示）
   // 只留两条：上证指数（可看关键位）与平均股价（板块口径的赚钱效应）。多一条就会
@@ -195,6 +195,7 @@ export function EtfList({
                 type="button"
                 aria-current={on ? "true" : undefined}
                 onMouseEnter={(ev) => enter(ev, e.code)}
+                onMouseMove={move}
                 onMouseLeave={leave}
                 onClick={() => onSelect(e.code)}
                 className={cn(
@@ -238,6 +239,7 @@ export function EtfList({
                     type="button"
                     aria-current={on ? "true" : undefined}
                     onMouseEnter={(ev) => enter(ev, f.code)}
+                    onMouseMove={move}
                     onMouseLeave={leave}
                     onClick={() => onSelect(f.code)}
                     className={cn(
@@ -288,6 +290,7 @@ export function EtfList({
                   key={ix.code}
                   {...rowProps}
                   onMouseEnter={(ev) => enter(ev, ix.code)}
+                  onMouseMove={move}
                   onMouseLeave={leave}
                   className={cn(
                     "flex w-full items-center gap-2.5 px-3 py-2.5 text-left",
@@ -314,7 +317,7 @@ export function EtfList({
         </div>
         <IndexLevelsDialog open={idxOpen} onClose={() => setIdxOpen(false)} />
       </FramePanel>
-      <RowCodeTip tip={tip} />
+      <RowCodeTip tip={tip} nodeRef={nodeRef} />
     </Frame>
   );
 }
