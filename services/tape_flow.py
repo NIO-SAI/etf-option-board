@@ -65,9 +65,9 @@ PRESETS: dict[str, dict] = {
         "dim": "amt",
         "auction": "side",          # 集合竞价按买卖方向拆
         "buckets": [
-            {"key": "super", "name": "超大单", "thr": 2000},
-            {"key": "main", "name": "主力", "thr": 500},
-            {"key": "big", "name": "大户", "thr": 20},
+            {"key": "inst", "name": "机构", "thr": 10000},
+            {"key": "main", "name": "主力", "thr": 3000},
+            {"key": "big", "name": "大户", "thr": 15},
             {"key": "retail", "name": "散户", "thr": 0},
         ],
     },
