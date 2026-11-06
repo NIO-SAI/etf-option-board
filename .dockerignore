@@ -1,0 +1,22 @@
+.git
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.DS_Store
+
+# 运行时数据走卷，不进镜像
+data
+
+# 前端在镜像里重新构建
+web/node_modules
+web/dist
+web/.vite
+
+# 密钥与本地产物
+.env
+.env.*
+*.key
+.scratch
+.commandcode
+期权

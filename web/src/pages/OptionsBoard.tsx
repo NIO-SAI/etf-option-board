@@ -20,6 +20,9 @@ import { clsUpDown, hhmmss, nf, pct, signedFlow } from "@/lib/format";
 // 图线开关的色带（与图上的横线同色）
 const SWATCH_LEVELS = { background: "linear-gradient(90deg,#ef4444 50%,#16a34a 50%)" };
 const SWATCH_PLAN = { background: "linear-gradient(90deg,#f59e0b,#ef4444,#16a34a)" };
+// 图表入参的空数组兜底必须是同一个引用：写成 `?? []` 每次渲染都是新数组，
+// 页面上任一轮询返回都会让图表 option 失效、notMerge 全量重建（悬浮框随之消失）。
+const EMPTY: any[] = [];
 
 /** 期权看板（原 App 主体）。外壳负责顶栏、路由与设置弹窗，这里只管本页数据与布局。 */
 export function OptionsBoard() {
@@ -135,13 +138,20 @@ export function OptionsBoard() {
   const ctxReady = !!ctx && ctx.etf?.code === etfCode;
   const chainReady = !!chain && chain.etf?.code === etfCode;
   // 主力资金序列 <2 点时不成序列，避免渲染成一根孤立柱子
-  const flowSeries = (ctx?.flow?.length ?? 0) >= 2 ? ctx!.flow : [];
+  const flowSeries = (ctx?.flow?.length ?? 0) >= 2 ? ctx!.flow : EMPTY;
 
   // 图上横线的数据源：支撑/压力取自 /etf/{code} 的 support/resistance，
   // 止盈/止损取自策略计划的 entry_break/stop/target。
   // 开关的 disabled 就按「有没有数据 + 有没有昨收」判定——没有昨收就换不成百分比。
-  const support: number[] = (ctxReady ? ctx?.support : null) ?? [];
-  const resistance: number[] = (ctxReady ? ctx?.resistance : null) ?? [];
+  const support: number[] = (ctxReady ? ctx?.support : null) ?? EMPTY;
+  const resistance: number[] = (ctxReady ? ctx?.resistance : null) ?? EMPTY;
+  // 计划横线按数值记忆：strategy 每次轮询都是新对象，直接写对象字面量会让主图每次渲染都重建
+  const lv = strategy?.levels;
+  const chartPlan = useMemo(
+    () => (lv ? { entry: lv.entry_break, stop: lv.stop, target: lv.target } : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [!!lv, lv?.entry_break, lv?.stop, lv?.target],
+  );
   const planLevels = support.length + resistance.length > 0;
   // 昨收优先用分时自带的（回退到上一交易日时它才非空），否则退到报价昨收——
   // 只认 trends_prev_close 会让按钮在盘前/回退场景永远 disabled（用户点了没反应）。
@@ -286,12 +296,12 @@ export function OptionsBoard() {
                 {!ctxReady ? (
                   <Skeleton className="h-[240px] w-full" />
                 ) : ctx?.trends?.length ? (
-                  <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? []} indexFlow={ctx.track?.flow ?? []} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} signals={revSignals?.items ?? []} prevClose={ctx.trends_prev_close ?? ctx.quote?.prev_close ?? null} indexPrevClose={ctx.track?.trends_prev_close ?? ctx.track?.quote?.prev_close ?? null}
+                  <IntradayChart id="main-chart" trends={ctx.trends} indexTrends={ctx.track?.trends ?? EMPTY} indexFlow={ctx.track?.flow ?? EMPTY} indexName={ctx.track?.quote?.name ?? ""} flow={flowSeries} signals={revSignals?.items ?? EMPTY} prevClose={ctx.trends_prev_close ?? ctx.quote?.prev_close ?? null} indexPrevClose={ctx.track?.trends_prev_close ?? ctx.track?.quote?.prev_close ?? null}
                     name={isFut ? "指数" : "标的ETF"}
                     flowStyle={isFut ? "bar" : "line"}
                     flowLabel={isFut ? "指数主力净流入" : "标的主力净流入"}
                     support={support} resistance={resistance}
-                    plan={strategy?.levels ? { entry: strategy.levels.entry_break, stop: strategy.levels.stop, target: strategy.levels.target } : null}
+                    plan={chartPlan}
                     showLevels={lineToggles.levels} showPlan={lineToggles.plan}
                     height={chartExpanded ? 460 : 230} />
                 ) : (
@@ -321,9 +331,9 @@ export function OptionsBoard() {
           </FramePanel>
         </Frame>
 
-        <ContractDetail contract={contract} code={etfCode} etfTrends={ctxReady ? (ctx?.trends ?? []) : []}
+        <ContractDetail contract={contract} code={etfCode} etfTrends={ctxReady ? (ctx?.trends ?? EMPTY) : EMPTY}
           underName={isFut ? "指数" : "标的ETF"}
-          flow={ctxReady ? flowSeries : []} etfPrevClose={ctxReady ? (ctx?.trends_prev_close ?? ctx?.quote?.prev_close ?? null) : null} />
+          flow={ctxReady ? flowSeries : EMPTY} etfPrevClose={ctxReady ? (ctx?.trends_prev_close ?? ctx?.quote?.prev_close ?? null) : null} />
 
         {/* 决策区统一放在合约分时图下面：策略与仓位 / 今日推荐合约 / 标的点位 → 优选合约 → 大模型决策 */}
         <PlanCard bundle={strategy} onSelect={onPickContract} />

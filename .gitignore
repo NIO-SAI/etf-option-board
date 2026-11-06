@@ -23,6 +23,7 @@ data/.deploy_status
 # Node (web)
 web/node_modules/
 web/.vite/
+web/dist/
 
 # Agent 本地配置与调试产物
 .commandcode/

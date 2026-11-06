@@ -11,6 +11,9 @@ import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { BrainCircuit, Loader2 } from "lucide-react";
 
+// 空数组兜底用同一个引用：`?? []` 每次渲染都是新数组，会让分时图 option 失效、notMerge 全量重建
+const EMPTY: any[] = [];
+
 /* ---------------- 合约详情（分时叠加） ---------------- */
 export function ContractDetail({
   contract, code = "", etfTrends, flow, etfPrevClose = null, underName = "标的ETF",
@@ -39,7 +42,7 @@ export function ContractDetail({
 
   // 注意：图表始终保持挂载（不因未选合约而卸载），避免 ECharts 在同一 DOM 节点上
   // 反复 dispose/init 造成崩溃；切合约只更新数据（固定 key）。
-  const t = trends?.trends ?? [];
+  const t = trends?.trends ?? EMPTY;
   return (
     <Frame spacing="sm" stacked>
       <FramePanel dense>
