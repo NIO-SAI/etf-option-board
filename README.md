@@ -106,9 +106,11 @@ Compose 本身不能读取 Git 信息。如果部署端只有 `docker-compose.ym
 合并到原仓库后，原仓库的工作流就会发布到 `ghcr.io/xiwen0217/etf-option-board`；
 fork 启用 Actions 后，在其默认分支运行则发布到 fork 自己的路径。
 
-- 默认分支收到 push（包括 PR 合并）：构建并发布 `latest` 和 `sha-<完整提交哈希>`。
-- 推送 `v*` 标签：发布对应版本标签和提交哈希标签，不覆盖默认分支的 `latest`。
-- Actions 页面可手动运行；选择默认分支时会更新 `latest`，其他分支只发布提交哈希标签。
+- 默认分支收到 push（包括 PR 合并）：自动构建并推送同一镜像的两个标签：
+  `latest` 和构建开始时的北京时间版本 `YYYYMMDD-HHmmss`，例如 `20261106-143015`。
+- Actions 页面可选择默认分支手动运行，仍生成上述两个标签；其他分支跳过发布。
+- 固定历史版本时，在 `.env` 设置 `ETF_IMAGE=ghcr.io/<owner>/<repo>:20261106-143015`。
+  镜像的 OCI version 标签使用时间版本，revision 标签保留源码提交哈希。
 - PR 只构建验证，不登录或推送 GHCR。构建目标为 `linux/amd64` 和 `linux/arm64`。
 - Dockerfile 的 OCI 来源/版本标签由工作流或 Compose 传入，镜像关联到实际构建它的仓库。
 
