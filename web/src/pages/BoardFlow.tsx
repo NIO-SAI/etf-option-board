@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { onGlobalRefresh } from "@/lib/refresh";
 import { joinCodes, parseCodes, readHashParams, writeHashParams } from "@/lib/urlState";
-import { dateWithWeek, signedFlow } from "@/lib/format";
+import { afterPreOpen, dateWithWeek, signedFlow, todayStr } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** 与 stock-webui 一致的五个口径 */
@@ -100,9 +100,23 @@ export function BoardFlowPage() {
   // 下拉不再提供「最新」伪选项：进入时把日期固定到库内最新交易日。
   // 只认「无日期请求」回来的响应，历史日期的旧响应不能当落点（见上面 _asked 注释）。
   const latestDate = rankView?._asked === "" ? rankView?.date : "";
+  /** 今天是「盘前之后的工作日」：此时「今日」= 当天本身（数据 09:30 才开始采集） */
+  const isTodayMode = afterPreOpen();
   useEffect(() => {
-    if (!date && latestDate) setDate(latestDate);
-  }, [date, latestDate]);
+    if (date) return;
+    // 09:15 之后点「今日」落到当天：哪怕库里最新还停在昨天，也要先切到今天
+    if (isTodayMode) {
+      setDate(todayStr());
+      return;
+    }
+    if (latestDate) setDate(latestDate);
+  }, [date, latestDate, isTodayMode]);
+
+  // 下拉选项：把「今天」补进去（今天可能还没采集到，不在 dates 里）
+  const dateOptions = useMemo(() => {
+    const base = [...dates].sort().reverse();
+    return date && !base.includes(date) ? [date, ...base] : base;
+  }, [dates, date]);
 
   const refresh = useCallback(() => {
     cache.current = {};
@@ -373,9 +387,13 @@ export function BoardFlowPage() {
   const last = health?.last;
   const latestDay = last?.date ?? "";
   const live = isLiveDay(date, latestDay);
-  const updatedAt = live
-    ? `更新于 ${last?.last_ts?.slice(11) ?? "—"}`
-    : `${date} 历史数据`;
+  /** 已切到今天，但库里最新还停在更早的交易日 → 当天数据还没开始采集 */
+  const preOpenToday = !!date && !!latestDay && date > latestDay && date === todayStr();
+  const updatedAt = preOpenToday
+    ? "今日盘前 · 09:30 开始采集"
+    : live
+      ? `更新于 ${last?.last_ts?.slice(11) ?? "—"}`
+      : `${date} 历史数据`;
 
   return (
     <main className="grid gap-3 p-3 xl:grid-cols-[360px_minmax(0,1fr)]">
@@ -414,7 +432,8 @@ export function BoardFlowPage() {
         }}
         loading={!rankView}
         emptyTitle={type === "custom" ? "还没有自定义板块" : "无匹配板块"}
-        emptyHint={type === "custom" ? "在其他列表点行尾的 ＋ 图标即可加入自定义" : undefined}
+        emptyHint={type === "custom" ? "在其他列表点行尾的 ＋ 图标即可加入自定义"
+          : preOpenToday ? "今日数据 09:30 开始采集，稍等会自动刷新" : undefined}
         maxHeight="calc(100vh - 19rem)"
       />
 
@@ -434,11 +453,12 @@ export function BoardFlowPage() {
                 onChange={(e) => setDate(e.target.value)}
                 className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
-                {[...dates].sort().reverse().map((d) => <option key={d} value={d}>{dateWithWeek(d)}</option>)}
+                {dateOptions.map((d) => <option key={d} value={d}>{dateWithWeek(d)}</option>)}
               </select>
               <button
                 type="button"
                 onClick={() => setDate("")}
+                title={isTodayMode ? "切到今天" : "切到最近交易日"}
                 className="rounded border border-border px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 今日

@@ -1,9 +1,13 @@
 import { Badge } from "@/components/reui/badge";
+import { afterPreOpen, todayStr } from "@/lib/format";
 
 /** 所选日期是否就是库里最新交易日（今天的盘中数据也算实时）。 */
 export function isLiveDay(date?: string | null, latest?: string | null): boolean {
   if (!date) return false;
-  return !latest || date === latest;
+  if (!latest) return true;
+  if (date === latest) return true;
+  // 09:15 之后看「今天」、而库里最新还停在昨天：当天盘前，仍算实时
+  return date === todayStr() && afterPreOpen();
 }
 
 /**

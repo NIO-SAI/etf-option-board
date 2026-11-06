@@ -25,6 +25,21 @@ export const dateWithWeek = (d?: string | null): string => {
   return `${s}（${WEEK_CN[new Date(t).getUTCDay()]}）`;
 };
 
+/** 本地日期 YYYY-MM-DD（不用 toISOString，避免时区把日期推前一天）。 */
+export const todayStr = (now: Date = new Date()): string => {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+};
+
+/** 工作日 09:15 之后（集合竞价开始）：日期页的「今日」应落到当天本身。 */
+export const afterPreOpen = (now: Date = new Date()): boolean => {
+  const wd = now.getDay();
+  if (wd === 0 || wd === 6) return false;
+  return now.getHours() * 60 + now.getMinutes() >= 9 * 60 + 15;
+};
+
 export const pct = (v: any, d = 2): string =>
   v === null || v === undefined || isNaN(Number(v))
     ? "—"
