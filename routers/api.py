@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import os
 import re
+import time
 
 import logging
 
@@ -180,13 +181,34 @@ async def picks_top(n: int = 6, force: int = 0):
     return await top_picks.snapshot(n=n, force=bool(force))
 
 
+# 左侧迷你走势的整包缓存：冷启动要并发拉 12 条分时（1~6 秒），
+# 多端/多标签同时打开时没必要各付一次；15 秒内复用，够新又不影响盘中观感。
+_SPARK_CACHE: dict = {"at": 0.0, "data": None}
+_SPARK_TTL = 15.0
+_spark_lock = asyncio.Lock()
+
+
 @router.get("/etfs/spark")
 async def etfs_spark():
     """6 只 ETF + 4 个股指品种 + 底栏两个大盘指数的日内收盘价序列（供列表迷你走势）。
 
     板块代码（47.800005 A股平均股价）没有腾讯映射、push2 分时又被反爬打空，
     必须走 trends_or_snapshot 的 emdatah5 快照累积，否则永远是空曲线。
+    整包带 15 秒进程内缓存 + 单飞锁：冷启动的 12 条并发只做一次。
     """
+    now = time.time()
+    hit = _SPARK_CACHE["data"]
+    if hit is not None and now - _SPARK_CACHE["at"] < _SPARK_TTL:
+        return hit
+    async with _spark_lock:
+        now = time.time()
+        hit = _SPARK_CACHE["data"]
+        if hit is not None and now - _SPARK_CACHE["at"] < _SPARK_TTL:
+            return hit
+        return await _build_spark()
+
+
+async def _build_spark() -> dict:
     from services.index_option import FUT_OPTS
     targets = [(e["secid"], e["code"]) for e in ETFS] + [
         (f["underlying"], f["code"]) for f in FUT_OPTS
@@ -203,7 +225,9 @@ async def etfs_spark():
     for r in res:
         if isinstance(r, tuple) and r[1]:
             out[r[0]] = r[1]
-    return {"items": out}
+    data = {"items": out}
+    _SPARK_CACHE.update(at=time.time(), data=data)
+    return data
 
 
 @router.get("/external")

@@ -160,6 +160,10 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
 - **分时缓存**：合约分时/买卖点走 `usePolling` 的 IndexedDB 缓存（kind=`trends`/`levels`），
   切合约先渲染缓存；**缓存比轮询周期新时不发首轮请求**，来回切标的/合约几乎不产生请求。
   盘中 15s、非交易 120s，页面切后台暂停。
+- **期权看板左侧迷你走势（2026-11-06）**：`/api/etfs/spark` 一次并发拉 12 条分时（6 ETF +
+  4 股指 + 2 大盘指数），冷启动 1~6 秒。两层缓存：前端 `usePolling(..., 60_000, [],
+  { kind: "trends", code: "etfs-spark" })` 存 IndexedDB（跨日失效），重开页面秒出；
+  后端整包 15 秒进程内缓存 + 单飞锁（`_SPARK_CACHE`/`_spark_lock`），多端同时冷启动只拉一次。
 - **分时图时间轴约定（2026-10-19 起）**：轴一律由完整行情分时（`trends`，腾讯）定义；
   资金流/期权等稀疏序列必须用 `web/src/lib/series.ts` 的 `trimSession` + `alignToAxis`
   按「最近前值 + 同日校验」对齐。**禁止再用 `HH:MM` 精确相等 join**——东财资金流首点是

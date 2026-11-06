@@ -44,7 +44,10 @@ export function OptionsBoard() {
   const { data: directions } = usePolling(() => api.directions(), 60_000);
   // 跨 6 只标的的合约横评（后端 30s SWR 缓存，轮询 30s 即可）
   const { data: topPicks, refresh: refreshPicks } = usePolling(() => api.topPicks(6), 30_000);
-  const { data: spark } = usePolling(() => api.etfs_spark(), 120_000, []);
+  // 左侧迷你走势：把整包序列缓存到 IndexedDB（当日有效），刷新/重开页面先秒出
+  // 缓存曲线，再后台刷新；后端另有 15 秒整包缓存，避免多端同时冷启动各拉 12 条分时。
+  const { data: spark } = usePolling(
+    () => api.etfs_spark(), 60_000, [], { kind: "trends", code: "etfs-spark" });
   // 到期日历：一天只变一次，10 分钟轮询足够（换来的是「当月还剩几天」永不陈旧）
   const { data: expiryView } = usePolling(() => api.expiry(), 600_000);
 
