@@ -20,6 +20,7 @@ from config import settings
 from services import bs, em, iv_history as ivh
 from services import option_service as osvc
 from services import strategy, vol
+from services.direction_score import recent_change, score_result
 
 log = logging.getLogger("indexopt")
 
@@ -183,30 +184,24 @@ async def chain(symbol: str) -> dict:
 # 方向评分（纯函数）
 # ═══════════════════════════════════════════════════════════════════════════
 
-_BIAS_CALL = 15
-
-
 def bias(trends: list[dict] | None, contracts: list[dict] | None,
-         flow: dict | None, basis: dict | None) -> dict:
-    """股指方向评分 [-100, 100]，>0 看多。
+         flow: dict | None) -> dict:
+    """股指方向：近 15 分钟动量 + 日内区间位置 + 当日主力资金，阈值 ±15。
 
-    A 股股指期权的方向不来自期权自身，而来自标的现货的日内结构与期现价差：
-      1. 现货分时动量（权重 25）——日内趋势是最直接的信号；
+    列表、详情、合约推荐共用现货口径，基差独立展示，不再只给详情加分。
+      1. 现货近 15 分钟动量（权重 25）——早盘低开反弹不能掩盖午后走弱；
       2. 现货在日内区间的位置（权重 15）——顶在最高价附近=买盘强；
       3. 主力资金净额（权重 10）——当日累计口径，方向确认；
-      4. 期现基差（每 1% 计 12 分）——贴水（basis<0）说明期货看空/对冲盘重。
     任一因子缺失按 0 计，不足 15 分算中性。
     """
     score = 0.0
     detail: dict[str, float] = {}
 
-    tr = [t for t in (trends or []) if (t or {}).get("price")]
-    if len(tr) >= 2:
-        p0, p1 = tr[0]["price"], tr[-1]["price"]
-        if p0:
-            v = max(-25.0, min(25.0, (p1 / p0 - 1) * 100 * 25))
-            score += v
-            detail["现货动量"] = round(v, 1)
+    momentum = recent_change(trends, 15)
+    if momentum is not None:
+        v = max(-25.0, min(25.0, momentum * 25))
+        score += v
+        detail["现货15分钟动量"] = round(v, 1)
 
     cs = [c for c in (contracts or []) if (c or {}).get("price")]
     if cs:
@@ -223,27 +218,17 @@ def bias(trends: list[dict] | None, contracts: list[dict] | None,
         score += v
         detail["主力资金"] = round(v, 1)
 
-    bp = (basis or {}).get("basis_pct")
-    if bp is not None:
-        v = max(-12.0, min(12.0, float(bp) * 12))
-        score += v
-        detail["期现基差"] = round(v, 1)
-
-    score = round(max(-100.0, min(100.0, score)), 1)
-    direction = "call" if score >= _BIAS_CALL else "put" if score <= -_BIAS_CALL else "neutral"
-    return {"score": score, "direction": direction,
-            "confidence": round(min(abs(score) / 100, 1), 2), "detail": detail}
+    return score_result(score, detail=detail, model="index_option")
 
 
 async def direction(symbol: str) -> dict:
     """单品种方向的**轻量**路径：只取现货分时/资金流/最新价，不拉期权链。
 
-    `state()` 会拉 730 条合约，用在左栏列表的 60s 轮询里等于把链路打满；
-    这里刻意省掉链，基差也退化成「现货自身」口径（缺 = 不计该因子）。
+    由 strategy.directions 缓存完整评分，详情与合约推荐读取同一份结果。
     """
     fut = _BY_CODE.get(symbol.upper())
     if not fut:
-        return {"direction": "neutral", "score": 0, "confidence": 0}
+        return score_result(0, model="index_option")
     secid = fut["underlying"]
     tr, flow, q = await asyncio.gather(
         em.trends(secid), em.stock_get(secid, "f137", ttl=20.0),
@@ -254,10 +239,8 @@ async def direction(symbol: str) -> dict:
     flow = flow if isinstance(flow, dict) else None
     q = q if isinstance(q, dict) else {}
     price = em.num(q.get("f43"))
-    b = bias(tr, [{"price": price, "high": em.num(q.get("f44")),
-                   "low": em.num(q.get("f45"))}] if price else [], flow, None)
-    return {"direction": b["direction"], "score": b["score"],
-            "confidence": b["confidence"]}
+    return bias(tr, [{"price": price, "high": em.num(q.get("f44")),
+                      "low": em.num(q.get("f45"))}] if price else [], flow)
 
 
 def _signals(state: dict, b: dict) -> list[dict]:
@@ -341,20 +324,16 @@ async def state(symbol: str) -> dict:
         return ch
     underlying = ch.get("underlying") or {}
     spot = underlying.get("price") or 0.0
-    tr, flow, kline = await asyncio.gather(
-        em.trends(fut["underlying"]),
-        em.stock_get(fut["underlying"], "f137", ttl=20.0),
+    b, kline = await asyncio.gather(
+        strategy.direction_for(symbol),
         em.kline(fut["underlying"], klt=1, lmt=240),
         return_exceptions=True,
     )
-    tr = tr if isinstance(tr, list) else []
-    flow = flow if isinstance(flow, dict) else None
+    b = b if isinstance(b, dict) else score_result(0, model="index_option")
     kline = kline if isinstance(kline, list) else []
     basis = _basis_info(ch, spot)
     if basis is None and fut.get("futures"):
         basis = await _futures_basis(fut["futures"], spot)
-    b = bias(tr, [{"price": spot, "high": underlying.get("high"),
-                   "low": underlying.get("low")}], flow, basis)
     ivrv = iv_rv(ch, kline)
     st = {**ch, "bias": b, "iv_rv": ivrv, "basis": basis,
           "chain_stats": ch.get("stats")}

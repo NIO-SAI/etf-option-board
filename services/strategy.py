@@ -11,6 +11,7 @@ from services import (decision, em, index_levels, kronos, market_service as ms, 
                       money as money_fmt, option_service as osvc, pick_tracker as tracker,
                       user_settings as usv, vol)
 from services.indicators import atr, macd_state, pct_change, support_resistance, volume_stats
+from services.direction_score import index_bias, recent_change, score_result
 from services.universe import ETF_BY_CODE, ETFS, TRACK_INDEX
 
 log = logging.getLogger("strategy")
@@ -23,6 +24,7 @@ _DIR_TTL = 60
 # 过期值最长继续服务时间：SWR 期间上游若持续失败，旧值也不该无限顶下去
 _DIR_STALE_MAX = 300
 _DIR_REFRESHING = False
+_DIR_LOCK = asyncio.Lock()
 
 # 最近一次 analyze 算出的标的买卖点（供期权链接口复用，保证盈亏比口径一致）
 _PLAN_CACHE: dict[str, tuple[float, dict, float]] = {}
@@ -72,9 +74,27 @@ async def directions() -> dict:
 
 
 async def _rebuild_dirs() -> dict:
+    """冷启动也单飞，避免多个详情/链请求同时重建整张方向表。"""
+    global _DIR_REFRESHING
+    async with _DIR_LOCK:
+        if _DIR_CACHE and time.time() - _DIR_CACHE[0] < _DIR_TTL:
+            _DIR_REFRESHING = False
+            return _DIR_CACHE[1]
+        return await _compute_dirs()
+
+
+async def direction_for(code: str) -> dict:
+    """列表、详情、合约推荐统一读取同一份方向快照；失败时观望。"""
+    try:
+        return dict((await directions()).get(code.upper()) or score_result(0))
+    except Exception as exc:  # noqa: BLE001 — 不按涨跌幅偷偷切换判断规则
+        log.warning("方向快照不可用 %s: %s", code, exc)
+        return score_result(0)
+
+
+async def _compute_dirs() -> dict:
     global _DIR_CACHE, _DIR_REFRESHING
     try:
-        now = time.time()
         national, ext, idx_lv, turnover = await asyncio.gather(
             national_team_cached(), ms.external_snapshot(), index_levels.snapshot(),
             market_turnover.snapshot())
@@ -85,12 +105,13 @@ async def _rebuild_dirs() -> dict:
                     ms.etf_context(etf["code"], etf["secid"]),
                     ms.track_index_state(etf["track"]),
                 )
-                b = bias_score(ctx, track, national, ext, None, idx_lv, turnover)
-                return etf["code"], {"direction": b["direction"], "score": b["score"],
-                                     "confidence": b["confidence"]}
+                from services import reversal
+                b = bias_score(ctx, track, national, ext, None, idx_lv, turnover,
+                               reversal_signal=reversal.factor(etf["code"]))
+                return etf["code"], b
             except Exception as exc:  # noqa: BLE001
                 log.debug("direction 计算失败 %s: %s", etf.get("code"), exc)
-                return etf["code"], {"direction": "neutral", "score": 0, "confidence": 0}
+                return etf["code"], score_result(0)
 
         out = dict(await asyncio.gather(*[one(e) for e in ETFS]))
         # 股指期权（MO/IO/HO）也要进这张表：否则左栏那三行永远显示「观望」，
@@ -99,13 +120,13 @@ async def _rebuild_dirs() -> dict:
         fut = await asyncio.gather(*[idxo.direction(f["code"]) for f in idxo.FUT_OPTS],
                                    return_exceptions=True)
         for f, d in zip(idxo.FUT_OPTS, fut):
-            out[f["code"]] = d if isinstance(d, dict) else {"direction": "neutral", "score": 0, "confidence": 0}
+            out[f["code"]] = d if isinstance(d, dict) else score_result(0, model="index_option")
         # 左栏底栏的两个大盘指数也要有同样的三档徽标（看多/看空/观望）
         idx = await asyncio.gather(*[index_direction(c, s) for c, s in _BIG_INDEX],
                                    return_exceptions=True)
         for (c, _), d in zip(_BIG_INDEX, idx):
-            out[c] = d if isinstance(d, dict) else {"direction": "neutral", "score": 0, "confidence": 0}
-        _DIR_CACHE = (now, out)
+            out[c] = d if isinstance(d, dict) else score_result(0, threshold=20, model="index")
+        _DIR_CACHE = (time.time(), out)
         return out
     finally:
         _DIR_REFRESHING = False
@@ -115,34 +136,15 @@ async def _rebuild_dirs() -> dict:
 _BIG_INDEX = [("000001", "1.000001"), ("800005", "47.800005")]
 
 
-def _clamp(v: float, lo: float = -1.0, hi: float = 1.0) -> float:
-    return max(lo, min(hi, v))
-
-
 async def index_direction(code: str, secid: str) -> dict:
-    """指数的日内方向（与标的同口径的三档）。
-
-    指数没有期权链可算 Δ/希腊字母，只看日内结构三件事：涨跌幅、近 15 分钟斜率、
-    现价相对当日均价的位置。三项都归一化后加权，±20 分以内算观望。
-    """
+    """大盘指数：近 30/15 分钟动量、价格相对分时均值，阈值 ±20。"""
     try:
         # 平均股价这类板块代码没有外部分钟源，只能靠交易时段内的快照累积，
         # 所以必须走 trends_or_snapshot（em.trends 对它恒为空）。
         tr = em.parse_trends(await em.trends_or_snapshot(secid, ndays=1))
     except Exception:  # noqa: BLE001 — 指数方向失败不影响主流程
         tr = []
-    px = [t["price"] for t in tr if t.get("price")]
-    if len(px) < 6:
-        return {"direction": "neutral", "score": 0, "confidence": 0}
-    last, base = px[-1], (px[0] or px[-1])
-    vwap = sum(px) / len(px)
-    pct = (last / base - 1) * 100 if base else 0.0
-    k = min(15, len(px) - 1)
-    slope = (last - px[-1 - k]) / base * 100 if base else 0.0
-    score = round(45 * _clamp(pct / 1.2) + 35 * _clamp(slope / 0.5)
-                  + 20 * (1 if last >= vwap else -1), 1)
-    return {"direction": "call" if score >= 20 else "put" if score <= -20 else "neutral",
-            "score": score, "confidence": round(min(abs(score) / 60, 1), 2)}
+    return index_bias(tr)
 
 
 def _now_hm() -> str:
@@ -255,8 +257,8 @@ def detect_signals(etf_ctx: dict, track: dict, national: dict, ext: list[dict],
 
 
 def bias_score(etf_ctx, track, national, ext, kronos_sum, idx_levels=None,
-               turnover=None) -> dict:
-    """多因子方向评分 [-100,100]，>0 看多。
+               turnover=None, *, reversal_signal=(0.0, None)) -> dict:
+    """多因子方向评分（纯函数），原始分数 ≥15 看多、≤-15 看空。
 
     含「变盘点」加分（reversal.factor，±15，60 分钟衰减）：5m/15m 高周期转折点作为
     条件并入方向合力，而非单独提醒。
@@ -264,10 +266,10 @@ def bias_score(etf_ctx, track, national, ext, kronos_sum, idx_levels=None,
     score = 0.0
     detail = {}
     q = etf_ctx.get("quote") or {}
-    closes = [b["close"] for b in (etf_ctx.get("kline_1m") or [])]
-
     # 标的日内动量（权重 25）
-    mom = pct_change(closes, 5)
+    mom = recent_change(etf_ctx.get("kline_1m"), 5, price_key="close", time_key="date")
+    if mom is None:
+        mom = recent_change(etf_ctx.get("trends"), 5)
     if mom is not None:
         v = max(-25, min(25, mom * 25))
         score += v
@@ -319,16 +321,12 @@ def bias_score(etf_ctx, track, national, ext, kronos_sum, idx_levels=None,
         detail["市场总成交额"] = round(tv, 1)
     # 变盘点（5m/15m 高周期转折，权重 15）：当日已确认转折点并入方向合力，60 分钟内衰减。
     # 这是「变盘时间点作为条件参与趋势方向分析」的落点——不再单独刷屏，而是加权到方向结论。
-    from services import reversal  # 延迟导入，避免与 reversal→strategy 循环依赖
-    rev_v, rev_label = reversal.factor(etf_ctx.get("code"))
+    rev_v, rev_label = reversal_signal
     if rev_v:
         score += rev_v
         detail[f"变盘点·{rev_label}"] = round(rev_v, 1)
 
-    score = round(max(-100, min(100, score)), 1)
-    direction = "call" if score >= 15 else "put" if score <= -15 else "neutral"
-    conf = min(abs(score) / 100, 1)
-    return {"score": score, "direction": direction, "confidence": round(conf, 2), "detail": detail}
+    return score_result(score, detail=detail)
 
 
 def _struct_target(entry: float, stop: float, levels: list | None, *,
@@ -549,7 +547,8 @@ async def analyze(etf_code: str, with_kronos: bool = True, klt: int = 1) -> dict
             kronos_sum = kronos.summarize(pred, bars[-1]["close"])
 
     signals = detect_signals(etf_ctx, track, national, ext, kronos_sum, idx_lv, turnover)
-    bias = bias_score(etf_ctx, track, national, ext, kronos_sum, idx_lv, turnover)
+    # 方向与列表/T 型报价共用快照；Kronos 仍在独立预测和信号区展示。
+    bias = await direction_for(etf_code)
     plan_dir = bias["direction"] if bias["direction"] != "neutral" else (
         "call" if bias["score"] >= 0 else "put")
     levels = plan_levels(etf_ctx, plan_dir)

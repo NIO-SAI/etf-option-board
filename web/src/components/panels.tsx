@@ -97,11 +97,19 @@ const DIR: Record<Dir, { variant: "destructive-light" | "success-light" | "outli
   neutral: { variant: "outline", label: "观望", Icon: Minus },
 };
 
-const DIR_TIP: Record<Dir, string> = {
-  call: "综合方向：多因子合力（标的动量/价格vs均价/关联指数/指数MACD/国家队/外围），评分 ≥ +15 判定看多",
-  put: "综合方向：多因子合力（标的动量/价格vs均价/关联指数/指数MACD/国家队/外围），评分 ≤ -15 判定看空",
-  neutral: "综合方向：多因子合力评分落在 ±15 之间，无明确方向，观望",
-};
+function directionTip(dir: Dir, bias?: { model?: string; threshold?: number; raw_score?: number }) {
+  const threshold = bias?.threshold ?? 15;
+  const factors = bias?.model === "index_option"
+    ? "现货15分钟动量 / 日内区间位置 / 主力累计资金；期现基差单独展示"
+    : bias?.model === "index"
+      ? "近30/15分钟动量 / 价格vs分时均值"
+      : "标的5分钟动量 / 价格vs均价 / 关联指数 / MACD / 国家队 / 外围 / 关键位 / 成交额 / 变盘点";
+  const rule = dir === "call" ? `原始评分 ≥ +${threshold} 判定看多`
+    : dir === "put" ? `原始评分 ≤ -${threshold} 判定看空`
+      : `原始评分在 -${threshold} 与 +${threshold} 之间，观望`;
+  const raw = bias?.raw_score != null ? `；未取整评分 ${bias.raw_score.toFixed(4)}` : "";
+  return `综合方向（${factors}）：${rule}；显示分数四舍五入${raw}`;
+}
 
 /** 方向徽标：全站唯一的方向口径（左栏列表 / 方向评分 / 交易方案共用）。 */
 function DirBadge({
@@ -116,7 +124,7 @@ function DirBadge({
   const Icon = d.Icon;
   const iconSize = size === "xl" ? "size-4" : size === "lg" ? "size-3.5" : undefined;
   return (
-    <Badge variant={d.variant} size={size} className={className} title={tip ?? DIR_TIP[dir]}>
+    <Badge variant={d.variant} size={size} className={className} title={tip ?? directionTip(dir)}>
       <Icon className={iconSize} aria-hidden />
       {d.label}
     </Badge>
@@ -158,6 +166,7 @@ export function EtfList({
   trendsMap: Record<string, number[]>;
   directions?: Record<string, {
     direction: string; score: number; confidence: number;
+    model?: string; threshold?: number; raw_score?: number;
     signal?: { dir: string; score: number; ts: string };
   }>;
   indices?: any[];
@@ -208,7 +217,7 @@ export function EtfList({
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <span className={cn("truncate text-xs font-medium", on && "text-primary")}>{e.name}</span>
-                    <DirBadge dir={dir} className="shrink-0" />
+                    <DirBadge dir={dir} tip={directionTip(dir, directions[e.code])} className="shrink-0" />
                   </div>
                   <div className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate text-[10px] text-muted-foreground tnum">{e.code} · {e.track}</span>
@@ -251,7 +260,7 @@ export function EtfList({
                     <div className="flex min-w-0 flex-1 flex-col gap-1">
                       <div className="flex min-w-0 items-center gap-1.5">
                         <span className={cn("truncate text-xs font-medium", on && "text-primary")}>{f.name}</span>
-                        <DirBadge dir={dir} className="shrink-0" />
+                        <DirBadge dir={dir} tip={directionTip(dir, directions[f.code])} className="shrink-0" />
                       </div>
                       <div className="flex min-w-0 items-center gap-1.5">
                         <span className="truncate text-[10px] text-muted-foreground tnum">{f.code} · {f.track}</span>
@@ -300,7 +309,9 @@ export function EtfList({
                   <div className="flex min-w-0 flex-1 flex-col gap-1">
                     <div className="flex items-center gap-1.5">
                       <span className="truncate text-xs font-medium">{ix.name}</span>
-                      <DirBadge dir={(directions[ix.code]?.direction ?? "neutral") as Dir} className="shrink-0" />
+                      <DirBadge dir={(directions[ix.code]?.direction ?? "neutral") as Dir}
+                        tip={directionTip((directions[ix.code]?.direction ?? "neutral") as Dir, directions[ix.code])}
+                        className="shrink-0" />
                       <Badge variant="outline" className="shrink-0">指数</Badge>
                     </div>
                     <div className="truncate text-[10px] text-muted-foreground tnum">{ix.code}{clickable && " · 关键位"}</div>
@@ -459,12 +470,12 @@ export function BiasBar({ bias }: { bias: any }) {
         <DirBadge
           dir={dir}
           size="xl"
-          tip={`${DIR_TIP[dir]}；当前评分 ${s}，置信度 ${conf}%`}
+          tip={`${directionTip(dir, bias)}；评分强度 ${conf}%（不代表胜率）`}
         />
         <span className="flex items-baseline gap-1.5 text-xs text-muted-foreground">
           {/* 评分不重复上色：整卡只有方向徽标一个彩色焦点，评分作为它的量纲读 */}
           <span className="text-lg font-semibold text-foreground tnum">{s}</span>
-          <span className="tnum">置信度 {conf}%</span>
+          <span className="tnum">评分强度 {conf}%</span>
         </span>
       </div>
       {/* 评分条：0 居中、左空右多。语义双色带，不用装饰性渐变。 */}
@@ -626,7 +637,7 @@ export function PlanCard({ bundle, onSelect }: { bundle: any; onSelect?: (c: any
   const side = lv?.side;
   // 方向 = 本卡的主焦点，且与左列「综合方向」同源同口径（都用 DirBadge），
   // 但这里多给一句可执行信息（突破/跌破哪个价入场），避免重复而无增量。
-  const dir: Dir = side === "long" ? "call" : side === "short" ? "put" : "neutral";
+  const dir = (bundle?.bias?.direction ?? "neutral") as Dir;
   const entryHint = side === "long" ? `突破 ${nf(lv?.entry_break, 4)} 入场`
     : side === "short" ? `跌破 ${nf(lv?.entry_break, 4)} 入场` : null;
   return (
@@ -645,7 +656,7 @@ export function PlanCard({ bundle, onSelect }: { bundle: any; onSelect?: (c: any
         ) : (
           <>
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pb-2">
-              <DirBadge dir={dir} size="lg" tip={DIR_TIP[dir]} />
+              <DirBadge dir={dir} size="lg" tip={directionTip(dir, bundle?.bias)} />
               {entryHint && <span className="text-xs text-muted-foreground tnum">{entryHint}</span>}
             </div>
             {/* label 在上、值在下：窄栏下也不会出现「突破入场」被折行、与数值挤在一行的情形 */}
