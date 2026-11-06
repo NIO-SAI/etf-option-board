@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
@@ -57,22 +57,31 @@ export function BoardMultiPage() {
   const { data: watchView, refresh: refreshWatch } = usePolling(
     () => api.boardWatch(), 300_000, []);
   // 指数：多日区间没有板块快照，列表口径取「区间末」那天的 4 维快照（机构+大单）
-  const { data: indexView } = usePolling(
+  const { data: indexView, refresh: refreshIndex } = usePolling(
     () => api.boardIndexRank(end || undefined),
     interval,
     [end, interval],
     { kind: "brank", code: `mindex:${end || "latest"}` },
   );
-  // 热门：财联社热门行业/概念 + 盘面异动 → 模糊匹配到的板块
-  const { data: hotView } = usePolling(
-    () => api.boardClsHot(end || undefined), 300_000, [end],
+  // 热门：财联社热门行业/概念 + 盘面异动 → 模糊匹配到的板块。
+  // forceHot：只有「刷新」按钮才置 true → 请求带 force=1 绕过后端缓存回源财联社
+  const forceHot = useRef(false);
+  const { data: hotView, refresh: refreshHot } = usePolling(
+    () => api.boardClsHot(end || undefined, forceHot.current), 300_000, [end],
     { kind: "ctx", code: `mcls:${end || "latest"}` });
+  const [refreshing, setRefreshing] = useState(false);
   useEffect(() => {
     if (Array.isArray(watchView?.items)) setWatchItems(watchView.items);
   }, [watchView]);
   const watchSet = useMemo(() => new Set(watchItems.map((i) => i.code)), [watchItems]);
 
-  useEffect(() => onGlobalRefresh(() => { void refresh(); }), [refresh]);
+  const doRefresh = useCallback(() => {
+    setRefreshing(true);
+    forceHot.current = true;
+    void Promise.all([refresh(), refreshIndex(), refreshHot()])
+      .finally(() => { forceHot.current = false; setRefreshing(false); });
+  }, [refresh, refreshIndex, refreshHot]);
+  useEffect(() => onGlobalRefresh(() => doRefresh()), [doRefresh]);
 
   const items: any[] = data?.items ?? [];
   const byCode = useMemo(() => {
@@ -345,10 +354,11 @@ export function BoardMultiPage() {
                 ))}
               </span>
               <button
-                type="button" onClick={() => refresh()} title="刷新" aria-label="刷新"
-                className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground"
+                type="button" onClick={doRefresh} title="刷新（区间数据 + 热门板块）" aria-label="刷新"
+                disabled={refreshing}
+                className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
               >
-                <RefreshCw className="size-3" aria-hidden />
+                <RefreshCw className={cn("size-3", refreshing && "animate-spin")} aria-hidden />
               </button>
             </div>
           </FrameHeader>

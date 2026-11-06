@@ -96,14 +96,16 @@ def match_name(name: str, boards: list[dict]) -> dict | None:
     return best if best_ratio >= 0.78 else None
 
 
-async def _get_json(url: str, params: dict) -> object | None:
+async def _get_json(url: str, params: dict, force: bool = False) -> object | None:
     full = {**params, "sign": sign_params(params)}
-    return await em.get_json(url, full, ttl=_TTL, referer=CLS_REFERER, tries=1)
+    # force=True 时同时绕过 em 的 URL 级缓存，真正打到财联社（页面刷新按钮用）
+    return await em.get_json(url, full, ttl=_TTL, referer=CLS_REFERER, tries=1, force=force)
 
 
-async def fetch_hot_plates() -> list[tuple[str, str]]:
+async def fetch_hot_plates(force: bool = False) -> list[tuple[str, str]]:
     """热门行业板块 + 热门概念板块：[(名称, 来源)]。"""
-    d = await _get_json(_HOT_URL, {**_CLS_BASE, "type": "industry,concept", "way": "change", "rever": 1})
+    d = await _get_json(_HOT_URL, {**_CLS_BASE, "type": "industry,concept", "way": "change", "rever": 1},
+                        force=force)
     data = (d or {}).get("data") if isinstance(d, dict) else None
     out: list[tuple[str, str]] = []
     if not isinstance(data, dict):
@@ -116,13 +118,13 @@ async def fetch_hot_plates() -> list[tuple[str, str]]:
     return out
 
 
-async def fetch_abnormal() -> list[str]:
+async def fetch_abnormal(force: bool = False) -> list[str]:
     """当日盘面直播里所有带 ``plate_name`` 的条目（每条都是一次板块异动播报）。
 
     以前只取标题含「异动」的，2026-11-05 实测一天只有 2 条，漏掉 20 多个板块；
     ``plate_name`` 本身就是财联社给这条播报打的板块标签，不需要再靠标题判断。
     """
-    d = await _get_json(_ARTICLE_URL, dict(_CLS_BASE))
+    d = await _get_json(_ARTICLE_URL, dict(_CLS_BASE), force=force)
     arts = (d or {}).get("data") if isinstance(d, dict) else None
     out: list[str] = []
     for a in arts or []:
@@ -134,17 +136,17 @@ async def fetch_abnormal() -> list[str]:
     return out
 
 
-async def hot_board_names() -> dict:
+async def hot_board_names(force: bool = False) -> dict:
     """聚合 CLS 热门/异动板块名（去重，异动优先）。返回 {'names': [(名, 来源)], 'error': str|None}。"""
     errors: list[str] = []
     abnormal: list[str] = []
     hot: list[tuple[str, str]] = []
     try:
-        abnormal = await fetch_abnormal()
+        abnormal = await fetch_abnormal(force=force)
     except Exception as exc:  # noqa: BLE001
         errors.append(f"异动: {exc}")
     try:
-        hot = await fetch_hot_plates()
+        hot = await fetch_hot_plates(force=force)
     except Exception as exc:  # noqa: BLE001
         errors.append(f"热门: {exc}")
 
@@ -175,13 +177,13 @@ def match_all(names: list[tuple[str, str]], boards: list[dict]) -> list[dict]:
     return out
 
 
-async def _cached_names() -> tuple[dict, float]:
-    """缓存 CLS 板块名（与日期无关）：5 分钟内直接复用；失败/空时回退上一份。"""
+async def _cached_names(force: bool = False) -> tuple[dict, float]:
+    """缓存 CLS 板块名（与日期无关）：5 分钟内直接复用；force 时强制回源；失败/空时回退上一份。"""
     now = time.time()
-    if _cache["data"] is not None and now - _cache["at"] < _TTL:
+    if not force and _cache["data"] is not None and now - _cache["at"] < _TTL:
         return _cache["data"], _cache["at"]
     try:
-        data = await hot_board_names()
+        data = await hot_board_names(force=force)
     except Exception as exc:  # noqa: BLE001
         data = {"names": [], "error": str(exc)}
     if data.get("names"):
@@ -192,11 +194,12 @@ async def _cached_names() -> tuple[dict, float]:
     return data, now
 
 
-async def hot_boards(boards: list[dict]) -> dict:
+async def hot_boards(boards: list[dict], force: bool = False) -> dict:
     """「热门板块」匹配：只缓存 CLS 名称，资金/涨幅等按本次 `boards`（可指定日期）现算。
 
     缓存整份匹配结果会让「切到历史日期」显示出别的日期的资金值，所以必须分开。
+    ``force=True``（页面刷新按钮）会跳过所有缓存，直接回源财联社。
     """
-    data, at = await _cached_names()
+    data, at = await _cached_names(force=force)
     return {"items": match_all(data.get("names") or [], boards),
             "error": data.get("error"), "at": at}

@@ -83,9 +83,11 @@ export function BoardFlowPage() {
   );
   const { data: watchView, refresh: refreshWatch } = usePolling(
     () => api.boardWatch(), 300_000, []);
-  // 财联社「热门」：热门行业/概念 + 盘面异动，后端模糊匹配到本地板块
+  // 财联社「热门」：热门行业/概念 + 盘面异动，后端模糊匹配到本地板块。
+  // forceHot：只有「刷新」按钮才置 true → 请求带 force=1 绕过后端缓存回源财联社
+  const forceHot = useRef(false);
   const { data: hotView, refresh: refreshHot } = usePolling(
-    () => api.boardClsHot(date || undefined), 300_000, [date],
+    () => api.boardClsHot(date || undefined, forceHot.current), 300_000, [date],
     { kind: "ctx", code: `cls-hot:${date || "latest"}` });
   // 刷新按钮的忙碌态：至少让用户看到图标在转，而不是「点了没反应」
   const [refreshing, setRefreshing] = useState(false);
@@ -122,8 +124,9 @@ export function BoardFlowPage() {
     cache.current = {};
     setRefreshTick((t) => t + 1);
     setRefreshing(true);
+    forceHot.current = true;
     void Promise.all([refreshRank(), refreshIndex(), refreshHot()])
-      .finally(() => setRefreshing(false));
+      .finally(() => { forceHot.current = false; setRefreshing(false); });
   }, [refreshRank, refreshIndex, refreshHot]);
 
   useEffect(() => onGlobalRefresh(() => refresh()), [refresh]);

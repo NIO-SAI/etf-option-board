@@ -679,7 +679,8 @@ async def board_rank(type: str = Query("concept",
 
 
 @router.get("/board/cls-hot")
-async def board_cls_hot(date: str | None = Query(None)):
+async def board_cls_hot(date: str | None = Query(None),
+                       force: bool = Query(False, description="跳过 5 分钟缓存，直接回源财联社（刷新按钮用）")):
     """财联社「热门板块」：热门行业/概念板块 + 盘面异动 → 模糊匹配本地板块。
 
     只做名称匹配，不写库；拉不到数据时 `items=[]` + `error`，前端回退到按资金排序。
@@ -698,7 +699,7 @@ async def board_cls_hot(date: str | None = Query(None)):
     boards = [{"code": r["code"], "name": r["name"], "kind": r.get("type"),
                "flow": r.get("flow"), "pct": r.get("pct")}
               for r in rows if str(r.get("code", "")).startswith("BK")]
-    res = await cls_hot.hot_boards(boards)
+    res = await cls_hot.hot_boards(boards, force=force)
     items = []
     for it in res.get("items") or []:
         items.append({"code": it["code"], "name": it["name"], "type": it.get("kind"),

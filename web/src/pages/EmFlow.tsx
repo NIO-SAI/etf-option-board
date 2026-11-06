@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
@@ -68,9 +68,11 @@ export function EmFlowPage() {
     () => api.emFlowIndustries(), 300_000, [], { kind: "ctx", code: "em-industries" });
   const { data: concepts } = usePolling(
     () => api.emFlowConcepts(), 300_000, [], { kind: "ctx", code: "em-concepts" });
-  // 财联社「热门板块」（热门行业/概念 + 异动）→ 后端模糊匹配到本地板块
+  // 财联社「热门板块」（热门行业/概念 + 异动）→ 后端模糊匹配到本地板块。
+  // forceHot：只有「刷新」按钮才置 true → 请求带 force=1 绕过后端缓存回源财联社
+  const forceHot = useRef(false);
   const { data: hotView, refresh: refreshHot } = usePolling(
-    () => api.boardClsHot(), 300_000, [], { kind: "ctx", code: "cls-hot" });
+    () => api.boardClsHot(undefined, forceHot.current), 300_000, [], { kind: "ctx", code: "cls-hot" });
   // 自定义：与「主力资金分时」「主力资金多日」共用同一份自选（data/board_watch.json）
   const { data: watchView, refresh: refreshWatch } = usePolling(
     () => api.boardWatch(), 300_000, []);
@@ -165,9 +167,11 @@ export function EmFlowPage() {
   const [refreshing, setRefreshing] = useState(false);
   const doRefresh = useCallback(async () => {
     setRefreshing(true);
+    forceHot.current = true;
     try {
       await Promise.all([refresh(), refreshHot(), refreshWatch()]);
     } finally {
+      forceHot.current = false;
       setRefreshing(false);
     }
   }, [refresh, refreshHot, refreshWatch]);
