@@ -109,9 +109,9 @@ def test_presets_use_expected_dimension():
     assert tf.PRESETS["tdx"]["dim"] == "lot"
     assert tf.PRESETS["tdx"]["auction"] == "buy"
     assert tf.PRESETS["wind"]["dim"] == "amt"
-    assert tf.PRESETS["wind"]["auction"] == "side"
+    assert tf.PRESETS["wind"]["auction"] == "drop_open"
     assert tf.PRESETS["tdx"]["buckets"][0]["thr"] == 700
-    assert tf.PRESETS["wind"]["buckets"][0]["thr"] == 10000   # 拟合 Wind 截图：机构 ≥1 亿
+    assert tf.PRESETS["wind"]["buckets"][0]["thr"] == 400     # 拟合 Wind 截图：机构 ≥400 万
 
 
 def test_align_price_filters_date_and_carries_forward():

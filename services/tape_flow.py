@@ -63,10 +63,10 @@ PRESETS: dict[str, dict] = {
     "wind": {
         "label": "Wind",
         "dim": "amt",
-        "auction": "side",          # 集合竞价按买卖方向拆
+        "auction": "drop_open",     # 剔除开盘竞价；收盘竞价按方向
         "buckets": [
-            {"key": "inst", "name": "机构", "thr": 10000},
-            {"key": "main", "name": "主力", "thr": 3000},
+            {"key": "inst", "name": "机构", "thr": 400},
+            {"key": "main", "name": "主力", "thr": 70},
             {"key": "big", "name": "大户", "thr": 15},
             {"key": "retail", "name": "散户", "thr": 0},
         ],
@@ -318,10 +318,11 @@ async def scan() -> dict:
                 if not tick:
                     continue
                 minute, amount, lots, side, auction = tick
-                # 金额档：集合竞价按买卖方向（Wind 口径）
-                slot = amt.setdefault((minute, bin_of(amount / 1e4, CUTS)), [0.0, 0.0])
-                slot[0 if side > 0 else 1] += amount
-                # 手数档：集合竞价整段算主动买（通达信口径）
+                # 金额档（Wind）：**剔除开盘竞价**（09:30 前），收盘竞价按方向；不剔会把四条线全压歪
+                if not auction:
+                    slot = amt.setdefault((minute, bin_of(amount / 1e4, CUTS)), [0.0, 0.0])
+                    slot[0 if side > 0 else 1] += amount
+                # 手数档（通达信）：开盘竞价整段算主动买，收盘竞价按方向
                 side_lot = 1 if (auction or side > 0) else -1
                 slot2 = lot.setdefault((minute, bin_of(lots, LOTS)), [0.0, 0.0])
                 slot2[0 if side_lot > 0 else 1] += amount
@@ -331,7 +332,8 @@ async def scan() -> dict:
     def flat(src):
         return [(m, b, v[0], v[1]) for (m, b), v in src.items() if v[0] or v[1]]
 
-    amount = sum(v[0] + v[1] for v in amt.values())
+    # 成交额口径用「手数档」那张（含全部竞价），金额档那张刻意剔了开盘竞价，不能拿来校验
+    amount = sum(v[0] + v[1] for v in lot.values())
     return {"amt": flat(amt), "lot": flat(lot), "amount": amount,
             "stocks_ok": ok, "stocks_total": total}
 
