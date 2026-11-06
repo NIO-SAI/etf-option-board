@@ -102,7 +102,7 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   另保留最近一个有数据的昨日序列：9:15 开盘前当日无数据时自动展示昨日（前端打
   「昨日资金流」角标，`etf_context.flow_day` 标识数据日期），界面不空。
 - **资金流向（2026-11-07 新增一级导航，ADR-0005）**：`services/tape_flow.py` 拉全A逐笔
-  （东财 `details/get`，1 请求/只，约 5200 只、80~140 秒），按「分钟 × 35 个金额档 × 买卖」
+  （东财 `details/get`，1 请求/只，约 5200 只、100~140 秒），按「分钟 × 档位 × 买卖」
   存进 `board_flow.db` 的**两张**直方图表：`tape_flow_bins`（金额档，Wind 口径）+
   `tape_flow_lots`（手数档，通达信口径），一天约 1.3 万行，留 120 天；只读接口
   `/api/tape-flow/dates|series|health`，页面 `#/flow`（Tab 切通达信/Wind 两套口径）。
