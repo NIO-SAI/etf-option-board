@@ -164,6 +164,7 @@ export function FlowEndLabels({
               // 超长板块名兜底：绝不越过留白区右边界
               maxWidth: Math.max(40, gridRight - LEAD - 6),
               pointerEvents: hoverable ? "auto" : "none",
+              cursor: hoverable ? "pointer" : "default",
             }}
           >
             {r.text}

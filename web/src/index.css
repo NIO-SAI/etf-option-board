@@ -129,12 +129,20 @@
   /* 可点击元素统一小手；禁用态保持默认箭头，避免“看着能点却没反应” */
   button:not(:disabled),
   [role="button"]:not([aria-disabled="true"]),
+  [role="tab"]:not([aria-disabled="true"]),
+  [role="switch"]:not([aria-disabled="true"]),
+  [role="menuitem"]:not([aria-disabled="true"]),
   a[href],
+  select:not(:disabled),
   summary,
-  label[for] {
+  label[for],
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled) {
     cursor: pointer;
   }
   button:disabled,
+  select:disabled,
+  input:disabled,
   [aria-disabled="true"] {
     cursor: default;
   }
