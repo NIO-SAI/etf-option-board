@@ -13,7 +13,7 @@
 
 | 口径 | 分档维度 | 门槛 | 集合竞价 |
 |---|---|---|---|
-| 通达信 888881 | 单笔**手数** | 主力 ≥700 手 / 跟风 ≥120 手 / 散户 <120 手 | **整段算主动买**（296 亿，买 119/卖 178） |
+| 通达信 888881 | 单笔**手数** | 主力 ≥700 手 / 跟风 ≥150 手 / 散户 <150 手 | **整段算主动买**（296 亿，买 119/卖 178） |
 | Wind 资金流向 | 单笔**金额** | 超大单 ≥2000 万 / 主力 500–2000 万 / 大户 20–500 万 / 散户 <20 万 | 按方向拆（不并入买） |
 | — | Wind「机构」线 | 按账户/席位识别，逐笔里拿不到 | 用「超大单」替代，不复刻 |
 
@@ -56,7 +56,7 @@ PRESETS: dict[str, dict] = {
         "auction": "buy",           # 集合竞价整段算主动买
         "buckets": [
             {"key": "main", "name": "主力", "thr": 700},
-            {"key": "follow", "name": "跟风", "thr": 120},
+            {"key": "follow", "name": "跟风", "thr": 150},
             {"key": "retail", "name": "散户", "thr": 0},
         ],
     },
@@ -234,6 +234,33 @@ def cumulative(rows: Iterable[tuple[str, int, float, float]],
             for k in range(len(ths)):
                 running[k] += delta[k]
         out[i] = list(running)
+    return out
+
+
+def align_price(axis: Iterable[str], points: Iterable[dict], date: str) -> list[float | None]:
+    """把分时价格点对齐到资金轴（HH:MM）：只取当日、缺分钟用前值填充。
+
+    价格线走图上的第二根 Y 轴，和资金净额共用一条时间轴。
+    """
+    axis = list(axis)
+    by_minute: dict[str, float] = {}
+    for p in points or []:
+        t = str((p or {}).get("time") or "")
+        if not t.startswith(str(date)):
+            continue
+        v = (p or {}).get("price")
+        if v is None:
+            continue
+        try:
+            by_minute[t[-5:]] = float(v)
+        except (TypeError, ValueError):
+            continue
+    out: list[float | None] = []
+    last: float | None = None
+    for m in axis:
+        if m in by_minute:
+            last = by_minute[m]
+        out.append(last)
     return out
 
 

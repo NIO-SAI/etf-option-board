@@ -112,3 +112,14 @@ def test_presets_use_expected_dimension():
     assert tf.PRESETS["wind"]["auction"] == "side"
     assert tf.PRESETS["tdx"]["buckets"][0]["thr"] == 700
     assert tf.PRESETS["wind"]["buckets"][0]["thr"] == 2000
+
+
+def test_align_price_filters_date_and_carries_forward():
+    axis = ["09:30", "09:31", "09:32", "09:33"]
+    pts = [
+        {"time": "2026-11-06 09:31", "price": 10.5},
+        {"time": "2026-11-05 09:31", "price": 99.0},   # 别的交易日要丢掉
+        {"time": "2026-11-06 09:33", "price": 11.0},
+    ]
+    assert tf.align_price(axis, pts, "2026-11-06") == [None, 10.5, 10.5, 11.0]
+    assert tf.align_price([], pts, "2026-11-06") == []

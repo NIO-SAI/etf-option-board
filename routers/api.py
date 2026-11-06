@@ -1373,6 +1373,20 @@ async def tape_flow_series(
                         "（逐笔只保留最新一个交易日，历史靠本地库）")
         return out
 
+    # 价格叠加线（第二 Y 轴）：A股平均股价 + 上证指数
+    try:
+        prices = []
+        for key, name, secid in (("avg", "A股平均股价", "47.800005"),
+                                 ("sh", "上证指数", "1.000001")):
+            pts = await ms.trends(secid)
+            vals = tf.align_price(axis, pts, date)
+            last = next((v for v in reversed(vals) if v is not None), None)
+            if last is not None:
+                prices.append({"key": key, "name": name, "values": vals, "last": last})
+        out["prices"] = prices
+    except Exception:  # noqa: BLE001 — 叠加线是附加项，失败不影响资金曲线
+        out["prices"] = []
+
     cum = tf.cumulative(rows, thresholds, axis, edges)
     sums = tf.summarize(rows, thresholds, edges)
     for k, b in enumerate(buckets):

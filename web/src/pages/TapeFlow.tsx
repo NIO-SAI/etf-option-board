@@ -18,14 +18,16 @@ const PRESETS = [
 
 /** 两套口径的默认门槛（通达信按「手」，Wind 按「万元」），页面输入框可改 */
 const DEFAULTS: Record<string, string[]> = {
-  tdx: ["700", "120"],
+  tdx: ["700", "150"],
   wind: ["2000", "500", "20"],
 };
 const UNIT: Record<string, string> = { tdx: "手", wind: "万元" };
+/** 叠加价格线的颜色（与 MoneyLinesChart 里的 EXTRA_COLORS 同序） */
+const PRICE_COLORS = ["#0ea5e9", "#64748b"];
 
 const NOTES: Record<string, string> = {
   tdx: "口径：全A（沪深，不含北交所）逐笔成交按单笔手数分档、每笔只记主动方一次，集合竞价整段算主动买；"
-    + "主力 ≥700 手，跟风 120–700 手，散户 <120 手。各档「买+卖」合计 = 全市场成交额。",
+    + "主力 ≥700 手，跟风 150–700 手，散户 <150 手。各档「买+卖」合计 = 全市场成交额。",
   wind: "口径：同上分档（Wind 按单笔金额、集合竞价按买卖方向拆）；超大单 ≥2000 万，主力 500–2000 万，"
     + "大户 20–500 万，散户 <20 万。Wind 的「机构」线按账户/席位识别，逐笔里拿不到，本图用「超大单」替代。",
 };
@@ -47,6 +49,8 @@ export function TapeFlowPage() {
   const [vals, setVals] = useState<string[]>(DEFAULTS.tdx);
   /** 已应用的自定义门槛（空 = 用默认口径） */
   const [applied, setApplied] = useState("");
+  /** 叠加价格线的显隐（点图例图标切换） */
+  const [showPrice, setShowPrice] = useState<Record<string, boolean>>({ avg: true, sh: true });
 
   useEffect(() => {
     setVals(DEFAULTS[preset] ?? []);
@@ -69,6 +73,10 @@ export function TapeFlowPage() {
   const series = useMemo(
     () => (data?.series ?? []).map((s: any) => ({ code: s.code, name: s.name, values: s.values })),
     [data]);
+  // 叠加价格线：A股平均股价 / 上证指数（走第二 Y 轴）
+  const prices = (data?.prices ?? []) as { key: string; name: string; values: (number | null)[]; last?: number }[];
+  const extra = prices.filter((p) => showPrice[p.key] !== false)
+    .map((p) => ({ code: p.key, name: p.name, values: p.values }));
   const meta = data?.meta ?? {};
   const updated = meta.updated_at || health?.state?.last_run || "";
   const state = health?.state ?? {};
@@ -202,12 +210,42 @@ export function TapeFlowPage() {
             ) : null}
           </div>
 
+          {/* 叠加线图例：点图标切换显示 / 隐藏 */}
+          {prices.length ? (
+            <div className="flex shrink-0 items-center justify-end gap-1 px-3 pb-0.5 text-[10px]">
+              <span className="mr-0.5 text-muted-foreground">叠加</span>
+              {prices.map((p, i) => {
+                const on = showPrice[p.key] !== false;
+                return (
+                  <button
+                    key={p.key}
+                    type="button"
+                    aria-pressed={on}
+                    title={on ? `隐藏${p.name}` : `显示${p.name}`}
+                    onClick={() => setShowPrice((prev) => ({ ...prev, [p.key]: !on }))}
+                    className={cn(
+                      "flex items-center gap-1 rounded border px-1.5 py-0.5 transition-colors",
+                      on
+                        ? "border-border text-foreground hover:bg-muted"
+                        : "border-dashed border-border/70 text-muted-foreground opacity-60 hover:opacity-100",
+                    )}
+                  >
+                    <span className="size-1.5 rounded-full" style={{ background: PRICE_COLORS[i % PRICE_COLORS.length] }} />
+                    {p.name}
+                    <span className="tnum">{p.last != null ? p.last.toFixed(2) : "—"}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+
           {/* 分时图：独占剩余高度，随窗口缩放重排 */}
           <div className="min-h-0 flex-1 px-2 pb-1">
             <MoneyLinesChart
               id={`tape-flow-${preset}`}
               axis={data?.axis ?? []}
               series={series}
+              extra={extra}
               height="100%"
               endLabels
             />
