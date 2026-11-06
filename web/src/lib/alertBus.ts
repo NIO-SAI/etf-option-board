@@ -44,10 +44,13 @@ function dispatch(a: Alert) {
     if (seen.has(a.id)) return;
     seen.add(a.id);
   }
-  // 打扰只在这里做一次：页面在不在期权看板都能收到
+  // 打扰只在这里做一次：页面在不在期权看板都能收到。
+  // 系统通知可能被 macOS 专注模式 / 系统通知设置静默丢弃（Chrome 里显示已授权但桌面不弹），
+  // 所以页面内 toast 永远兜底显示，不再以「通知是否发出」作为唯一提示。
   if (!a.backfill && a.level !== "info") {
     sound.play(a.level);
-    if (!showNotification(a)) toast(a.title, { description: a.text, duration: 6000 });
+    showNotification(a);
+    toast(a.title, { description: a.text, duration: 6000 });
   }
   subs.forEach((f) => {
     try {
