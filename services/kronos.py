@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -31,6 +32,8 @@ def available() -> bool:
 class _Worker:
     def __init__(self) -> None:
         self._proc: asyncio.subprocess.Process | None = None
+        self._stderr_task: asyncio.Task | None = None
+        self._stderr_tail: list[str] = []
         self._lock = asyncio.Lock()
         self._load_lock = asyncio.Lock()
         self._req_id = 0
@@ -52,8 +55,42 @@ class _Worker:
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, limit=1 << 20,
             )
+            self._stderr_task = asyncio.create_task(self._drain_stderr(self._proc))
             log.info("Kronos 子进程已启动 pid=%s", self._proc.pid)
             return self._proc
+
+    async def _drain_stderr(self, proc: asyncio.subprocess.Process) -> None:
+        """持续消费子进程 stderr，避免管道写满后子进程阻塞在写操作上。
+
+        模型加载时 transformers/torch 会往 stderr 打大量 warning，超过管道缓冲
+        （Linux 64KB）后子进程 write 阻塞，主进程等 stdout 永远等不到，表现为
+        「推理超时且日志无任何线索」。这里全程读空，只留尾部供报错时定位。
+        """
+        tail: collections.deque[str] = collections.deque(maxlen=20)
+        try:
+            while True:
+                line = await proc.stderr.readline()
+                if not line:
+                    break
+                text = line.decode("utf-8", "replace").rstrip()
+                if text:
+                    tail.append(text)
+                    log.debug("kronos stderr: %s", text)
+        except Exception:  # noqa: BLE001 — 读取失败不应影响推理主流程
+            pass
+        finally:
+            self._stderr_tail = list(tail)
+
+    def _stderr_hint(self) -> str:
+        """把 stderr 尾部拼进错误信息，便于排查模型加载失败。"""
+        if not self._stderr_tail:
+            return ""
+        return "；子进程 stderr 末行: " + self._stderr_tail[-1][:300]
+
+    def _cancel_stderr(self) -> None:
+        task, self._stderr_task = self._stderr_task, None
+        if task is not None and not task.done():
+            task.cancel()
 
     async def close(self) -> None:
         if self._proc is None or self._proc.returncode is not None:
@@ -66,6 +103,8 @@ class _Worker:
                 self._proc.kill()
             except Exception:  # noqa: BLE001
                 pass
+        finally:
+            self._cancel_stderr()
 
     async def call(self, payload: dict, timeout: int = PREDICT_TIMEOUT) -> dict:
         async with self._lock:
@@ -81,8 +120,9 @@ class _Worker:
             try:
                 line = await asyncio.wait_for(proc.stdout.readline(), timeout=timeout)
             except asyncio.TimeoutError:
+                hint = self._stderr_hint()
                 await self._reset()
-                raise RuntimeError(f"Kronos 推理超时（>{timeout}s）")
+                raise RuntimeError(f"Kronos 推理超时（>{timeout}s）{hint}")
             if not line:
                 await self._reset()
                 raise RuntimeError("Kronos 子进程无响应")
@@ -93,6 +133,7 @@ class _Worker:
 
     async def _reset(self) -> None:
         proc, self._proc = self._proc, None
+        self._cancel_stderr()
         if proc and proc.returncode is None:
             try:
                 proc.kill()

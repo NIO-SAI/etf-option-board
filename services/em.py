@@ -165,15 +165,17 @@ async def _curl_json_v6(url: str, params: dict | None = None,
     err: str | None = None
     codes: list[int | None] = []
     for i, extra in enumerate(attempts):
-        proc = await asyncio.create_subprocess_exec(
-            "curl", "-s", "-6", "-m", _V6_TIMEOUT, *extra,
-            "-A", _UA, "-e", referer or _REFERER,
-            "-H", "Accept: application/json, text/plain, */*",
-            full,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
+        # 信号量必须包住「起进程 + 读结果」全程：curl 在 create_subprocess_exec
+        # 返回时就已经开始抓数据，若先起进程再抢槽，并发上限形同虚设
         async with _V6_SEM:
+            proc = await asyncio.create_subprocess_exec(
+                "curl", "-s", "-6", "-m", _V6_TIMEOUT, *extra,
+                "-A", _UA, "-e", referer or _REFERER,
+                "-H", "Accept: application/json, text/plain, */*",
+                full,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
             out, _ = await proc.communicate()
         codes.append(proc.returncode)
         body = out.decode("utf-8", "replace").strip()
