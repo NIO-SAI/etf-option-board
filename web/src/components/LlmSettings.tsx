@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/misc";
 import {
-  clearLlmConfig, EMPTY_LLM_CONFIG, llmEndpoint, loadLlmConfig, saveLlmConfig,
+  clearLlmConfig, defaultMaxTokens, EMPTY_LLM_CONFIG, llmEndpoint, loadLlmConfig, saveLlmConfig,
   testLlmConnection, type LlmConfig, type LlmProtocol, type LlmTransport,
 } from "@/lib/browserLlm";
 
@@ -15,12 +15,14 @@ export function LlmSettings() {
   const [status, setStatus] = useState("");
   const request = useRef<AbortController | null>(null);
   useEffect(() => () => request.current?.abort(), []);
-  const change = (field: keyof LlmConfig, value: string) => {
+  const change = <K extends keyof LlmConfig,>(field: K, value: LlmConfig[K]) => {
     request.current?.abort();
     request.current = null;
     setBusy(false);
     setStatus(""); setError("");
-    setConfig((old) => ({ ...old, [field]: value }));
+    setConfig((old) => ({ ...old,
+      ...(field === "protocol" && old.maxTokens === defaultMaxTokens(old.protocol) ?
+        { maxTokens: defaultMaxTokens(value as LlmProtocol) } : {}), [field]: value }));
   };
   let endpoint = "";
   try { if (config.baseUrl.trim()) endpoint = llmEndpoint(config); } catch { /* 保存或测试时显示校验错误 */ }
@@ -86,6 +88,12 @@ export function LlmSettings() {
       <span className="font-medium">API Key</span>
       <input className={INPUT} aria-label="模型 API Key" type="password" autoComplete="new-password" spellCheck={false}
         value={config.apiKey} onChange={(e) => change("apiKey", e.target.value)} placeholder="服务无需鉴权时可留空" />
+    </label>
+    <label className="block space-y-1.5">
+      <span className="font-medium">最大输出 Token</span>
+      <input className={INPUT} aria-label="最大输出 Token" type="number" min={1024} max={65536} step={1}
+        value={config.maxTokens || ""} onChange={(e) => change("maxTokens", Number(e.target.value))} />
+      <span className="block leading-relaxed text-muted-foreground">推理模型的思考与最终正文共用此额度；DeepSeek 等推理模型建议从 16384 起。请勿超过模型支持的上限，连接测试也使用此设置。</span>
     </label>
     <div className="flex flex-wrap items-center gap-2">
       <Button size="sm" onClick={save}>保存模型配置</Button>

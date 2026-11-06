@@ -191,7 +191,7 @@ export function LlmPanel({ code }: { code: string }) {
           {config && <div className="mb-2 break-all text-[10px] text-muted-foreground">{transportLabel(config.transport)} · {protocolLabel(config.protocol)} · {config.model}</div>}
           {loading && !d && (
             <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" />大模型分析中，通常需要 10–60 秒…
+              <Loader2 className="size-3.5 animate-spin" />大模型分析中，推理模型可能需要 1–5 分钟…
             </div>
           )}
           {!res && !loading && <div className="py-3 text-center text-xs text-muted-foreground">{config ? "点击「生成决策」调用已配置的模型综合分析并给出买卖点" : "请先在「模型设置」中配置服务地址、模型 ID 与兼容协议"}</div>}

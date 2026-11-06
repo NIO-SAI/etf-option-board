@@ -51,9 +51,13 @@ def request_parts(data: object) -> tuple[str, dict, dict]:
     test = data.get("test", False)
     if not isinstance(test, bool):
         raise ValueError("测试标记格式不正确")
+    # 保留 Anthropic 的原预算；OpenAI 兼容推理模型需给推理和正文共同留足空间。
+    max_tokens = data.get("maxTokens", 4096 if protocol == "anthropic" else 16384)
+    if type(max_tokens) is not int or not 1024 <= max_tokens <= 65536:
+        raise ValueError("最大输出 Token 需为 1024–65536 之间的整数")
 
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    body = {"model": model, "max_tokens": 1024 if test else 4096, "stream": False}
+    body = {"model": model, "max_tokens": max_tokens, "stream": False}
     if protocol == "anthropic":
         if key:
             headers["x-api-key"] = key

@@ -20,7 +20,7 @@ def test_openai_credentials_are_only_in_authorization():
     assert headers["Authorization"] == "Bearer test-only-key"
     assert "test-only-key" not in url + str(body)
     assert not {"Cookie", "Referer", "Origin"} & headers.keys()
-    assert body["max_tokens"] == 4096 and body["stream"] is False
+    assert body["max_tokens"] == 16384 and body["stream"] is False
     assert [m["role"] for m in body["messages"]] == ["system", "user"]
     assert data == before
 
@@ -33,7 +33,26 @@ def test_anthropic_protocol_and_test_budget():
     assert "Authorization" not in headers and "anthropic-dangerous-direct-browser-access" not in headers
     assert body["system"] == "测试系统提示"
     assert body["messages"] == [{"role": "user", "content": "测试用户提示"}]
-    assert body["max_tokens"] == 1024
+    assert body["max_tokens"] == 4096
+
+
+@pytest.mark.parametrize("protocol", ["openai", "anthropic"])
+@pytest.mark.parametrize("test", [False, True])
+def test_configured_budget_is_used_for_both_decision_and_connection(protocol, test):
+    _, _, body = request_parts(config(protocol=protocol, test=test, maxTokens=32768))
+    assert body["max_tokens"] == 32768
+
+
+@pytest.mark.parametrize("budget", [None, True, 0, 1023, 65537, 4096.5, "test-only-key"])
+def test_invalid_budget_is_rejected_without_echoing_input(budget):
+    with pytest.raises(ValueError, match="最大输出 Token") as exc:
+        request_parts(config(maxTokens=budget))
+    assert "test-only-key" not in str(exc.value)
+
+
+@pytest.mark.parametrize("budget", [1024, 65536])
+def test_budget_bounds_are_accepted(budget):
+    assert request_parts(config(maxTokens=budget))[2]["max_tokens"] == budget
 
 
 @pytest.mark.parametrize("base", ["https://model.example", "https://model.example/v1/",

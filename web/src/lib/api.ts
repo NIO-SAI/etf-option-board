@@ -43,7 +43,7 @@ export const api = {
   },
   llmProxy: async (body: {
     protocol: string; baseUrl: string; model: string; apiKey: string;
-    system: string; user: string; test: boolean;
+    system: string; user: string; test: boolean; maxTokens: number;
   }, signal: AbortSignal) => {
     const r = await fetch(`${BASE}/llm/proxy`, {
       method: "POST", signal, cache: "no-store", credentials: "omit",

@@ -14,7 +14,7 @@ self.addEventListener("message", (e) => {
   if (e.data?.type !== "etf:llm:request") return;
   e.waitUntil((async () => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 180_000);
+    const timer = setTimeout(() => controller.abort(), 300_000);
     port.onmessage = (message) => { if (message.data?.type === "abort") controller.abort(); };
     try {
       const req = e.data.request;

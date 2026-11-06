@@ -11,7 +11,9 @@
 - 手动解析代理请求并限制体积，校验只返回固定错误，不回显输入；上游非成功响应只返回状态码，不读取可能反射密钥的原始错误正文；不打印请求、响应或异常对象。
 - 切换方式必须由用户显式选择；旧配置缺少 transport 时仍为直连，失败后不自动切代理。代理支持前端取消与断开时中止上游请求。
 - 直连选项附当前 Origin 与协议对应的 CORS 示例：OPTIONS 无鉴权、POST/OPTIONS 放行、显式列出 Authorization 或 Anthropic 请求头、网关与应用不要重复添加 Allow-Origin。
-- 动作、手数约束由后端纯函数下发，浏览器执行校正；切标的、改配置、关闭组件时取消旧请求，超时 180 秒。
+- 动作、手数约束由后端纯函数下发，浏览器执行校正；切标的、改配置、关闭组件时取消旧请求，页面超时 300 秒、代理上游超时 280 秒。
+- 最大输出 Token 也只存在浏览器配置：OpenAI Chat 默认 16384、Anthropic 默认 4096，允许 1024–65536 的整数。两种请求方式和连接测试统一使用配置值，推理与正文共用额度。
+- 响应先判断结束原因：length / max_tokens 提示截断，不展示不完整决策；只有 reasoning_content / thinking 时提示缺少最终正文，不能将推理过程当作决策。过滤、拒答与空正文分别提示，不回显原始错误。
 - 既有服务端 LLM API 保持兼容，页面不再使用。
 
 ## 协议与地址
@@ -28,6 +30,8 @@
 - [Anthropic 官方 SDK 请求头](https://github.com/anthropics/anthropic-sdk-typescript/blob/main/src/client.ts)
 - [Worker fetch 与 CORS](https://developer.mozilla.org/en-US/docs/Web/API/WorkerGlobalScope/fetch)
 - [RequestInit：referrerPolicy / credentials](https://developer.mozilla.org/en-US/docs/Web/API/RequestInit)
+- [DeepSeek 推理与最终正文](https://api-docs.deepseek.com/guides/thinking_mode)
+- [DeepSeek max_tokens 与 finish_reason](https://api-docs.deepseek.com/api/create-chat-completion)
 
 ## 验收
 
@@ -51,3 +55,12 @@
 - 使用合成敏感标记检查：参数错误、畸形 JSON 和上游 401 原样反射 Key 时，代理均未向客户端回显 Key；应用日志及 data 文件中未发现合成 Key / 提示词。
 - 代理上游请求不带 Origin / Referer / Cookie。客户端取消后，上游模拟服务确认收到连接断开；监听直接使用 ASGI disconnect 事件，避免 BaseHTTPMiddleware 下零等待轮询漏报。
 - 通过设置页现有 qproxy 配置做真实简短连接测试成功；密钥未读出到工具或日志。当前浏览器的该配置切为代理，其余配置字段保持原值。
+
+### 2026-11-06 空正文报错排查
+
+- 原实现把决策 `max_tokens` 固定为 4096、连接测试固定为 1024，且忽略结束原因；输出耗尽、仅返回推理和协议不兼容都会落到同一条空正文提示。
+- 原预算下实际调用同一 qproxy DeepSeek 模型：沪深300两次、中证1000一次均成功，没有复现用户那次原始失败。其中沪深300一次完成用量 3627、推理用量 3245，已接近原上限。没有保存原始请求、密钥或模型正文。
+- 为核对失败机制，仅在浏览器内对一笔沪深300请求临时设 1024 上限（不改用户配置）：HTTP 200，finish_reason=length，completion_tokens=reasoning_tokens=1024，content 长度 0。确认推理耗尽输出额度时确实会返回原实现报错的响应形态；用户那次是否同因仍需失败响应的结束原因确认。
+- 新默认 16384 预算的中证1000真实决策成功，结束原因 stop，正文长度 481；两种传输和连接测试统一使用可配置预算。页面保留原协议、地址、模型和密钥。
+- 浏览器合成响应核对：OpenAI length、Anthropic max_tokens、仅推理、服务方过滤均显示对应提示；即使截断正文碰巧为完整 JSON 也不展示为决策，正常 text 分块仍能展示。设置页已核对旧配置自动使用 16384，临时测试配置已恢复。
+- 587 项纯函数测试、前端构建、Python 编译与健康检查通过；类型检查仍为已有的 21 处 dense 错误。

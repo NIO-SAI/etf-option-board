@@ -221,8 +221,8 @@ async def close() -> None:
 async def llm_post(url: str, headers: dict, body: dict) -> dict:
     """临时模型请求：独立客户端，不复用行情缓存、Cookie、Referer 或失败重试。"""
     try:
-        async with asyncio.timeout(160):
-            async with httpx.AsyncClient(timeout=httpx.Timeout(150, connect=10),
+        async with asyncio.timeout(280):
+            async with httpx.AsyncClient(timeout=httpx.Timeout(270, connect=10),
                                          follow_redirects=False) as client:
                 async with client.stream("POST", url, headers=headers, json=body) as response:
                     if not 200 <= response.status_code < 300:

@@ -9,12 +9,14 @@ export interface LlmConfig {
   baseUrl: string;
   model: string;
   apiKey: string;
+  maxTokens: number;
 }
 
 const STORAGE_KEY = "etf-board.llm-config.v1";
 const CHANGE_EVENT = "etf:llm-config-changed";
-const REQUEST_TIMEOUT = 180_000;
-export const EMPTY_LLM_CONFIG: LlmConfig = { protocol: "openai", transport: "direct", baseUrl: "", model: "", apiKey: "" };
+const REQUEST_TIMEOUT = 300_000;
+export const defaultMaxTokens = (protocol: LlmProtocol) => protocol === "anthropic" ? 4096 : 16384;
+export const EMPTY_LLM_CONFIG: LlmConfig = { protocol: "openai", transport: "direct", baseUrl: "", model: "", apiKey: "", maxTokens: defaultMaxTokens("openai") };
 export const protocolLabel = (p: LlmProtocol) => p === "anthropic" ? "Anthropic" : "OpenAI Chat";
 export const transportLabel = (t: LlmTransport) => t === "proxy" ? "看板后端代理" : "浏览器直连";
 
@@ -40,7 +42,11 @@ export function validateLlmConfig(config: LlmConfig): LlmConfig {
   // 旧配置没有 transport，继续使用浏览器直连，避免升级后自动把密钥传给后端。
   const transport = config.transport ?? "direct";
   if (!["direct", "proxy"].includes(transport)) throw new Error("请选择请求方式");
-  const out = { protocol: config.protocol, transport, baseUrl: config.baseUrl.trim(), model: config.model.trim(), apiKey: config.apiKey.trim() };
+  const maxTokens = config.maxTokens ?? defaultMaxTokens(config.protocol);
+  if (!Number.isInteger(maxTokens) || maxTokens < 1024 || maxTokens > 65536) {
+    throw new Error("最大输出 Token 需为 1024–65536 之间的整数，并在模型支持的范围内");
+  }
+  const out = { protocol: config.protocol, transport, baseUrl: config.baseUrl.trim(), model: config.model.trim(), apiKey: config.apiKey.trim(), maxTokens };
   llmEndpoint(out);
   if (!out.model) throw new Error("请填写模型 ID");
   if (/[\r\n]/.test(out.apiKey)) throw new Error("API Key 不能包含换行");
@@ -90,9 +96,10 @@ export function openLlmSettings(): void {
 interface ModelRequest { url: string; headers: Record<string, string>; body: string }
 interface ModelReply { status?: number; text?: string; error?: string }
 
-function modelRequest(config: LlmConfig, system: string, user: string, test: boolean): ModelRequest {
+function modelRequest(config: LlmConfig, system: string, user: string): ModelRequest {
   const headers: Record<string, string> = { "Content-Type": "application/json", Accept: "application/json" };
-  const body: Record<string, unknown> = { model: config.model, max_tokens: test ? 1024 : 4096, stream: false };
+  // 推理模型的 max_tokens 同时包含推理与最终正文，不能只按最终 JSON 的长度预算。
+  const body: Record<string, unknown> = { model: config.model, max_tokens: config.maxTokens, stream: false };
   if (config.protocol === "anthropic") {
     if (config.apiKey) headers["x-api-key"] = config.apiKey;
     headers["anthropic-version"] = "2023-06-01";
@@ -162,8 +169,8 @@ async function modelText(config: LlmConfig, system: string, user: string, signal
   try {
     reply = config.transport === "proxy" ? await api.llmProxy({
       protocol: config.protocol, baseUrl: config.baseUrl, model: config.model, apiKey: config.apiKey,
-      system, user, test,
-    }, signal) : await sendFromBrowser(modelRequest(config, system, user, test), signal);
+      system, user, test, maxTokens: config.maxTokens,
+    }, signal) : await sendFromBrowser(modelRequest(config, system, user), signal);
   }
   catch (e) {
     if (signal.aborted) throw signal.reason;
@@ -183,10 +190,27 @@ async function modelText(config: LlmConfig, system: string, user: string, signal
   let data: any;
   try { data = JSON.parse(reply.text || ""); }
   catch { throw new Error("模型服务返回的不是 JSON，请检查接口地址与兼容协议"); }
-  const content = config.protocol === "anthropic" ? data.content : data.choices?.[0]?.message?.content;
+  if (data?.error) throw new Error("模型服务返回错误，请检查模型配置或联系服务提供方");
+  const choice = data?.choices?.[0];
+  const content = config.protocol === "anthropic" ? data?.content : choice?.message?.content;
   const text = typeof content === "string" ? content : Array.isArray(content) ?
     content.filter((p) => p?.type === "text" && typeof p.text === "string").map((p) => p.text).join("\n") : "";
-  if (!text.trim()) throw new Error("模型未返回可用文本，请确认模型支持所选协议或稍后重试");
+  const stop = config.protocol === "anthropic" ? data?.stop_reason : choice?.finish_reason;
+  const thinking = config.protocol === "anthropic" ?
+    Array.isArray(content) && content.some((p) => p?.type === "thinking" || p?.type === "redacted_thinking") :
+    !!choice?.message?.reasoning_content || !!choice?.message?.reasoning || data?.usage?.completion_tokens_details?.reasoning_tokens > 0;
+  if (stop === "length" || stop === "max_tokens") {
+    const used = config.protocol === "anthropic" ? data?.usage?.output_tokens : data?.usage?.completion_tokens;
+    const usage = Number.isSafeInteger(used) && used >= 0 ? `，已生成 ${used} token` : "";
+    throw new Error(`模型输出被截断（本次上限 ${config.maxTokens} token${usage}）${thinking ? "，推理过程也会占用输出额度" : ""}。请在模型设置中提高「最大输出 Token」（需在模型支持范围内）；若已达模型上限，请缩短输入或更换模型。`);
+  }
+  if (stop === "content_filter" || stop === "refusal" || choice?.message?.refusal) {
+    throw new Error("模型拒绝回答或响应被服务方过滤，请调整请求或更换模型");
+  }
+  if (!text.trim()) {
+    if (thinking) throw new Error("模型只返回了推理过程，没有最终正文。请提高「最大输出 Token」或更换模型；推理过程不能作为决策结果。");
+    throw new Error("模型未返回可用文本，请确认模型支持所选协议或稍后重试");
+  }
   return text;
 }
 
@@ -244,7 +268,7 @@ async function withTimeout<T>(signal: AbortSignal, task: (signal: AbortSignal) =
   const abort = () => controller.abort(signal.reason);
   signal.addEventListener("abort", abort, { once: true });
   if (signal.aborted) abort();
-  const timer = setTimeout(() => controller.abort(new Error("模型请求超过 180 秒，请稍后重试")), REQUEST_TIMEOUT);
+  const timer = setTimeout(() => controller.abort(new Error("模型请求超过 300 秒，请稍后重试或更换响应更快的模型")), REQUEST_TIMEOUT);
   try { controller.signal.throwIfAborted(); return await task(controller.signal); }
   finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
 }
