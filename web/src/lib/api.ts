@@ -122,4 +122,8 @@ export const api = {
       { method: "POST" })).json(),
   boardWatchRemove: async (code: string) =>
     (await fetch(`${BASE}/board/watch?code=${encodeURIComponent(code)}`, { method: "DELETE" })).json(),
+
+  // 汪汪队 ETF 跟踪器（自包含：24 只宽基 ETF 的成交额倍数 + 主动净买入）
+  wangwangSnapshot: (force = false) => get(`/wangwang/snapshot${force ? "?force=1" : ""}`),
+  wangwangHealth: () => get("/wangwang/health"),
 };

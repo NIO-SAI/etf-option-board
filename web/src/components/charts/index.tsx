@@ -827,6 +827,20 @@ export function MoneyLinesChart({
     return opt;
   };
 
+  // 容器尺寸变化（窗口缩放 / 高度由视口算出来）时重排画布。
+  // 严禁在 render 期间调实例方法（getWidth 会抛 null），只在 effect 里做并判 isDisposed。
+  useEffect(() => {
+    if (!chart || chart.isDisposed?.()) return;
+    chart.resize();
+  }, [chart, height]);
+  useEffect(() => {
+    const onResize = () => {
+      if (chart && !chart.isDisposed?.()) chart.resize();
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [chart]);
+
   if (!axis.length) return null;
   const labelVersion = `${axis.length}:${shown.map((x) => x.code).join(",")}`;
   return (

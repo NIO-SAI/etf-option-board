@@ -97,9 +97,9 @@ export function TapeFlowPage() {
   };
 
   return (
-    <div className="px-3 pb-6 pt-3">
-      <Frame spacing="sm">
-        <FramePanel dense>
+    <div className="flex h-[calc(100vh-92px)] min-h-0 flex-col px-2 pb-1 pt-2">
+      <Frame spacing="sm" className="flex min-h-0 flex-1 flex-col">
+        <FramePanel dense className="flex min-h-0 flex-1 flex-col">
           <FrameHeader className="flex-row flex-wrap items-center justify-between gap-2 py-1.5">
             <div className="flex flex-wrap items-center gap-2">
               <FrameTitle className="text-sm">资金流向</FrameTitle>
@@ -148,7 +148,7 @@ export function TapeFlowPage() {
           </FrameHeader>
 
           {/* 门槛输入：改完点「应用」用库里的直方图重算（毫秒级，不重跑逐笔） */}
-          <div className="flex flex-wrap items-center gap-1.5 border-b border-border/60 px-3 py-1.5 text-[11px]">
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border/60 px-2 py-1 text-[11px]">
             <span className="text-muted-foreground">门槛（万元）</span>
             {vals.map((v, i) => (
               <input
@@ -177,50 +177,48 @@ export function TapeFlowPage() {
             {applied ? <span className="text-warning">已用自定义门槛</span> : null}
           </div>
 
-          {/* 各档当日买 / 卖 / 净买额 */}
-          <div className="grid grid-cols-2 gap-2 px-3 py-2 sm:grid-cols-3 lg:grid-cols-4">
+          {/* 各档当日买 / 卖 / 净买额（紧凑一行，把高度留给图） */}
+          <div className="grid shrink-0 grid-cols-2 gap-1 px-2 py-1 sm:grid-cols-4">
             {buckets.map((b) => (
-              <div key={b.key} className="rounded-md border border-border px-2 py-1.5">
-                <div className="flex items-center justify-between gap-2 text-[11px]">
-                  <span className="font-medium text-foreground">{b.name}</span>
-                  <span className="text-muted-foreground tnum">
-                    {(b.share ?? 0) ? `${((b.share ?? 0) * 100).toFixed(1)}%` : "—"}
+              <div key={b.key} className="rounded border border-border px-1.5 py-0.5">
+                <div className="flex items-baseline justify-between gap-1">
+                  <span className="text-[11px] font-medium text-foreground">{b.name}</span>
+                  <span className={cn("text-[12px] font-semibold tnum",
+                    (b.net ?? 0) >= 0 ? "text-up" : "text-down")}>
+                    {signedFlow(b.net)}
                   </span>
                 </div>
-                <div className="mt-1 flex items-baseline justify-between gap-2">
-                  <span className="text-[10px] text-muted-foreground tnum">买 {flowMoney(b.buy)}</span>
-                  <span className="text-[10px] text-muted-foreground tnum">卖 {flowMoney(b.sell)}</span>
-                </div>
-                <div className={cn("mt-0.5 text-[13px] font-semibold tnum",
-                  (b.net ?? 0) >= 0 ? "text-up" : "text-down")}>
-                  {signedFlow(b.net)}
+                <div className="flex justify-between gap-1 text-[10px] text-muted-foreground tnum">
+                  <span>买 {flowMoney(b.buy)}</span>
+                  <span>卖 {flowMoney(b.sell)}</span>
                 </div>
               </div>
             ))}
             {buckets.length === 0 ? (
-              <div className="col-span-full rounded-md border border-dashed border-border px-3 py-6 text-center text-[11px] text-muted-foreground">
+              <div className="col-span-full rounded border border-dashed border-border px-2 py-4 text-center text-[11px] text-muted-foreground">
                 {err || "还没有数据"}
               </div>
             ) : null}
           </div>
 
-          <div className="px-2">
+          {/* 分时图：独占剩余高度，随窗口缩放重排 */}
+          <div className="min-h-0 flex-1 px-2 pb-1">
             <MoneyLinesChart
               id={`tape-flow-${preset}`}
               axis={data?.axis ?? []}
               series={series}
-              height={460}
+              height="100%"
               endLabels
             />
           </div>
 
-          <div className="space-y-1 px-3 pb-3 pt-1 text-[10px] leading-relaxed text-muted-foreground">
-            <div>{NOTES[preset]}</div>
-            <div>
+          <div className="shrink-0 space-y-0.5 px-2 pb-1 pt-0.5 text-[10px] leading-snug text-muted-foreground">
+            <div className="truncate" title={NOTES[preset]}>{NOTES[preset]}</div>
+            <div className="truncate">
               {meta.stocks_ok ? `覆盖 ${meta.stocks_ok}/${meta.stocks_total} 只 · ` : ""}
               {meta.amount ? `逐笔成交额 ${flowMoney(meta.amount)} · ` : ""}
               {data?.date ? `${data.date} · ` : ""}
-              数据由本地库生成，盘中每 10 分钟重算、收盘后 15:05 定稿；逐笔只能取最新一个交易日，历史靠本地留存。
+              盘中每 10 分钟重算、收盘后 15:05 定稿；逐笔只能取最新一个交易日，历史靠本地库留存。
             </div>
             {err ? <div className="text-warning">{err}</div> : null}
           </div>

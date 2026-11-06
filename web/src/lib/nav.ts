@@ -13,7 +13,7 @@
 import { useEffect, useState } from "react";
 import { PAGES, type PageKey, type SectionKey } from "@/lib/route";
 
-export type NavIcon = "options" | "board" | "flow";
+export type NavIcon = "options" | "board" | "flow" | "wangwang";
 
 export type NavItem = {
   /** 分组代表页（默认跳转目标，也是「点一级项」的落点） */
@@ -31,9 +31,10 @@ const SECTIONS: Record<SectionKey, { label: string; title: string; icon: NavIcon
   options: { label: "期权看板", title: "ETF 期权日内决策看板", icon: "options" },
   board: { label: "资金分时", title: "资金分时：板块主力 / ETF / 四维资金", icon: "board" },
   flow: { label: "资金流向", title: "资金流向：全A逐笔分档（通达信 / Wind）", icon: "flow" },
+  wangwang: { label: "汪汪队ETF", title: "汪汪队 ETF 跟踪器：国家队今天上班了吗", icon: "wangwang" },
 };
 
-const SECTION_ORDER: SectionKey[] = ["options", "board", "flow"];
+const SECTION_ORDER: SectionKey[] = ["options", "board", "flow", "wangwang"];
 
 export const NAV: NavItem[] = SECTION_ORDER.map((section) => {
   const pages = PAGES.filter((p) => p.section === section);
