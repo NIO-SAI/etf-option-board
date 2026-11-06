@@ -18,6 +18,7 @@ import { BoardMultiPage } from "@/pages/BoardMulti";
 import { BoardFlowPage } from "@/pages/BoardFlow";
 import { TapeFlowPage } from "@/pages/TapeFlow";
 import { WangWangPage } from "@/pages/WangWang";
+import { AriskPage } from "@/pages/Arisk";
 
 // 当前加载的前端 bundle 哈希（用于判断浏览器是否加载了最新构建）
 const BUNDLE_ID = (() => {
@@ -35,6 +36,7 @@ const VIEWS: Record<PageKey, () => JSX.Element> = {
   "board-em": EmFlowPage,
   "flow-tape": TapeFlowPage,
   wangwang: WangWangPage,
+  arisk: AriskPage,
 };
 
 /**

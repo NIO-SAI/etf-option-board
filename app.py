@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
-from routers import api, wangwang
+from routers import api, arisk, wangwang
 from services import board_collector, em, kronos, monitor, tape_flow, wangwang as ww_svc
 
 logging.basicConfig(level=logging.INFO,
@@ -73,6 +73,7 @@ async def _no_cache_html(request, call_next):
 
 app.include_router(api.router)
 app.include_router(wangwang.router)
+app.include_router(arisk.router)
 
 
 @app.get("/")

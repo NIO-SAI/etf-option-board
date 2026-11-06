@@ -131,6 +131,22 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   一侧市场 ≥70% 标的两日份额完全相同时判「份额源未日更」（沪市行情商份额不按日更新）。
   样式是源页 CSS 1:1，全部选择器收在 `.ww-page` 之下（原页的 `html/body/table/button`
   都加了前缀，`@keyframes` 改名 `ww-pulse`），**不套 REUI、不污染其它页面**。
+- **风险监控（2026-11-07 新增一级导航，`#/arisk`，ADR 无需新增）**：把外部项目
+  `~/workspace/arisk`（github `zhysh3/a-share-monitor-en`，A股风险监控 A-RISK：ERP /
+  信贷脉冲 / 两层决策模型）**以 iframe 原样嵌入**，不重写它的十几张 Chart.js 图。
+  页面 `web/src/pages/Arisk.tsx` 只有一段 iframe，真正的活在后端 `routers/arisk.py`：
+  - `GET /arisk/page` 读 `arisk_monitor_local.html` 后**改写外部依赖**再返回：
+    `http://localhost:8899` → `/arisk/live`、`./arisk_data.json` → `/arisk/data.json`、
+    Chart.js CDN → `/arisk/chart.umd.js`（`web/public/arisk/` 随构建出，离线可用）、
+    顺手删掉 Google Fonts 的 `@import`（国内超时会拖首屏）。
+  - `GET /arisk/data.json` 直读 `~/workspace/arisk/arisk_data.json`（日更，no-store）。
+  - `GET|POST /arisk/live/<path>` 反代 arisk 本地实时代理 `127.0.0.1:8899`，上游挂了
+    降级成 `{"error": ...}` 的 200（面板自己有 `r.ok` 判断 + 静态兜底）。
+  **不能让 iframe 直连 8788**：面板里硬编码 `localhost:8899`，跨设备（Tailscale/局域网）
+  时 localhost 指客户端、走 HTTPS 还会被混合内容拦掉 —— 必须由后端收成同源。
+  arisk 自己的采集链路（LaunchAgent `com.arisk.web` :8788 / `com.arisk.proxy` :8899 /
+  `com.arisk.update` 每交易日晚 22:10 更新数据）**完全独立**，本项目只读不写，
+  上游 `git pull` 不会影响这里。`ARISK_DIR` / `ARISK_LIVE` 可覆盖路径与代理地址。
 - **板块资金（2026-11-04 新增，ADR-0003）**：单写路径 —— 只有 `services/board_collector.py`
   在交易时段写 `data/board_flow.db`（SQLite），`/api/board/*`、`/api/etf-flow/*`、`/api/em-flow/*`
   一律只读，**不要为了让页面有数据去实时抓东财**。采集分频：板块排行 30s（约 11 请求）、

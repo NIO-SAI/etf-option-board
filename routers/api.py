@@ -1331,6 +1331,8 @@ async def tape_flow_series(
     """
     key = preset if preset in tf.PRESETS else "tdx"
     spec = tf.PRESETS[key]
+    dim = spec.get("dim", "amt")
+    edges = tf.DIMS[dim]
     if th:
         raw: list[float] = []
         for part in th.split(","):
@@ -1338,7 +1340,7 @@ async def tape_flow_series(
                 raw.append(float(str(part).strip()))
             except (TypeError, ValueError):
                 continue
-        thresholds = tf.norm_thresholds(raw)
+        thresholds = tf.norm_thresholds(raw, edges)
         buckets = []
         for i, thr in enumerate(thresholds):
             base = spec["buckets"][i] if i < len(spec["buckets"]) else None
@@ -1356,22 +1358,23 @@ async def tape_flow_series(
         date = dates[0] if dates else dt.date.today().isoformat()
 
     try:
-        rows = await asyncio.to_thread(bf.read_tape_bins, date)
+        rows = await asyncio.to_thread(bf.read_tape_bins, date, dim)
         meta = await asyncio.to_thread(bf.read_tape_meta, date)
     except Exception as exc:  # noqa: BLE001
         return {"date": date, "preset": key, "axis": [], "series": [], "buckets": buckets,
                 "error": f"逐笔库读取失败: {exc}"}
 
     axis = tf.session_axis()
-    out = {"date": date, "preset": key, "preset_label": spec["label"],
+    out = {"date": date, "preset": key, "preset_label": spec["label"], "dim": dim,
+           "auction": spec.get("auction", "side"),
            "thresholds": thresholds, "buckets": buckets, "axis": axis, "series": [], "meta": meta}
     if not rows:
         out["error"] = ("这一天还没有逐笔数据：盘中每 10 分钟重算一次、收盘后 15:05 定稿"
                         "（逐笔只保留最新一个交易日，历史靠本地库）")
         return out
 
-    cum = tf.cumulative(rows, thresholds, axis)
-    sums = tf.summarize(rows, thresholds)
+    cum = tf.cumulative(rows, thresholds, axis, edges)
+    sums = tf.summarize(rows, thresholds, edges)
     for k, b in enumerate(buckets):
         vals = [row[k] for row in cum] if cum and k < len(cum[0]) else []
         item = dict(b)

@@ -1,4 +1,4 @@
-import { CandlestickChart, Coins, Landmark, PanelLeftClose, Pin, Waves, X } from "lucide-react";
+import { CandlestickChart, Coins, Gauge, Landmark, PanelLeftClose, Pin, Waves, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { navigate, type PageKey } from "@/lib/route";
@@ -9,6 +9,7 @@ const ICONS: Record<NavIcon, typeof CandlestickChart> = {
   board: Coins,
   flow: Waves,
   wangwang: Landmark,
+  arisk: Gauge,
 };
 
 /**

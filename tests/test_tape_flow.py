@@ -16,9 +16,11 @@ def test_minute_of_clamps_to_session():
 
 
 def test_parse_tick_direction_and_amount():
-    # 东财字段：time,price,volume(手),笔数,direction；"2"=主动买、"1"=主动卖、"4"=集合竞价
-    assert tf.parse_tick("10:00:00,10.00,3,2,2") == ("10:00", 3000.0, 1)
-    assert tf.parse_tick("10:00:00,10.00,3,2,1") == ("10:00", 3000.0, -1)
+    # 东财字段：time,price,volume(手),笔数,direction；"2"=主动买、"1"=主动卖、"4"=集合竞价虚拟撮合
+    assert tf.parse_tick("10:00:00,10.00,3,2,2") == ("10:00", 3000.0, 3.0, 1, False)
+    assert tf.parse_tick("10:00:00,10.00,3,2,1") == ("10:00", 3000.0, 3.0, -1, False)
+    # 09:25 的竞价成交方向仍是 1/2，只是要标出来（通达信口径整段算买）
+    assert tf.parse_tick("09:25:01,10.00,50,4,2") == ("09:30", 50000.0, 50.0, 1, True)
     assert tf.parse_tick("09:15:00,10.00,100,0,4") is None
     assert tf.parse_tick("10:00:00,10.00,0,0,2") is None
     assert tf.parse_tick("garbage") is None
@@ -26,10 +28,13 @@ def test_parse_tick_direction_and_amount():
 
 def test_bin_of_boundaries():
     assert tf.bin_of(0) == 0
-    assert tf.bin_of(9_000) == 0            # 0.9 万 < 第一档 1 万
-    assert tf.bin_of(10_000) == 1           # 正好 1 万
-    assert tf.bin_of(200_000) == tf.CUTS.index(20) + 1
-    assert tf.bin_of(500_000_000) == len(tf.CUTS)   # 超过最大档并入末档
+    assert tf.bin_of(0.9) == 0                       # 0.9 万 < 第一档 1 万
+    assert tf.bin_of(1) == 1                         # 正好 1 万
+    assert tf.bin_of(20) == tf.CUTS.index(20) + 1
+    assert tf.bin_of(50000) == len(tf.CUTS)          # 超过最大档并入末档
+    # 手数档（通达信口径）
+    assert tf.bin_of(699, tf.LOTS) == tf.LOTS.index(700)
+    assert tf.bin_of(700, tf.LOTS) == tf.LOTS.index(700) + 1
 
 
 def test_norm_thresholds_sorts_and_appends_zero():
@@ -42,21 +47,23 @@ def test_norm_thresholds_snap_to_bin_edges():
     assert tf.norm_thresholds([140, 50]) == [150.0, 50.0, 0.0]
     assert tf.snap_threshold(0) == 0.0
     assert tf.snap_threshold(99999) == float(tf.CUTS[-1])
+    # 手数档：130 手吸附到 150 手
+    assert tf.norm_thresholds([130, 50], tf.LOTS) == [150.0, 50.0, 0.0]
 
 
 def test_bucket_of_bin():
     ths = [200.0, 50.0, 0.0]
-    assert tf.bucket_of_bin(tf.bin_of(3_000_000), ths) == 0     # 300 万 → 主力
-    assert tf.bucket_of_bin(tf.bin_of(1_000_000), ths) == 1     # 100 万 → 跟风
-    assert tf.bucket_of_bin(tf.bin_of(100_000), ths) == 2       # 10 万 → 散户
-    assert tf.bucket_of_bin(0, ths) == 2                        # 最小档也是散户
+    assert tf.bucket_of_bin(tf.bin_of(300), ths) == 0            # 300 万 → 主力
+    assert tf.bucket_of_bin(tf.bin_of(100), ths) == 1            # 100 万 → 跟风
+    assert tf.bucket_of_bin(tf.bin_of(10), ths) == 2             # 10 万 → 散户
+    assert tf.bucket_of_bin(0, ths) == 2                         # 最小档也是散户
 
 
 def test_summarize_buy_sell_net_and_share():
     rows = [
-        ("09:31", tf.bin_of(3_000_000), 300.0, 100.0),   # 主力
-        ("09:32", tf.bin_of(1_000_000), 50.0, 70.0),     # 跟风
-        ("09:33", tf.bin_of(100_000), 10.0, 30.0),       # 散户
+        ("09:31", tf.bin_of(300), 300.0, 100.0),         # 300 万 → 主力
+        ("09:32", tf.bin_of(100), 50.0, 70.0),           # 100 万 → 跟风
+        ("09:33", tf.bin_of(10), 10.0, 30.0),            # 10 万 → 散户
     ]
     out = tf.summarize(rows, [200, 50])
     assert [round(x["net"], 1) for x in out] == [200.0, -20.0, -20.0]
@@ -66,7 +73,7 @@ def test_summarize_buy_sell_net_and_share():
 
 def test_cumulative_carries_forward():
     axis = ["09:30", "09:31", "09:32"]
-    rows = [("09:31", tf.bin_of(3_000_000), 100.0, 0.0)]
+    rows = [("09:31", tf.bin_of(300), 100.0, 0.0)]
     out = tf.cumulative(rows, [200, 50], axis)
     assert [row[0] for row in out] == [0.0, 100.0, 100.0]   # 缺分钟用前值
     assert out[-1][2] == 0.0
@@ -94,3 +101,14 @@ def test_presets_thresholds_are_descending():
         ths = [b["thr"] for b in spec["buckets"]]
         assert ths == sorted(ths, reverse=True)
         assert ths[-1] == 0
+        assert spec["dim"] in tf.DIMS
+
+
+def test_presets_use_expected_dimension():
+    # 通达信按手数、Wind 按金额；竞价处理也不同（这是实测出来的口径，别随手改）
+    assert tf.PRESETS["tdx"]["dim"] == "lot"
+    assert tf.PRESETS["tdx"]["auction"] == "buy"
+    assert tf.PRESETS["wind"]["dim"] == "amt"
+    assert tf.PRESETS["wind"]["auction"] == "side"
+    assert tf.PRESETS["tdx"]["buckets"][0]["thr"] == 700
+    assert tf.PRESETS["wind"]["buckets"][0]["thr"] == 2000

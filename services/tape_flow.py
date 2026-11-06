@@ -1,17 +1,23 @@
 """全A逐笔分档直方图：通达信 / Wind 两套「资金流向」口径的复刻。
 
-口径要点（2026-11-06 实测，取舍见 `docs/adr/0005-全A逐笔分档直方图.md`）：
+口径要点（2026-11-06 实测，取舍见 `docs/adr/0005-资金流向全A逐笔分档直方图.md`）：
 
-- 数据 = 东财 `details/get` 逐笔（每只 1 个请求；全A 约 5200 只、10 并发约 80~100 秒）；
+- 数据 = 东财 `details/get` 逐笔（每只 1 个请求；全A 约 5200 只、10 并发约 100~140 秒）；
 - 方向字段 `p[4]`：`"2"` 才是**主动买**（外盘）、`"1"` 是主动卖（内盘），
   `"4"` 是**集合竞价虚拟撮合**（3 秒一次重复累计，必须剔除，否则茅台会被算成 3 倍成交额）；
-- 每笔金额 = 价格 × 手数 × 100；按单笔金额分档，**每笔只记主动方一次**，
-  所以各档「买 + 卖」之和 = 全市场成交额；各档净额相加 = 全市场主动净额（外盘 − 内盘），不为 0；
-- 与东财 `f62/f140/...` 的「双向记账（四档净额合计恒为 0）」不是同一口径，两套数字不可互相对账；
-- 两套口径的差别**只在门槛**：
-    通达信  主力 ≥200 万 / 跟风 50–200 万 / 散户 <50 万
-    Wind    超大单 ≥2000 万 / 主力 500–2000 万 / 大户 20–500 万 / 散户 <20 万
-  （Wind 的「机构」线按账户/席位识别，逐笔里拿不到，本模块只给「超大单」，不复刻机构）
+- 每笔金额 = 价格 × 手数 × 100；**每笔只记主动方一次**，所以各档「买 + 卖」之和 = 全市场成交额，
+  各档净额相加 = 全市场主动净额（外盘 − 内盘），不为 0；
+- 与东财 `f62/f140/...` 的「双向记账（四档净额合计恒为 0）」不是同一口径，两套数字不可互相对账。
+
+两家参考软件**分档维度与竞价处理都不一样**（这是实测出来的，不是猜的）：
+
+| 口径 | 分档维度 | 门槛 | 集合竞价 |
+|---|---|---|---|
+| 通达信 888881 | 单笔**手数** | 主力 ≥700 手 / 跟风 ≥120 手 / 散户 <120 手 | **整段算主动买**（296 亿，买 119/卖 178） |
+| Wind 资金流向 | 单笔**金额** | 超大单 ≥2000 万 / 主力 500–2000 万 / 大户 20–500 万 / 散户 <20 万 | 按方向拆（不并入买） |
+| — | Wind「机构」线 | 按账户/席位识别，逐笔里拿不到 | 用「超大单」替代，不复刻 |
+
+所以库里存**两张**直方图（金额档、手数档），各自按对应口径的方向规则计账。
 
 本模块只做「抓取 → 分档 → 落库」与「按任意门槛求和」，不碰 HTTP 层，也不写前端。
 """
@@ -33,22 +39,31 @@ log = logging.getLogger("tape_flow")
 FS = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23"
 _LIST_FIELDS = "f12,f13,f14,f6"
 
-# 单笔成交额分档切点（万元，升序）。档位 i 覆盖 (CUTS[i-1], CUTS[i]] 万元，档位 0 = < CUTS[0]
+# 金额档切点（万元，升序）。档位 i 覆盖 (CUTS[i-1], CUTS[i]]，档位 0 = < CUTS[0]
 CUTS = [1, 2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50, 60, 70, 100, 130, 150, 200,
         250, 300, 400, 500, 600, 700, 1000, 1300, 1500, 2000, 2500, 3000, 4000,
         5000, 7000, 10000, 20000]
+# 手数档切点（手，升序）：通达信按手数分档，700/120 附近必须细
+LOTS = [10, 20, 30, 40, 50, 60, 80, 100, 120, 150, 200, 250, 300, 400, 500, 600,
+        700, 800, 1000, 1200, 1500, 2000, 3000, 5000, 7000, 10000]
+
+DIMS: dict[str, list[int]] = {"amt": CUTS, "lot": LOTS}
 
 PRESETS: dict[str, dict] = {
     "tdx": {
         "label": "通达信",
+        "dim": "lot",
+        "auction": "buy",           # 集合竞价整段算主动买
         "buckets": [
-            {"key": "main", "name": "主力", "thr": 200},
-            {"key": "follow", "name": "跟风", "thr": 50},
+            {"key": "main", "name": "主力", "thr": 700},
+            {"key": "follow", "name": "跟风", "thr": 120},
             {"key": "retail", "name": "散户", "thr": 0},
         ],
     },
     "wind": {
         "label": "Wind",
+        "dim": "amt",
+        "auction": "side",          # 集合竞价按买卖方向拆
         "buckets": [
             {"key": "super", "name": "超大单", "thr": 2000},
             {"key": "main", "name": "主力", "thr": 500},
@@ -59,7 +74,7 @@ PRESETS: dict[str, dict] = {
 }
 
 SESSION = (("09:30", "11:30"), ("13:00", "15:00"))
-SCAN_INTERVAL = 600.0      # 盘中每 10 分钟重算一次（一次约 80~100 秒）
+SCAN_INTERVAL = 600.0      # 盘中每 10 分钟重算一次（一次约 100~140 秒）
 FINAL_HM = "15:05"         # 收盘后再跑一次定稿
 CONCURRENCY = 10
 MIN_COVERAGE = 0.90        # 覆盖率不足就不覆盖已有数据
@@ -83,28 +98,32 @@ def minute_of(hhmmss: str) -> str | None:
         return SESSION[0][0]
     if hm > SESSION[1][1]:
         return SESSION[1][1]
-    # 午休（11:30–13:00）不该有连续竞价成交；真有就并到 11:30
-    if SESSION[0][1] < hm < SESSION[1][0]:
+    if SESSION[0][1] < hm < SESSION[1][0]:   # 午休不该有连续竞价成交，真有就并到 11:30
         return SESSION[0][1]
     return hm
 
 
-def bin_of(amount: float) -> int:
-    """单笔成交额（元）→ 档位下标。"""
-    if amount is None or amount <= 0:
+def is_auction(hhmmss: str) -> bool:
+    """是否集合竞价（09:15–09:30 的成交）。"""
+    s = str(hhmmss or "").strip()
+    return len(s) >= 8 and s < "09:30:00"
+
+
+def bin_of(value: float, edges: Iterable = CUTS) -> int:
+    """档位下标（value 与 edges 同单位）。"""
+    if value is None or value <= 0:
         return 0
-    wan = amount / 1e4
     i = 0
-    for j, cut in enumerate(CUTS):
-        if wan >= cut:
+    for j, cut in enumerate(edges):
+        if value >= cut:
             i = j + 1
     return i
 
 
-def parse_tick(line: str) -> tuple[str, float, int] | None:
-    """解析一行逐笔 → (分钟, 金额元, 方向)。方向 +1 主动买 / −1 主动卖；集合竞价返回 None。
+def parse_tick(line: str) -> tuple[str, float, float, int, bool] | None:
+    """解析一行逐笔 → (分钟, 金额元, 手数, 方向, 是否集合竞价)。
 
-    东财字段：time,price,volume(手),笔数,direction；direction "2"=主动买、"1"=主动卖、"4"=集合竞价。
+    方向 +1 主动买 / −1 主动卖；`p[4]=="4"`（集合竞价虚拟撮合）返回 None。
     """
     p = str(line or "").split(",")
     if len(p) < 5 or p[4] not in ("1", "2"):
@@ -119,11 +138,11 @@ def parse_tick(line: str) -> tuple[str, float, int] | None:
     minute = minute_of(p[0])
     if minute is None:
         return None
-    return minute, price * vol * 100.0, (1 if p[4] == "2" else -1)
+    return minute, price * vol * 100.0, vol, (1 if p[4] == "2" else -1), is_auction(p[0])
 
 
 def session_axis() -> list[str]:
-    """09:30–11:30 + 13:00–15:00，共 241 个分钟点。"""
+    """09:30–11:30 + 13:00–15:00，共 242 个分钟点。"""
     out: list[str] = []
     for start, end in SESSION:
         sh, sm = (int(x) for x in start.split(":"))
@@ -136,21 +155,21 @@ def session_axis() -> list[str]:
     return out
 
 
-def snap_threshold(value: float) -> float:
-    """把任意门槛吸附到档位表上最近的不低于它的切点（万元）。
+def snap_threshold(value: float, edges: Iterable = CUTS) -> float:
+    """把任意门槛吸附到档位表上最近的不低于它的切点（单位同 edges）。
 
-    库里存的是 35 个金额档的直方图，单笔金额落在档里就是档；门槛只能取在档边界上，
-    否则该档无法拆分。默认两套口径的 200/50/2000/500/20 都在档边界上，不受影响。
+    库里存的是固定档位的直方图，门槛只能取在档边界上，否则该档无法拆分。
     """
+    edges = list(edges)
     if value is None or value <= 0:
         return 0.0
-    for cut in CUTS:
+    for cut in edges:
         if cut >= value:
             return float(cut)
-    return float(CUTS[-1])
+    return float(edges[-1])
 
 
-def norm_thresholds(values: Iterable) -> list[float]:
+def norm_thresholds(values: Iterable, edges: Iterable = CUTS) -> list[float]:
     """门槛归一：吸附到档位边界、去重、降序、末位必须为 0（最后一档兜底到底）。"""
     out: list[float] = []
     for v in values or []:
@@ -159,15 +178,16 @@ def norm_thresholds(values: Iterable) -> list[float]:
         except (TypeError, ValueError):
             continue
         if x > 0:
-            out.append(snap_threshold(x))
+            out.append(snap_threshold(x, edges))
     out = sorted(set(out), reverse=True)
     out.append(0.0)
     return out
 
 
-def bucket_of_bin(bin_index: int, thresholds: list[float]) -> int:
+def bucket_of_bin(bin_index: int, thresholds: list[float], edges: Iterable = CUTS) -> int:
     """档位下标 → 口径里的第几档（thresholds 降序、末位 0）。"""
-    lo = 0.0 if bin_index <= 0 else float(CUTS[bin_index - 1])
+    edges = list(edges)
+    lo = 0.0 if bin_index <= 0 else float(edges[bin_index - 1])
     for k, thr in enumerate(thresholds):
         if lo >= thr:
             return k
@@ -175,12 +195,13 @@ def bucket_of_bin(bin_index: int, thresholds: list[float]) -> int:
 
 
 def summarize(rows: Iterable[tuple[str, int, float, float]],
-              thresholds: Iterable) -> list[dict]:
+              thresholds: Iterable, edges: Iterable = CUTS) -> list[dict]:
     """按门槛汇总各档「当日买 / 当日卖 / 净买额 / 占比」。rows = (分钟, 档位, 买, 卖)。"""
-    ths = norm_thresholds(thresholds)
+    edges = list(edges)
+    ths = norm_thresholds(thresholds, edges)
     acc = [{"buy": 0.0, "sell": 0.0} for _ in ths]
     for _t, b, buy, sell in rows or []:
-        k = bucket_of_bin(int(b), ths)
+        k = bucket_of_bin(int(b), ths, edges)
         acc[k]["buy"] += float(buy or 0)
         acc[k]["sell"] += float(sell or 0)
     total = sum(x["buy"] + x["sell"] for x in acc) or 0.0
@@ -193,13 +214,15 @@ def summarize(rows: Iterable[tuple[str, int, float, float]],
 
 
 def cumulative(rows: Iterable[tuple[str, int, float, float]],
-               thresholds: Iterable, axis: list[str] | None = None) -> list[list[float]]:
+               thresholds: Iterable, axis: list[str] | None = None,
+               edges: Iterable = CUTS) -> list[list[float]]:
     """各档的分钟累计净额（元），按 axis 对齐、缺分钟用前值填充。"""
+    edges = list(edges)
     axis = axis or session_axis()
-    ths = norm_thresholds(thresholds)
+    ths = norm_thresholds(thresholds, edges)
     per_min: dict[str, list[float]] = {}
     for t, b, buy, sell in rows or []:
-        k = bucket_of_bin(int(b), ths)
+        k = bucket_of_bin(int(b), ths, edges)
         slot = per_min.setdefault(str(t), [0.0] * len(ths))
         slot[k] += float(buy or 0) - float(sell or 0)
 
@@ -225,7 +248,7 @@ def amount_ok(ours: float, official: float, tol: float = AMOUNT_TOL) -> bool:
 
 
 # --------------------------------------------------------------------------
-# 抓取：全A逐笔 → 分钟 × 档位直方图
+# 抓取：全A逐笔 → 两张直方图（金额档按竞价方向、手数档竞价算买）
 # --------------------------------------------------------------------------
 async def _details(secid: str) -> list[str]:
     d = await em.get_json("https://push2.eastmoney.com/api/qt/stock/details/get",
@@ -235,7 +258,7 @@ async def _details(secid: str) -> list[str]:
 
 
 async def scan() -> dict:
-    """拉一次全A逐笔并聚合。返回 {date, rows, amount, stocks_ok, stocks_total, official}。"""
+    """拉一次全A逐笔并聚合两种维度。"""
     rows = await em.clist_all(FS, _LIST_FIELDS, pz=100, max_page=80, ttl=0)
     # 注意 f13=0 是「深市」，不能用 `or ""` 兜（0 是假值，会把深市整片丢掉）
     items = []
@@ -248,7 +271,8 @@ async def scan() -> dict:
     if not total:
         raise RuntimeError("全A清单为空（clist 可能被限流）")
 
-    agg: dict[tuple[str, int], list[float]] = {}
+    amt: dict[tuple[str, int], list[float]] = {}
+    lot: dict[tuple[str, int], list[float]] = {}
     ok = 0
     sem = asyncio.Semaphore(CONCURRENCY)
 
@@ -266,15 +290,23 @@ async def scan() -> dict:
                 tick = parse_tick(line)
                 if not tick:
                     continue
-                minute, amount, side = tick
-                slot = agg.setdefault((minute, bin_of(amount)), [0.0, 0.0])
+                minute, amount, lots, side, auction = tick
+                # 金额档：集合竞价按买卖方向（Wind 口径）
+                slot = amt.setdefault((minute, bin_of(amount / 1e4, CUTS)), [0.0, 0.0])
                 slot[0 if side > 0 else 1] += amount
+                # 手数档：集合竞价整段算主动买（通达信口径）
+                side_lot = 1 if (auction or side > 0) else -1
+                slot2 = lot.setdefault((minute, bin_of(lots, LOTS)), [0.0, 0.0])
+                slot2[0 if side_lot > 0 else 1] += amount
 
     await asyncio.gather(*(one(s) for s in items))
 
-    flat = [(m, b, v[0], v[1]) for (m, b), v in agg.items() if v[0] or v[1]]
-    amount = sum(v[0] + v[1] for v in agg.values())
-    return {"rows": flat, "amount": amount, "stocks_ok": ok, "stocks_total": total}
+    def flat(src):
+        return [(m, b, v[0], v[1]) for (m, b), v in src.items() if v[0] or v[1]]
+
+    amount = sum(v[0] + v[1] for v in amt.values())
+    return {"amt": flat(amt), "lot": flat(lot), "amount": amount,
+            "stocks_ok": ok, "stocks_total": total}
 
 
 async def _trading_day() -> tuple[str, float]:
@@ -301,7 +333,7 @@ async def _trading_day() -> tuple[str, float]:
 
 
 async def run_scan(force: bool = False) -> dict:
-    """跑一次全A逐笔并落库（整日覆盖）。force=True 时跳过「刚刚跑过」的节流。"""
+    """跑一次全A逐笔并落库（整日覆盖）。force 保留给手动接口语义。"""
     global _state, _last_scan_mono
     if _state.get("busy"):
         return {"ok": False, "error": "上一轮还没跑完"}
@@ -316,7 +348,7 @@ async def run_scan(force: bool = False) -> dict:
         if official and not amount_ok(ours, official):
             raise RuntimeError(f"成交额对不上：逐笔 {ours/1e8:.0f} 亿 vs 官方 {official/1e8:.0f} 亿")
         await asyncio.to_thread(
-            bf.save_tape_day, date, got["rows"],
+            bf.save_tape_day, date, got["amt"], got["lot"],
             {"updated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
              "stocks_total": total, "stocks_ok": ok, "amount": ours})
         _state.update({"cycles": _state.get("cycles", 0) + 1,
@@ -324,10 +356,11 @@ async def run_scan(force: bool = False) -> dict:
                        "last_date": date, "stocks_ok": ok, "stocks_total": total,
                        "last_error": None})
         _last_scan_mono = time.monotonic()
-        log.info("全A逐笔入库 %s：%d 只 / %d 行 / %.0f 亿 / %.0fs",
-                 date, ok, len(got["rows"]), ours / 1e8, time.time() - t0)
-        return {"ok": True, "date": date, "rows": len(got["rows"]), "amount": ours,
-                "stocks_ok": ok, "stocks_total": total, "seconds": round(time.time() - t0, 1)}
+        log.info("全A逐笔入库 %s：%d 只 / 金额档 %d 行 / 手数档 %d 行 / %.0f 亿 / %.0fs",
+                 date, ok, len(got["amt"]), len(got["lot"]), ours / 1e8, time.time() - t0)
+        return {"ok": True, "date": date, "rows": len(got["amt"]) + len(got["lot"]),
+                "amount": ours, "stocks_ok": ok, "stocks_total": total,
+                "seconds": round(time.time() - t0, 1)}
     except Exception as exc:  # noqa: BLE001
         _state["last_error"] = str(exc)
         log.warning("全A逐笔失败：%s", exc)
@@ -349,7 +382,6 @@ async def run_forever() -> None:
                 if _last_scan_mono is None or time.monotonic() - _last_scan_mono >= SCAN_INTERVAL:
                     await run_scan()
             elif now.weekday() < 5 and _after_final(now):
-                # 收盘后定稿：每个交易日只做一次
                 if _state.get("last_date") != now.strftime("%Y-%m-%d"):
                     await run_scan()
         except asyncio.CancelledError:

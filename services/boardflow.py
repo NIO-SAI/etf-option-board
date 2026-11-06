@@ -125,6 +125,16 @@ CREATE TABLE IF NOT EXISTS tape_flow_bins (
     PRIMARY KEY (date, time, bin)
 );
 CREATE INDEX IF NOT EXISTS idx_tape_bins_date ON tape_flow_bins(date, time);
+-- 手数档直方图（通达信口径按手数分档，与金额档并存；两张表同一 shape）
+CREATE TABLE IF NOT EXISTS tape_flow_lots (
+    date TEXT NOT NULL,
+    time TEXT NOT NULL,
+    bin INTEGER NOT NULL,
+    buy REAL NOT NULL DEFAULT 0,
+    sell REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (date, time, bin)
+);
+CREATE INDEX IF NOT EXISTS idx_tape_lots_date ON tape_flow_lots(date, time);
 CREATE TABLE IF NOT EXISTS tape_flow_meta (
     date TEXT PRIMARY KEY,
     updated_at TEXT,
@@ -468,15 +478,16 @@ def prune(today: dt.date | None = None) -> dict:
     plan["etf_rank_snapshots"] = prune_plan(today, etf_r, etf_r)["rank_snapshots"]
     # 逐笔直方图：一天只有 1 万行，留 120 天（逐笔本身补不回来，宁可多留）
     plan["tape_flow_bins"] = prune_plan(today, tape_p, tape_p)["rank_snapshots"]
+    plan["tape_flow_lots"] = list(plan["tape_flow_bins"])
     removed = {"flow_points": 0, "rank_snapshots": 0, "etf_flow_points": 0,
                "etf_rank_snapshots": 0, "em_flow_points": 0, "tape_flow_bins": 0,
-               "tape_flow_meta": 0}
+               "tape_flow_lots": 0, "tape_flow_meta": 0}
     with _db() as conn:
         for table, dates in plan.items():
             for d in dates:
                 cur = conn.execute(f"DELETE FROM {table} WHERE date=?", (d,))
                 removed[table] += cur.rowcount or 0
-                if table == "tape_flow_bins":
+                if table in ("tape_flow_bins", "tape_flow_lots"):
                     removed["tape_flow_meta"] += conn.execute(
                         "DELETE FROM tape_flow_meta WHERE date=?", (d,)).rowcount or 0
     if any(removed.values()):
@@ -933,18 +944,21 @@ def latest_em_flows(date: str) -> list[dict]:
                 for c, n, k, i, l, md, r, pc in cur.fetchall()]
 
 
-def save_tape_day(date: str, rows: Iterable[tuple[str, int, float, float]],
-                  meta: dict) -> int:
-    """整日覆盖写全A逐笔直方图（每次重算都是全天累计，所以先删后插）。
+def save_tape_day(date: str, rows_amt: Iterable[tuple[str, int, float, float]],
+                  rows_lot: Iterable[tuple[str, int, float, float]], meta: dict) -> int:
+    """整日覆盖写全A逐笔的两张直方图（每次重算都是全天累计，所以先删后插）。
 
-    rows: (HH:MM, 档位下标, 主动买金额, 主动卖金额)；meta: updated_at/stocks_total/stocks_ok/amount。
+    rows_*: (HH:MM, 档位下标, 主动买金额, 主动卖金额)；
+    meta: updated_at / stocks_total / stocks_ok / amount。
     """
-    rows = list(rows)
+    rows_amt = list(rows_amt)
+    rows_lot = list(rows_lot)
     with _db() as conn:
-        conn.execute("DELETE FROM tape_flow_bins WHERE date=?", (date,))
-        conn.executemany(
-            "INSERT INTO tape_flow_bins(date,time,bin,buy,sell) VALUES(?,?,?,?,?)",
-            [(date, t, int(b), float(x), float(y)) for t, b, x, y in rows])
+        for table, rows in (("tape_flow_bins", rows_amt), ("tape_flow_lots", rows_lot)):
+            conn.execute(f"DELETE FROM {table} WHERE date=?", (date,))
+            conn.executemany(
+                f"INSERT INTO {table}(date,time,bin,buy,sell) VALUES(?,?,?,?,?)",
+                [(date, t, int(b), float(x), float(y)) for t, b, x, y in rows])
         conn.execute(
             "INSERT INTO tape_flow_meta(date,updated_at,stocks_total,stocks_ok,amount) "
             "VALUES(?,?,?,?,?) ON CONFLICT(date) DO UPDATE SET "
@@ -952,14 +966,18 @@ def save_tape_day(date: str, rows: Iterable[tuple[str, int, float, float]],
             "stocks_ok=excluded.stocks_ok, amount=excluded.amount",
             (date, str(meta.get("updated_at") or ""), int(meta.get("stocks_total") or 0),
              int(meta.get("stocks_ok") or 0), float(meta.get("amount") or 0)))
-    return len(rows)
+    return len(rows_amt) + len(rows_lot)
 
 
-def read_tape_bins(date: str) -> list[tuple[str, int, float, float]]:
-    """某日的逐笔直方图：[(HH:MM, 档位下标, 主动买, 主动卖)]，按时间+档位排序。"""
+def read_tape_bins(date: str, dim: str = "amt") -> list[tuple[str, int, float, float]]:
+    """某日的逐笔直方图：[(HH:MM, 档位下标, 主动买, 主动卖)]，按时间+档位排序。
+
+    dim: "amt"（金额档，Wind 口径）/ "lot"（手数档，通达信口径）。
+    """
+    table = "tape_flow_lots" if dim == "lot" else "tape_flow_bins"
     with _db() as conn:
         cur = conn.execute(
-            "SELECT time, bin, buy, sell FROM tape_flow_bins WHERE date=? ORDER BY time, bin",
+            f"SELECT time, bin, buy, sell FROM {table} WHERE date=? ORDER BY time, bin",
             (date,))
         return [(str(t), int(b), float(x), float(y)) for t, b, x, y in cur.fetchall()]
 

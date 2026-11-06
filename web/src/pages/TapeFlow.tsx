@@ -16,17 +16,18 @@ const PRESETS = [
   { key: "wind", label: "Wind 口径" },
 ];
 
-/** 两套口径的默认门槛（万元），页面输入框可改 */
+/** 两套口径的默认门槛（通达信按「手」，Wind 按「万元」），页面输入框可改 */
 const DEFAULTS: Record<string, string[]> = {
-  tdx: ["200", "50"],
+  tdx: ["700", "120"],
   wind: ["2000", "500", "20"],
 };
+const UNIT: Record<string, string> = { tdx: "手", wind: "万元" };
 
 const NOTES: Record<string, string> = {
-  tdx: "口径：全A（沪深，不含北交所）逐笔成交按单笔金额分档、每笔只记主动方一次；"
-    + "主力 ≥200 万，跟风 50–200 万，散户 <50 万。各档「买+卖」合计 = 全市场成交额。",
-  wind: "口径：同上分档；超大单 ≥2000 万，主力 500–2000 万，大户 20–500 万，散户 <20 万。"
-    + "Wind 的「机构」线按账户/席位识别，逐笔数据里拿不到，本图用「超大单」替代，不复刻机构线。",
+  tdx: "口径：全A（沪深，不含北交所）逐笔成交按单笔手数分档、每笔只记主动方一次，集合竞价整段算主动买；"
+    + "主力 ≥700 手，跟风 120–700 手，散户 <120 手。各档「买+卖」合计 = 全市场成交额。",
+  wind: "口径：同上分档（Wind 按单笔金额、集合竞价按买卖方向拆）；超大单 ≥2000 万，主力 500–2000 万，"
+    + "大户 20–500 万，散户 <20 万。Wind 的「机构」线按账户/席位识别，逐笔里拿不到，本图用「超大单」替代。",
 };
 
 type Bucket = {
@@ -87,7 +88,7 @@ export function TapeFlowPage() {
       return;
     }
     setApplied(clean.join(","));
-    toast.success(`门槛已改为 ${clean.join(" / ")} 万元`);
+    toast.success(`门槛已改为 ${clean.join(" / ")} ${UNIT[preset] ?? "万元"}`);
   };
 
   const scan = async () => {
@@ -149,13 +150,13 @@ export function TapeFlowPage() {
 
           {/* 门槛输入：改完点「应用」用库里的直方图重算（毫秒级，不重跑逐笔） */}
           <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border/60 px-2 py-1 text-[11px]">
-            <span className="text-muted-foreground">门槛（万元）</span>
+            <span className="text-muted-foreground">门槛（{UNIT[preset] ?? "万元"}）</span>
             {vals.map((v, i) => (
               <input
                 key={`${preset}-${i}`}
                 value={v}
                 inputMode="decimal"
-                aria-label={`第 ${i + 1} 档门槛（万元）`}
+                aria-label={`第 ${i + 1} 档门槛（${UNIT[preset] ?? "万元"}）`}
                 onChange={(e) => setVals((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
                 className="w-16 rounded border border-border bg-card px-1.5 py-0.5 text-[11px] tnum focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
