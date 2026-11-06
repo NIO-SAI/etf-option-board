@@ -1,6 +1,6 @@
 import { Check, Eye, Loader2, Plus, Search } from "lucide-react";
 import { Frame, FramePanel, FrameHeader, FrameTitle } from "@/components/reui/frame";
-import { EmptyState } from "@/components/ui/misc";
+import { EmptyState, RowCodeTip, useRowTip } from "@/components/ui/misc";
 import { clsUpDown, pct as fmtPct, signedFlow } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -72,6 +72,8 @@ export function FlowListPanel({
   maxHeight?: string;
   loading?: boolean;
 }) {
+  // 悬停 0.5 秒显示代码（原生 title 约 1 秒，太慢）
+  const { tip, enter, leave } = useRowTip();
   return (
     <Frame spacing="sm" className="self-start xl:sticky xl:top-[52px]">
       <FramePanel dense>
@@ -147,13 +149,12 @@ export function FlowListPanel({
                     tabIndex={0}
                     onClick={() => onToggle(b.code)}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(b.code); } }}
-                    onMouseEnter={() => onHoverRow?.(b.code)}
-                    onMouseLeave={() => onHoverRow?.(null)}
+                    onMouseEnter={(e) => { enter(e, b.code); onHoverRow?.(b.code); }}
+                    onMouseLeave={() => { leave(); onHoverRow?.(null); }}
                     className={cn(
                       "flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-[11px] transition-colors hover:bg-muted/60",
                       on && "bg-primary/5",
                     )}
-                    title={`${b.code} · ${showCheckbox ? "单击勾选 / 取消" : "单击切换"}`}
                   >
                     {showCheckbox && (
                       <input type="checkbox" checked={on} readOnly aria-label={`勾选${b.name}`}
@@ -211,6 +212,7 @@ export function FlowListPanel({
                 );
               })
             )}
+            <RowCodeTip tip={tip} />
           </div>
         </div>
       </FramePanel>

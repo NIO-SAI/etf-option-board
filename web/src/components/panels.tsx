@@ -3,7 +3,7 @@ import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/fr
 import { Sparkline } from "@/components/charts";
 import { IndexLevelsDialog } from "@/components/IndexLevelsDialog";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { EmptyState, Skeleton, Tabs } from "@/components/ui/misc";
+import { EmptyState, RowCodeTip, Skeleton, Tabs, useRowTip } from "@/components/ui/misc";
 import { Fold } from "@/components/ui/fold";
 import { AutoTip, GLOSSARY, Tip } from "@/components/ui/term";
 import { clsUpDown, flowMoney, gamma, money, nf, pct, signedMoney } from "@/lib/format";
@@ -164,6 +164,9 @@ export function EtfList({
   selected: string;
   onSelect: (c: string) => void;
 }) {
+  // 悬停 0.5 秒显示代码
+  const { tip, enter, leave } = useRowTip();
+
   // 大盘指数（只读补充信息，非期权标的；固定清单保证始终显示）
   // 只留两条：上证指数（可看关键位）与平均股价（板块口径的赚钱效应）。多一条就会
   // 把矮窗口下的底栏挤到需要滚动，而底栏的存在意义正是「不滚动也能看全」。
@@ -191,7 +194,8 @@ export function EtfList({
                 key={e.code}
                 type="button"
                 aria-current={on ? "true" : undefined}
-                title={`${e.code} · ${e.name}`}
+                onMouseEnter={(ev) => enter(ev, e.code)}
+                onMouseLeave={leave}
                 onClick={() => onSelect(e.code)}
                 className={cn(
                   "flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors",
@@ -233,7 +237,8 @@ export function EtfList({
                     key={f.code}
                     type="button"
                     aria-current={on ? "true" : undefined}
-                    title={`${f.code} · ${f.name}`}
+                    onMouseEnter={(ev) => enter(ev, f.code)}
+                    onMouseLeave={leave}
                     onClick={() => onSelect(f.code)}
                     className={cn(
                       "flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors",
@@ -282,9 +287,8 @@ export function EtfList({
                 <Row
                   key={ix.code}
                   {...rowProps}
-                  title={ix.code === "800005"
-                    ? `${ix.code} · 该指数没有分钟/历史行情源（腾讯不认板块代码、东财 push2 当前不可达）：走势依赖交易时段内的快照累积，开盘后自动补齐`
-                    : `${ix.code} · ${ix.name}`}
+                  onMouseEnter={(ev) => enter(ev, ix.code)}
+                  onMouseLeave={leave}
                   className={cn(
                     "flex w-full items-center gap-2.5 px-3 py-2.5 text-left",
                     clickable && "transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
@@ -310,6 +314,7 @@ export function EtfList({
         </div>
         <IndexLevelsDialog open={idxOpen} onClose={() => setIdxOpen(false)} />
       </FramePanel>
+      <RowCodeTip tip={tip} />
     </Frame>
   );
 }

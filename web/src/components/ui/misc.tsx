@@ -109,6 +109,60 @@ export function HoverTip({
   );
 }
 
+export type RowTip = { text: string; x: number; y: number } | null;
+
+/**
+ * 列表行「悬停 0.5 秒显示代码」的轻提示（原生 title 延迟约 1 秒且不可控）。
+ * 由列表容器持有状态（只渲染一个 portal），行只负责上报 code 与锚点元素。
+ */
+export function useRowTip(delay = 500) {
+  const [tip, setTip] = React.useState<RowTip>(null);
+  const timer = React.useRef<any>(null);
+  const hide = React.useCallback(() => {
+    clearTimeout(timer.current);
+    setTip(null);
+  }, []);
+  const enter = React.useCallback((e: React.MouseEvent<HTMLElement>, text: string) => {
+    clearTimeout(timer.current);
+    const el = e.currentTarget;
+    if (!text) return;
+    timer.current = setTimeout(() => {
+      const r = el.getBoundingClientRect();
+      if (!r.width && !r.height) return;      // 行已被卸载
+      const y = Math.min(r.bottom - 4, window.innerHeight - 28);
+      setTip({ text, x: Math.min(r.left + 8, window.innerWidth - 140), y });
+    }, delay);
+  }, [delay]);
+
+  // 卸载清定时器；提示显示期间滚动/缩放会错位，直接隐藏
+  React.useEffect(() => () => clearTimeout(timer.current), []);
+  React.useEffect(() => {
+    if (!tip) return;
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("resize", hide);
+    return () => {
+      window.removeEventListener("scroll", hide, true);
+      window.removeEventListener("resize", hide);
+    };
+  }, [tip, hide]);
+
+  return { tip, enter, leave: hide };
+}
+
+/** 配合 useRowTip 使用：渲染唯一那个提示气泡。 */
+export function RowCodeTip({ tip }: { tip: RowTip }) {
+  if (!tip) return null;
+  return ReactDOM.createPortal(
+    <div
+      className="pointer-events-none fixed z-[120] whitespace-nowrap rounded-md border border-border bg-popover px-2 py-1 text-[11px] leading-snug text-popover-foreground shadow-lg"
+      style={{ left: tip.x, top: tip.y }}
+    >
+      {tip.text}
+    </div>,
+    document.body,
+  );
+}
+
 /** 数据区的空/错误态：短标题 + 1 句说明（可选 action），不抢焦点、不撑高布局。 */
 export function EmptyState({
   title, hint, action, className,
