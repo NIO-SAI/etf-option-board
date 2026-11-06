@@ -1,0 +1,464 @@
+import { useEffect, useMemo, useState } from "react";
+import { RefreshCw } from "lucide-react";
+import { toast } from "sonner";
+import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
+import { PrismChart } from "@/components/charts/PrismChart";
+import { api } from "@/lib/api";
+import { usePolling } from "@/lib/usePolling";
+import { flowMoney, pct, signedFlow } from "@/lib/format";
+import { cn } from "@/lib/utils";
+
+/* ============================ 类型 ============================ */
+type Cell = {
+  board: string; name: string; zt: number; max_lbc: number;
+  count_20d?: number; tier?: string; type?: string;
+};
+type ThemeRow = {
+  board: string; name: string; zt: number; zb: number; lan: number;
+  max_lbc: number; lianban: number; first_board: number;
+  pct?: number | null; main?: number | null; d3?: number | null; d5?: number | null;
+  ratio?: number | null;
+  tier: string; count_20d: number; type: string;
+  expanding: boolean; climax: boolean; resonance: boolean;
+};
+type PoolItem = {
+  code: string; name: string; reason?: string; lbc: number; zbc: number;
+  fund?: number | null; pct?: number | null; hybk?: string; fbt?: number;
+};
+
+const TIERS = ["0~3", "3~5", "5~10", "10~15", "15以上"];
+const TYPES = ["全部类型", "产业链", "事件性", "风格性"];
+
+const POOL_TABS = [
+  { key: "theme", label: "板块涨停" },
+  { key: "all", label: "炒作涨停" },
+  { key: "broken", label: "板块炸板" },
+  { key: "lan", label: "板块烂板" },
+] as const;
+
+const fmtMD = (d: string) => (d.length === 8 ? `${d.slice(4, 6)}-${d.slice(6)}` : d);
+const isST = (name: string) => /ST/i.test(name);
+
+/** 涨停数 → 红色深浅（同列内归一，越红代表当天涨停家数越多） */
+function heat(v: number, max: number) {
+  if (!v || !max) return { backgroundColor: "transparent" };
+  const a = Math.min(0.85, 0.12 + 0.73 * (v / max));
+  return { backgroundColor: `rgba(225,29,72,${a.toFixed(2)})` };
+}
+
+/* ============================ 页面 ============================ */
+/**
+ * 涨停棱镜：沪深 A 股涨停板扫描 + 主题分类。
+ *
+ * 四个面板（复刻经传「涨停棱镜」）：
+ * ① 涨停周期表：近 N 个交易日 × 每日 Top10 主题，点单元格选主题；
+ * ② 涨停棱镜图：黄线 = 沪深涨停总数，红面积 = 所选主题涨停数；
+ * ③ 主题榜：当日各主题涨停数 + 涨幅/主力/3日/5日/主力占比；
+ * ④ 个股池：炒作涨停 / 板块涨停 / 板块炸板 / 板块烂板。
+ *
+ * 数据全部来自本地库（`services/limitup.py` 盘中每 2 分钟采集、15:05 定稿），
+ * 页面一次 `overview` 请求拿齐 ①③，②④ 跟着所选主题联动。
+ */
+export function LimitUpPage() {
+  const [date, setDate] = useState("");
+  const [theme, setTheme] = useState("");
+  const [days, setDays] = useState(11);
+  const [tier, setTier] = useState("all");
+  const [type, setType] = useState("全部类型");
+  const [onlyExpand, setOnlyExpand] = useState(false);
+  const [onlyClimax, setOnlyClimax] = useState(false);
+  const [onlyResonance, setOnlyResonance] = useState(false);
+  const [dropST, setDropST] = useState(false);
+  const [poolTab, setPoolTab] = useState<string>("theme");
+
+  const { data: ov, refresh: refreshOv } = usePolling(
+    () => api.limitupOverview(date || undefined, days, 10), 120_000, [date, days]);
+  const [busy, setBusy] = useState(false);
+
+  const themes: ThemeRow[] = ov?.themes ?? [];
+  const dates: string[] = ov?.dates ?? [];
+  const curDate: string = ov?.date ?? "";
+
+  // 选中的主题：默认当日第一名
+  useEffect(() => {
+    if (!themes.length) return;
+    if (theme && themes.some((t) => t.board === theme)) return;
+    setTheme(themes[0].board);
+  }, [themes, theme]);
+
+  const themeName = themes.find((t) => t.board === theme)?.name ?? "";
+
+  const { data: prism } = usePolling(
+    () => api.limitupPrism(theme || undefined, curDate || undefined, 25),
+    120_000, [theme, curDate]);
+
+  const poolKind = poolTab === "theme" ? "zt" : poolTab;
+  const { data: pool } = usePolling(
+    () => api.limitupPool(curDate || undefined,
+      poolTab === "all" ? undefined : theme || undefined, poolKind),
+    120_000, [curDate, theme, poolTab]);
+
+  /** 主题榜筛选（等级 / 类型 / 扩张·高潮·共振 / 去 ST） */
+  const shownThemes = useMemo(() => themes.filter((t) => {
+    if (dropST && isST(t.name)) return false;
+    if (tier !== "all" && t.tier !== tier) return false;
+    if (type !== "全部类型" && t.type !== type) return false;
+    if (onlyExpand && !t.expanding) return false;
+    if (onlyClimax && !t.climax) return false;
+    if (onlyResonance && !t.resonance) return false;
+    return true;
+  }), [themes, tier, type, onlyExpand, onlyClimax, onlyResonance, dropST]);
+
+  /** 周期表：同样过滤后，每列重新按名次排列（缺位补空） */
+  const matrix = useMemo(() => {
+    const raw: (Cell | null)[][] = ov?.matrix ?? [];
+    return raw.map((col) => {
+      const kept = col.filter((c): c is Cell => !!c && !(dropST && isST(c.name))
+        && (tier === "all" || c.tier === tier)
+        && (type === "全部类型" || c.type === type));
+      const out: (Cell | null)[] = [...kept];
+      while (out.length < 10) out.push(null);
+      return out;
+    });
+  }, [ov, tier, type, dropST]);
+
+  const onRefresh = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await api.limitupRefresh(curDate || undefined);
+      if (r?.error) toast.error(`刷新失败：${r.error}`);
+      else toast.success(`已刷新 ${r.date}：涨停 ${r.total} 家 / 主题 ${r.themes} 个`);
+      refreshOv();
+    } catch (e: any) {
+      toast.error(e?.message ?? "刷新失败");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stats = ov?.stats ?? {};
+  const rows = pool?.items ?? [];
+
+  return (
+    <div className="flex flex-col gap-3 px-4 pb-6 pt-3">
+      {/* 顶栏 */}
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-base font-semibold">涨停棱镜</h2>
+        <span className="text-[11px] text-muted-foreground">
+          沪深涨停 {stats.total_zt ?? 0} 家 · 炸板 {stats.total_zb ?? 0} 家 · 主题 {stats.theme_count ?? 0} 个
+          {stats.finalized ? " · 已定稿" : ""}
+        </span>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <select
+            value={days}
+            onChange={(e) => setDays(Number(e.target.value))}
+            className="h-7 rounded border bg-background px-2 text-xs"
+          >
+            <option value={6}>近 6 日</option>
+            <option value={11}>近 11 日</option>
+            <option value={16}>近 16 日</option>
+          </select>
+          <select
+            value={tier}
+            onChange={(e) => setTier(e.target.value)}
+            className="h-7 rounded border bg-background px-2 text-xs"
+            title="主题等级 = 该主题近 20 日涨停总数"
+          >
+            <option value="all">全部主题等级</option>
+            {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select
+            value={type}
+            onChange={(e) => setType(e.target.value)}
+            className="h-7 rounded border bg-background px-2 text-xs"
+          >
+            {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <select
+            value={curDate}
+            onChange={(e) => setDate(e.target.value)}
+            className="h-7 rounded border bg-background px-2 text-xs"
+          >
+            {(dates.length ? [...dates].reverse() : [curDate]).filter(Boolean).map((d) => (
+              <option key={d} value={d}>{d}</option>
+            ))}
+          </select>
+          <button
+            onClick={onRefresh}
+            disabled={busy}
+            className="flex h-7 items-center gap-1 rounded border bg-background px-2 text-xs hover:bg-accent disabled:opacity-50"
+          >
+            <RefreshCw size={12} className={busy ? "animate-spin" : ""} /> 刷新
+          </button>
+        </div>
+      </div>
+
+      {/* 筛选开关 */}
+      <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={dropST} onChange={(e) => setDropST(e.target.checked)} />
+          删除ST
+        </label>
+        <label className="flex items-center gap-1" title="当日涨停数 > 前 5 日均值 × 1.5">
+          <input type="checkbox" checked={onlyExpand} onChange={(e) => setOnlyExpand(e.target.checked)} />
+          扩张主题
+        </label>
+        <label className="flex items-center gap-1" title="当日涨停数创近 20 日新高">
+          <input type="checkbox" checked={onlyClimax} onChange={(e) => setOnlyClimax(e.target.checked)} />
+          高潮主题
+        </label>
+        <label className="flex items-center gap-1" title="首板/连板/炸板三项同时高于前 5 日均值">
+          <input type="checkbox" checked={onlyResonance}
+            onChange={(e) => setOnlyResonance(e.target.checked)} />
+          三共振
+        </label>
+        <span className="ml-auto">数据源：东财涨停池 + 概念板块资金 · 涨停原因取自同花顺（失败降级行业名）</span>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+        {/* ==================== 左列 ==================== */}
+        <div className="flex min-w-0 flex-col gap-3">
+          {/* ① 涨停周期表 */}
+          <Frame>
+            <FrameHeader className="flex-row items-center gap-2">
+              <FrameTitle>涨停周期表</FrameTitle>
+              <span className="text-[10px] text-muted-foreground">
+                单元格 = 当日该名次的主题，右上角数字 = 近 20 日涨停总数
+              </span>
+            </FrameHeader>
+            <FramePanel className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse text-[11px]">
+                  <thead>
+                    <tr className="bg-muted/40">
+                      <th className="w-9 border-b px-1 py-1 text-center font-normal text-muted-foreground">
+                        排名
+                      </th>
+                      {dates.map((d) => (
+                        <th key={d}
+                          className={cn("border-b px-1 py-1 text-center font-normal text-muted-foreground",
+                            d === curDate && "bg-primary/10 text-foreground")}
+                          title={d}>
+                          {fmtMD(d)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from({ length: 10 }).map((_, r) => (
+                      <tr key={r}>
+                        <td className="border-b px-1 py-0.5 text-center text-muted-foreground">{r + 1}</td>
+                        {matrix.map((col, ci) => {
+                          const cell = col[r] ?? null;
+                          const maxZt = Math.max(1, ...col.filter(Boolean).map((c) => c!.zt));
+                          const active = cell?.board === theme;
+                          return (
+                            <td
+                              key={ci}
+                              onClick={() => cell && setTheme(cell.board)}
+                              className={cn(
+                                "border-b px-1 py-0.5 text-center",
+                                cell ? "cursor-pointer hover:outline hover:outline-1 hover:outline-primary/50" : "",
+                                active && "outline outline-1 outline-primary",
+                              )}
+                              style={cell ? heat(cell.zt, maxZt) : undefined}
+                              title={cell ? `${cell.name}：${cell.zt} 家涨停（近20日 ${cell.count_20d ?? cell.zt}）` : ""}
+                            >
+                              {cell ? (
+                                <span className="flex items-center justify-center gap-0.5">
+                                  <span className={cn("truncate", cell.zt / maxZt > 0.55 && "text-white")}>
+                                    {cell.name}
+                                  </span>
+                                  {r === 0 && cell.count_20d ? (
+                                    <sup className="text-[9px] opacity-80">{cell.count_20d}</sup>
+                                  ) : null}
+                                </span>
+                              ) : <span className="text-muted-foreground/40">—</span>}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* 主题等级图例（顶部那条红色渐变条） */}
+              <div className="flex items-center gap-3 px-3 py-1.5 text-[10px] text-muted-foreground">
+                <span>主题等级（近20日涨停数）</span>
+                <div className="flex h-2 flex-1 overflow-hidden rounded">
+                  <div className="flex-1" style={{ background: "rgba(225,29,72,.15)" }} />
+                  <div className="flex-1" style={{ background: "rgba(225,29,72,.3)" }} />
+                  <div className="flex-1" style={{ background: "rgba(225,29,72,.5)" }} />
+                  <div className="flex-1" style={{ background: "rgba(225,29,72,.7)" }} />
+                  <div className="flex-1" style={{ background: "rgba(225,29,72,.9)" }} />
+                </div>
+                <span className="flex gap-3">
+                  {TIERS.map((t) => <span key={t}>{t}</span>)}
+                </span>
+              </div>
+            </FramePanel>
+          </Frame>
+
+          {/* ② 涨停棱镜图 */}
+          <Frame>
+            <FrameHeader className="flex-row items-center gap-2">
+              <FrameTitle>涨停棱镜</FrameTitle>
+              <span className="text-[10px] text-muted-foreground">
+                {curDate} · 沪深涨停 <b className="text-foreground">{stats.total_zt ?? 0}</b> 家 ·
+                {themeName ? <> 主题 · {themeName} <b className="text-rose-600">
+                  {prism?.theme?.[prism.theme.length - 1] ?? 0}</b> 家</> : " 点左上表格选主题"}
+              </span>
+            </FrameHeader>
+            <FramePanel className="p-1">
+              <PrismChart
+                dates={prism?.dates ?? []}
+                total={prism?.total ?? []}
+                theme={prism?.theme ?? []}
+                themeName={prism?.theme_name ?? ""}
+              />
+            </FramePanel>
+          </Frame>
+        </div>
+
+        {/* ==================== 右列 ==================== */}
+        <div className="flex min-w-0 flex-col gap-3">
+          {/* ③ 主题榜 */}
+          <Frame>
+            <FrameHeader className="flex-row items-center gap-2">
+              <FrameTitle>主题榜</FrameTitle>
+              <span className="text-[10px] text-muted-foreground">
+                {shownThemes.length} 个主题{shownThemes.length > 40 ? "（显示前 40）" : ""} · 点行切换棱镜与个股池
+              </span>
+            </FrameHeader>
+            <FramePanel className="max-h-[420px] overflow-auto p-0">
+              <table className="w-full text-[11px]">
+                <thead className="sticky top-0 z-10 bg-muted/60 backdrop-blur">
+                  <tr className="text-muted-foreground">
+                    <th className="w-7 px-1 py-1 text-center font-normal">#</th>
+                    <th className="px-1 py-1 text-left font-normal">主题</th>
+                    <th className="w-12 px-1 py-1 text-right font-normal">涨停</th>
+                    <th className="w-14 px-1 py-1 text-right font-normal">涨幅</th>
+                    <th className="w-16 px-1 py-1 text-right font-normal">主力净额</th>
+                    <th className="w-16 px-1 py-1 text-right font-normal">3日</th>
+                    <th className="w-16 px-1 py-1 text-right font-normal">5日</th>
+                    <th className="w-14 px-1 py-1 text-right font-normal">占比</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shownThemes.slice(0, 40).map((t, i) => (
+                    <tr
+                      key={t.board}
+                      onClick={() => setTheme(t.board)}
+                      className={cn("cursor-pointer border-b last:border-0 hover:bg-accent/60",
+                        t.board === theme && "bg-primary/5")}
+                    >
+                      <td className="px-1 py-0.5 text-center text-muted-foreground">{i + 1}</td>
+                      <td className="max-w-0 px-1 py-0.5">
+                        <div className="flex min-w-0 items-center gap-1">
+                          <span className="truncate">{t.name}</span>
+                          {t.climax && <Tag tone="hot">热</Tag>}
+                          {t.expanding && <Tag tone="expand">扩张</Tag>}
+                          {t.resonance && <Tag tone="res">共振</Tag>}
+                        </div>
+                      </td>
+                      <td className="px-1 py-0.5 text-right font-medium">{t.zt}</td>
+                      <td className={cn("px-1 py-0.5 text-right",
+                        (t.pct ?? 0) >= 0 ? "text-rose-600" : "text-emerald-600")}>
+                        {t.pct == null ? "-" : pct(t.pct)}
+                      </td>
+                      <td className="px-1 py-0.5 text-right">{t.main == null ? "-" : signedFlow(t.main)}</td>
+                      <td className="px-1 py-0.5 text-right">{t.d3 == null ? "-" : signedFlow(t.d3)}</td>
+                      <td className="px-1 py-0.5 text-right">{t.d5 == null ? "-" : signedFlow(t.d5)}</td>
+                      <td className="px-1 py-0.5 text-right">{t.ratio == null ? "-" : pct(t.ratio)}</td>
+                    </tr>
+                  ))}
+                  {!shownThemes.length && (
+                    <tr><td colSpan={8} className="py-6 text-center text-muted-foreground">
+                      当前筛选下没有主题
+                    </td></tr>
+                  )}
+                </tbody>
+              </table>
+            </FramePanel>
+          </Frame>
+
+          {/* ④ 个股池 */}
+          <Frame>
+            <FrameHeader className="flex-row items-center gap-2">
+              <FrameTitle>个股池</FrameTitle>
+              <div className="ml-auto flex gap-1">
+                {POOL_TABS.map((t) => (
+                  <button
+                    key={t.key}
+                    onClick={() => setPoolTab(t.key)}
+                    className={cn("rounded px-2 py-0.5 text-[11px]",
+                      poolTab === t.key
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground hover:bg-accent")}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </FrameHeader>
+            <FramePanel className="max-h-[420px] overflow-auto p-0">
+              <table className="w-full text-[11px]">
+                <thead className="sticky top-0 z-10 bg-muted/60 backdrop-blur">
+                  <tr className="text-muted-foreground">
+                    <th className="w-7 px-1 py-1 text-center font-normal">#</th>
+                    <th className="w-20 px-1 py-1 text-left font-normal">名称</th>
+                    <th className="px-1 py-1 text-left font-normal">涨停原因</th>
+                    <th className="w-14 px-1 py-1 text-center font-normal">
+                      {poolTab === "broken" || poolTab === "lan" ? "炸板次数" : "连板数"}
+                    </th>
+                    <th className="w-16 px-1 py-1 text-right font-normal">封板金额</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((it: PoolItem, i: number) => (
+                    <tr key={`${it.code}-${i}`} className="border-b last:border-0">
+                      <td className="px-1 py-0.5 text-center text-muted-foreground">{i + 1}</td>
+                      <td className="px-1 py-0.5">{it.name}</td>
+                      <td className="max-w-0 truncate px-1 py-0.5 text-muted-foreground"
+                        title={it.reason ?? ""}>{it.reason || "-"}</td>
+                      <td className="px-1 py-0.5 text-center">
+                        {poolTab === "broken" || poolTab === "lan"
+                          ? <span className="text-amber-600">{it.zbc}</span>
+                          : <span className={cn("rounded px-1",
+                            it.lbc >= 3 ? "bg-rose-600 text-white" : it.lbc === 2
+                              ? "bg-rose-100 text-rose-700" : "bg-muted text-muted-foreground")}>
+                            {it.lbc >= 2 ? `${it.lbc}连板` : "首板"}
+                          </span>}
+                      </td>
+                      <td className="px-1 py-0.5 text-right">
+                        {it.fund == null ? "-" : flowMoney(it.fund)}
+                      </td>
+                    </tr>
+                  ))}
+                  {!rows.length && (
+                    <tr><td colSpan={5} className="py-6 text-center text-muted-foreground">
+                      {poolTab === "broken" || poolTab === "lan"
+                        ? "该主题当日没有炸板个股" : "没有个股"}
+                    </td></tr>
+                  )}
+                </tbody>
+              </table>
+            </FramePanel>
+          </Frame>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Tag({ tone, children }: { tone: "hot" | "expand" | "res"; children: React.ReactNode }) {
+  const cls = {
+    hot: "bg-rose-600 text-white",
+    expand: "bg-amber-100 text-amber-700",
+    res: "bg-violet-100 text-violet-700",
+  }[tone];
+  return (
+    <span className={cn("shrink-0 rounded px-1 text-[9px] leading-4", cls)}>{children}</span>
+  );
+}

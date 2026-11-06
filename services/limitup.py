@@ -61,7 +61,7 @@ _EM_UT = "7eea3edcaed734bea9cbfc24409ed989"
 _THS_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
            "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
 
-BACKFILL_DAYS = 20          # 启动回补的交易日数（棱镜图默认看 20~25 天）
+BACKFILL_DAYS = 30          # 启动回补的日历天数（含节假日，实际约 20 个交易日；棱镜图默认看 20~25 天）
 KEEP_DAYS = 150             # 库内保留窗口
 CONCEPT_RANK_LIMIT = 8      # 每只涨停股最多取排名前 N 个概念（越往后越牵强）
 PRISM_DAYS = 25
@@ -75,7 +75,7 @@ _NOISE_EXACT = {
     "机构重仓", "基金重仓", "QFII重仓", "社保重仓", "证金持股", "汇金持股",
 }
 _NOISE_SUBSTR = ("预增", "预减", "预亏", "扭亏", "中报", "三季报", "年报", "季报",
-                 "高送转", "填权", "摘帽", "举牌")
+                 "高送转", "填权", "摘帽", "举牌", "昨日", "打板", "表现", "连板", "重仓")
 
 
 def _is_noise(name: str) -> bool:
@@ -106,11 +106,13 @@ def classify_theme(name: str) -> str:
 
 
 # ---- 主题等级分档（UI 里那条红色渐变条） ---------------------------------------
+# 口径：**当日的涨停家数**分档（与经传那条 0~3 / 3~5 / 5~10 / 10~15 / 15以上 色条一致）。
+# 单元格右上角的数字才是「近 20 日涨停总数」，别把两者混起来。
 TIERS = ["0~3", "3~5", "5~10", "10~15", "15以上"]
 
 
 def tier_of(n: int) -> str:
-    """按 20 日涨停总数分档。边界取下限（3 → 3~5，10 → 10~15，15 → 15以上）。"""
+    """按涨停家数分档。边界取下限（3 → 3~5，10 → 10~15，15 → 15以上）。"""
     if n < 3:
         return "0~3"
     if n < 5:
@@ -246,65 +248,103 @@ async def _zb_pool(date: str) -> list[dict[str, Any]]:
 
 
 async def _concept_boards() -> dict[str, dict[str, Any]]:
-    """全部东财概念板块（531 个）的当日涨幅与资金四列。name → row。"""
-    data = await em.get_json(
-        _CLIST_URL,
-        {"pn": 1, "pz": 1000, "po": 1, "np": 1, "fltt": 2, "invt": 2, "fid": "f62",
-         "fs": "m:90 t:3", "fields": "f12,f14,f3,f62,f184,f267,f268,f164,f165", "_": "1"},
-        ttl=60, referer="https://data.eastmoney.com/")
+    """全部东财概念板块（实测 531 个）的当日涨幅与资金四列。name → row。
+
+    注意 `pz` 被上游截到 100（传 1000 也只回 100 条），必须按 `pn` 翻页，
+    否则概念名单只剩前 100 个，绝大多数涨停股的概念归属会被全部丢掉。
+    """
     out: dict[str, dict[str, Any]] = {}
-    for r in ((data or {}).get("data") or {}).get("diff") or []:
-        name = r.get("f14")
-        if not name:
-            continue
-        out[name] = {
-            "code": r.get("f12"),
-            "name": name,
-            "pct": _f(r.get("f3")),
-            "main": _f(r.get("f62")),
-            "ratio": _f(r.get("f184")),
-            "d3": _f(r.get("f267")),
-            "d5": _f(r.get("f164")),
-        }
+    for pn in range(1, 10):
+        data = await em.get_json(
+            _CLIST_URL,
+            {"pn": pn, "pz": 100, "po": 1, "np": 1, "fltt": 2, "invt": 2, "fid": "f62",
+             "fs": "m:90 t:3", "fields": "f12,f14,f3,f62,f184,f267,f268,f164,f165", "_": "1"},
+            ttl=120, referer="https://data.eastmoney.com/")
+        body = (data or {}).get("data") or {}
+        diff = body.get("diff") or []
+        for r in diff:
+            name = r.get("f14")
+            if not name:
+                continue
+            out[name] = {
+                "code": r.get("f12"),
+                "name": name,
+                "pct": _f(r.get("f3")),
+                "main": _f(r.get("f62")),
+                "ratio": _f(r.get("f184")),
+                "d3": _f(r.get("f267")),
+                "d5": _f(r.get("f164")),
+            }
+        total = int(body.get("total") or 0)
+        if not diff or len(out) >= total:
+            break
     return out
 
 
 async def _stock_concepts(code: str, mkt: int, concept_names: set[str]) -> list[dict[str, Any]]:
-    """单只股票的所属概念（已过滤噪音、按 BOARD_RANK 截断）。"""
+    """单只股票的所属概念（已过滤噪音、按 BOARD_RANK 截断）。
+
+    东财这个接口返回的是「所属板块」大杂烩：行业、地域、财务特征、特色数据
+    （最近多板 / 东方财富热股 / 连续亏损 / QFII新进 …）全在里面。
+    **`IS_PRECISE == "1"` 才是真正的精确概念**（实测每只票 4~16 个，全部命中概念板块名单，
+    而噪音项清一色是 0 或 null）——这是最关键的一道过滤，比名字黑名单可靠得多。
+    万一某只票一个精确概念都没有，才退回"名字命中概念名单"的那批。
+    """
     data = await em.get_json(
         _F10_URL,
         {"reportName": "RPT_F10_CORETHEME_BOARDTYPE",
          "columns": "SECUCODE,SECURITY_CODE,BOARD_CODE,BOARD_NAME,IS_PRECISE,BOARD_RANK",
          "filter": f'(SECUCODE="{_iso(code, mkt)}")',
-         "pageNumber": 1, "pageSize": 60, "sortTypes": 1, "sortColumns": "BOARD_RANK",
+         "pageNumber": 1, "pageSize": 100, "sortTypes": 1, "sortColumns": "BOARD_RANK",
          "source": "HSF10", "client": "PC"},
         ttl=3600, referer="https://emweb.securities.eastmoney.com/")
     rows = ((data or {}).get("result") or {}).get("data") or []
-    out: list[dict[str, Any]] = []
+
+    kept: list[dict[str, Any]] = []
+    precise: list[dict[str, Any]] = []
     for r in rows:
         name = r.get("BOARD_NAME") or ""
         if name not in concept_names or _is_noise(name):
             continue
-        out.append({"name": name, "rank": int(_f(r.get("BOARD_RANK"), 99) or 99)})
+        item = {"name": name, "rank": int(_f(r.get("BOARD_RANK"), 99) or 99)}
+        kept.append(item)
+        if str(r.get("IS_PRECISE")) == "1":
+            precise.append(item)
+
+    out = precise or kept
     out.sort(key=lambda x: x["rank"])
     return out[:CONCEPT_RANK_LIMIT]
 
 
 async def _ths_reasons(date: str) -> dict[str, str]:
-    """同花顺涨停原因（code → reason_type）。任何失败都静默返回空表。"""
-    try:
-        data = await em.get_json(
-            _THS_URL,
-            {"page": 1, "limit": 500, "field": "10,199112,330329,133971,133970,1968584",
-             "filter": "HS,GEM2STAR", "order_field": "199112", "order_type": 0,
-             "date": date},
-            ttl=60, referer="https://data.10jqka.com.cn/", tries=1,
-            headers={"User-Agent": _THS_UA})
-    except Exception as exc:  # noqa: BLE001
-        log.info("同花顺涨停原因不可用（%s），降级为行业名", exc)
-        return {}
-    info = ((data or {}).get("data") or {}).get("info") or []
-    return {str(r.get("code")): (r.get("reason_type") or "") for r in info if r.get("code")}
+    """同花顺涨停原因（code → reason_type）。任何失败都静默返回空表。
+
+    注意 `limit` 上限 200（传 500 会被直接拒：`limitmust be less than or equal to 200`），
+    所以按 200 一页翻到 `total` 为止，最多 5 页。
+    """
+    out: dict[str, str] = {}
+    for page in range(1, 6):
+        try:
+            data = await em.get_json(
+                _THS_URL,
+                {"page": page, "limit": 200,
+                 "field": "199112,10,9001,330329,133970,9002,9004",
+                 "filter": "HS,GEM2STAR", "order_field": "199112", "order_type": 0,
+                 "date": date},
+                ttl=60, referer="https://data.10jqka.com.cn/", tries=1,
+                headers={"User-Agent": _THS_UA})
+        except Exception as exc:  # noqa: BLE001
+            log.info("同花顺涨停原因不可用（%s），降级为行业名", exc)
+            return out
+        body = (data or {}).get("data") or {}
+        info = body.get("info") or []
+        for r in info:
+            if r.get("code"):
+                out[str(r.get("code"))] = r.get("reason_type") or ""
+        total = int(((body.get("page") or {}).get("total") or 0))
+        if not info or len(out) >= total:
+            break
+    return out
 
 
 # ============================ 聚合层 ===========================================
@@ -405,8 +445,10 @@ async def collect(date: str, *, finalize: bool = False, with_funds: bool = True)
         return {"error": "涨停池为空（非交易日或上游不可用）", "date": date, "total": 0}
 
     zb_raw = await _zb_pool(date)
-    boards = await _concept_boards() if with_funds else {}
-    concept_names = set(boards) if boards else set()
+    # 概念名单必须每次都拉（用于选股归属过滤 + 板块代码）；with_funds 只决定「资金四列」是否落库，
+    # 因为 clist 给的是"当下"的资金，标到历史日期上是错的。
+    boards = await _concept_boards()
+    concept_names = set(boards)
 
     # 概念归属：只查当天涨停/炸板的票（32 只左右 → 32 个请求，并发 8）
     codes: dict[str, int] = {}
@@ -453,8 +495,12 @@ async def collect(date: str, *, finalize: bool = False, with_funds: bool = True)
         })
 
     themes = aggregate_themes(pool, concepts, broken, boards)
+    if not with_funds:
+        for t in themes:
+            t.update({"pct": None, "main": None, "d3": None, "d5": None, "ratio": None})
     await asyncio.to_thread(_write_snapshot, date, pool=pool, broken=broken,
-                            themes=themes, concepts=concepts, boards=boards,
+                            themes=themes, concepts=concepts,
+                            boards=boards if with_funds else {},
                             total_zt=zt["tc"] or len(pool), finalized=finalize)
     log.info("涨停棱镜 %s：涨停 %d / 炸板 %d / 主题 %d%s", date, len(pool),
              len(broken), len(themes), "（定稿）" if finalize else "")
@@ -541,6 +587,15 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 10) -> dict[
     # 20 日统计：主题等级角标 / 扩张 / 高潮 / 三共振
     win = dates[-20:] if len(dates) >= 20 else dates
     streak = _streak_map(win)
+    matrix = build_matrix(per_day, top)
+    for col in matrix:
+        for cell in col:
+            if not cell:
+                continue
+            cell["count_20d"] = streak.get(cell["board"], cell["zt"])
+            cell["tier"] = tier_of(cell["zt"])
+            cell["type"] = classify_theme(cell["name"])
+
     boards_today = [t["board"] for t in by_date.get(d, []) if t["board"]]
     series = _theme_series(list({*boards_today, *[b for b in streak if streak[b] >= 3]}), dates)
 
@@ -551,7 +606,7 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 10) -> dict[
         n20 = streak.get(t["board"], t["zt"])
         themes.append({
             **t,
-            "tier": tier_of(n20),
+            "tier": tier_of(t["zt"]),
             "count_20d": n20,
             "expanding": is_expanding(zt_series),
             "climax": is_climax(zt_series),
@@ -576,7 +631,7 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 10) -> dict[
     return {
         "date": d,
         "dates": cols,
-        "matrix": build_matrix(per_day, top),
+        "matrix": matrix,
         "themes": themes,
         "tiers": TIERS,
         "stats": {
@@ -700,6 +755,7 @@ def _trade_date(now: dt.datetime | None = None) -> str | None:
 async def _backfill(days: int = BACKFILL_DAYS) -> None:
     """启动时补齐最近 `days` 个交易日。已有数据的日期跳过。"""
     have = set(_dates(KEEP_DAYS))
+    empties = 0
     now = dt.datetime.now()
     todo: list[str] = []
     probe = now
@@ -713,11 +769,42 @@ async def _backfill(days: int = BACKFILL_DAYS) -> None:
         try:
             r = await collect(d, with_funds=False)
             if r.get("error"):
+                # 东财涨停池的回溯窗口实测只有约 20 个自然日，再往前一律空。
+                # 连续 3 个空日期就停，别在每次重启时白跑十几轮。
+                empties += 1
                 log.info("回补 %s 跳过：%s", d, r["error"])
+                if empties >= 3:
+                    log.info("涨停棱镜回补提前结束（上游历史窗口已到）")
+                    break
+            else:
+                empties = 0
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
             log.warning("回补 %s 失败: %s", d, exc)
+
+
+async def _ensure_funds() -> None:
+    """回补只写涨停/主题（历史资金列不采），收尾时给「最新交易日」补一次资金四列。
+
+    clist 只给"当下"的资金，所以只在数据日期足够新（≤4 天，覆盖周末/小长假）时才补，
+    否则宁可留空也不把今天的钱标到上周五头上。
+    """
+    d = _latest_date()
+    if not d:
+        return
+    with _conn() as c:
+        r = c.execute("SELECT COUNT(*) AS n FROM lu_themes WHERE date=? AND main IS NOT NULL",
+                      (d,)).fetchone()
+    if r["n"]:
+        return
+    try:
+        dd = dt.datetime.strptime(d, "%Y%m%d")
+    except ValueError:
+        return
+    if (dt.datetime.now() - dd).days > 4:
+        return
+    await collect(d, finalize=d != dt.datetime.now().strftime("%Y%m%d"), with_funds=True)
 
 
 async def run_forever() -> None:
@@ -725,6 +812,7 @@ async def run_forever() -> None:
     await asyncio.to_thread(init_db)
     try:
         await _backfill()
+        await _ensure_funds()
     except Exception as exc:  # noqa: BLE001
         log.warning("涨停棱镜回补失败: %s", exc)
 

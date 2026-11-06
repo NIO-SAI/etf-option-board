@@ -9,10 +9,10 @@
 
 import { useEffect, useState } from "react";
 
-export type PageKey = "options" | "board-flow" | "board-multi" | "board-etf" | "board-em" | "flow-tape" | "wangwang" | "arisk";
+export type PageKey = "options" | "board-flow" | "board-multi" | "board-etf" | "board-em" | "flow-tape" | "wangwang" | "arisk" | "limitup";
 
-/** 一级导航分组：期权看板 ｜ 资金分时（内含四个子页）｜ 资金流向（全A逐笔）｜ 汪汪队 ｜ 风险监控 */
-export type SectionKey = "options" | "board" | "flow" | "wangwang" | "arisk";
+/** 一级导航分组：期权看板 ｜ 资金分时（内含四个子页）｜ 资金流向（全A逐笔）｜ 汪汪队 ｜ 风险监控 ｜ 涨停棱镜 */
+export type SectionKey = "options" | "board" | "flow" | "wangwang" | "arisk" | "limitup";
 
 export type PageDef = {
   key: PageKey;
@@ -32,6 +32,7 @@ export const PAGES: PageDef[] = [
   { key: "flow-tape", hash: "#/flow", label: "资金流向", title: "资金流向：全A逐笔分档（通达信 / Wind 两套口径）", section: "flow" },
   { key: "wangwang", hash: "#/wangwang", label: "汪汪队ETF", title: "汪汪队 ETF 跟踪器 · 今日国家队上班了吗", section: "wangwang" },
   { key: "arisk", hash: "#/arisk", label: "风险监控", title: "A股风险监控 · A-RISK（ERP / 信贷脉冲 / 两层决策模型）", section: "arisk" },
+  { key: "limitup", hash: "#/limitup", label: "涨停棱镜", title: "涨停棱镜 · 涨停周期表 / 涨停棱镜 / 主题榜 / 个股池", section: "limitup" },
 ];
 
 const BY_HASH = new Map(PAGES.map((p) => [p.hash, p.key]));

@@ -77,6 +77,7 @@ async def _no_cache_html(request, call_next):
 
 app.include_router(api.router)
 app.include_router(wangwang.router)
+app.include_router(limitup.router)
 app.include_router(arisk.router)
 
 

@@ -126,4 +126,21 @@ export const api = {
   // 汪汪队 ETF 跟踪器（自包含：24 只宽基 ETF 的成交额倍数 + 主动净买入）
   wangwangSnapshot: (force = false) => get(`/wangwang/snapshot${force ? "?force=1" : ""}`),
   wangwangHealth: () => get("/wangwang/health"),
+
+  // 涨停棱镜（自包含：data/limitup.db，涨停池 + 主题聚合 + 棱镜图）
+  limitupOverview: (date?: string, days = 11, top = 10) =>
+    get(`/limitup/overview?days=${days}&top=${top}${date ? `&date=${date}` : ""}`),
+  limitupPrism: (theme?: string, date?: string, days = 25) => {
+    const qs = [theme ? `theme=${encodeURIComponent(theme)}` : "",
+      date ? `date=${date}` : "", `days=${days}`].filter(Boolean).join("&");
+    return get(`/limitup/prism?${qs}`);
+  },
+  limitupPool: (date?: string, theme?: string, kind = "all") => {
+    const qs = [date ? `date=${date}` : "", theme ? `theme=${encodeURIComponent(theme)}` : "",
+      `kind=${kind}`].filter(Boolean).join("&");
+    return get(`/limitup/pool?${qs}`);
+  },
+  limitupHealth: () => get("/limitup/health"),
+  limitupRefresh: async (date?: string) =>
+    (await fetch(`${BASE}/limitup/refresh${date ? `?date=${date}` : ""}`, { method: "POST" })).json(),
 };
