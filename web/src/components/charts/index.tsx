@@ -715,8 +715,8 @@ export function MoneyLinesChart({
   id: string;
   axis: string[];
   series: { code: string; name: string; values: (number | null)[]; watch?: boolean }[];
-  /** 叠加线（价格等）：走右侧第二根 Y 轴，不影响资金净额的取值范围 */
-  extra?: { code: string; name: string; values: (number | null)[] }[];
+  /** 叠加线（价格等）：每条各自一根右侧 Y 轴，互不压缩，充分利用图高 */
+  extra?: { code: string; name: string; values: (number | null)[]; color?: string }[];
   height?: number | string;
   maxLines?: number;
   /** line=分线；stack=堆叠面积（4 维资金用） */
@@ -729,14 +729,17 @@ export function MoneyLinesChart({
   const shown = (series ?? []).slice(0, maxLines);
   const extras = extra ?? [];
   // 右侧要给「第二根 Y 轴的价格刻度」再留一点，否则会和右侧标签叠在一起
-  const gutterRight = (endLabels ? LABEL_GUTTER : 12) + (extras.length ? 56 : 0);
+  const axisBand = 46;   // 每条叠加价格轴占的宽度（放左侧，右侧留给标签）
+  const gutterRight = endLabels ? LABEL_GUTTER : 12;
+  const gutterLeft = 54 + extras.length * axisBand;
+  const extraColor = (s: { color?: string }, i: number) => s.color ?? EXTRA_COLORS[i % EXTRA_COLORS.length];
   const [chart, setChart] = useState<any>(null);
   // 悬停右侧标签 → 对应分时线加粗并变红/绿，其余淡出（与主力资金分时一致）
   const [hoverCode, setHoverCode] = useState<string | null>(null);
   const option = useMemo(() => ({
     animation: false,
     color: MONEY_COLORS,
-    grid: { left: 54, right: gutterRight, top: 10, bottom: 22 },
+    grid: { left: gutterLeft, right: gutterRight, top: 10, bottom: 22 },
     tooltip: {
       trigger: "axis",
       axisPointer: { type: "cross" },
@@ -781,14 +784,14 @@ export function MoneyLinesChart({
           axisLabel: { color: AXIS, fontSize: 10, formatter: (v: number) => signedFlow(v) },
           splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
         },
-        {
-          type: "value", position: "right", scale: true,
+        ...extras.map((e, i) => ({
+          type: "value", position: "left", offset: (i + 1) * axisBand, scale: true,
           axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false },
           axisLabel: {
-            color: "#0ea5e9", fontSize: 10,
+            color: extraColor(e, i), fontSize: 10,
             formatter: (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2)),
           },
-        },
+        })),
       ]
       : {
         type: "value",
@@ -820,16 +823,16 @@ export function MoneyLinesChart({
     }).concat(extras.map((s, i) => ({
       name: s.name,
       type: "line",
-      yAxisIndex: 1,
+      yAxisIndex: i + 1,
       data: s.values,
       showSymbol: false,
       smooth: false,
       connectNulls: true,
       z: 1,
-      itemStyle: { color: EXTRA_COLORS[i % EXTRA_COLORS.length] },
-      lineStyle: { width: 1.1, color: EXTRA_COLORS[i % EXTRA_COLORS.length], opacity: 0.9 },
+      itemStyle: { color: extraColor(s, i) },
+      lineStyle: { width: 1.1, color: extraColor(s, i), opacity: 0.9 },
     }))),
-  }), [axis, shown, mode, vLines, endLabels, hoverCode, extras, gutterRight]);
+  }), [axis, shown, mode, vLines, endLabels, hoverCode, extras, gutterRight, gutterLeft]);
 
   const labels = useMemo<EndLabelItem[]>(() => {
     if (!endLabels) return [];

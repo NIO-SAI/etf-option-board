@@ -75,8 +75,10 @@ export function TapeFlowPage() {
     [data]);
   // 叠加价格线：A股平均股价 / 上证指数（走第二 Y 轴）
   const prices = (data?.prices ?? []) as { key: string; name: string; values: (number | null)[]; last?: number }[];
-  const extra = prices.filter((p) => showPrice[p.key] !== false)
-    .map((p) => ({ code: p.key, name: p.name, values: p.values }));
+  const extra = prices
+    .map((p, i) => ({ p, color: PRICE_COLORS[i % PRICE_COLORS.length] }))
+    .filter(({ p }) => showPrice[p.key] !== false)
+    .map(({ p, color }) => ({ code: p.key, name: p.name, values: p.values, color }));
   const meta = data?.meta ?? {};
   const updated = meta.updated_at || health?.state?.last_run || "";
   const state = health?.state ?? {};
@@ -117,6 +119,35 @@ export function TapeFlowPage() {
               {busy ? <Badge variant="info-light">重算中…</Badge> : null}
             </div>
             <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+              {prices.length ? (
+                <>
+                  <span className="text-muted-foreground">叠加</span>
+                  {prices.map((p, i) => {
+                    const on = showPrice[p.key] !== false;
+                    return (
+                      <button
+                        key={p.key}
+                        type="button"
+                        aria-pressed={on}
+                        title={on ? `隐藏${p.name}` : `显示${p.name}`}
+                        onClick={() => setShowPrice((prev) => ({ ...prev, [p.key]: !on }))}
+                        className={cn(
+                          "flex items-center gap-1 rounded border px-1.5 py-0.5 transition-colors",
+                          on
+                            ? "border-border text-foreground hover:bg-muted"
+                            : "border-dashed border-border/70 text-muted-foreground opacity-60 hover:opacity-100",
+                        )}
+                      >
+                        <span className="size-1.5 rounded-full"
+                          style={{ background: PRICE_COLORS[i % PRICE_COLORS.length] }} />
+                        {p.name}
+                        <span className="tnum">{p.last != null ? p.last.toFixed(2) : "—"}</span>
+                      </button>
+                    );
+                  })}
+                  <span className="mx-0.5 h-3 w-px bg-border" aria-hidden />
+                </>
+              ) : null}
               <select
                 id="tape-flow-date" name="date" aria-label="选择日期"
                 value={data?.date ?? date}
@@ -209,35 +240,6 @@ export function TapeFlowPage() {
               </div>
             ) : null}
           </div>
-
-          {/* 叠加线图例：点图标切换显示 / 隐藏 */}
-          {prices.length ? (
-            <div className="flex shrink-0 items-center justify-end gap-1 px-3 pb-0.5 text-[10px]">
-              <span className="mr-0.5 text-muted-foreground">叠加</span>
-              {prices.map((p, i) => {
-                const on = showPrice[p.key] !== false;
-                return (
-                  <button
-                    key={p.key}
-                    type="button"
-                    aria-pressed={on}
-                    title={on ? `隐藏${p.name}` : `显示${p.name}`}
-                    onClick={() => setShowPrice((prev) => ({ ...prev, [p.key]: !on }))}
-                    className={cn(
-                      "flex items-center gap-1 rounded border px-1.5 py-0.5 transition-colors",
-                      on
-                        ? "border-border text-foreground hover:bg-muted"
-                        : "border-dashed border-border/70 text-muted-foreground opacity-60 hover:opacity-100",
-                    )}
-                  >
-                    <span className="size-1.5 rounded-full" style={{ background: PRICE_COLORS[i % PRICE_COLORS.length] }} />
-                    {p.name}
-                    <span className="tnum">{p.last != null ? p.last.toFixed(2) : "—"}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
 
           {/* 分时图：独占剩余高度，随窗口缩放重排 */}
           <div className="min-h-0 flex-1 px-2 pb-1">
