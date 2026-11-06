@@ -88,7 +88,7 @@ const NOTIFY_ICON = "/icons/icon-192.png";
 let _swReg: ServiceWorkerRegistration | null = null;
 
 /**
- * 注册 Service Worker（仅用于「安装为应用」与通知点击回跳，不做离线缓存）。
+ * 注册 Service Worker（PWA、通知点击回跳与浏览器直连模型，不做离线缓存）。
  * SW 点击通知后会 postMessage {type:"etf:select", code}，这里转成 window 事件，
  * 由 AlertCenter 接手切到对应标的。
  */

@@ -37,6 +37,12 @@ export default function App() {
   const page = usePageRoute();
   const [clock, setClock] = useState(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"trading" | "llm">("trading");
+  useEffect(() => {
+    const open = () => { setSettingsTab("llm"); setSettingsOpen(true); };
+    window.addEventListener("etf:open-llm-settings", open);
+    return () => window.removeEventListener("etf:open-llm-settings", open);
+  }, []);
 
   // 顶栏全局信息：所有页面都要看（外围市场 / 国家队评分 / 服务健康）
   const { data: health } = usePolling(() => api.health(), 60_000);
@@ -70,9 +76,9 @@ export default function App() {
         clock={clock}
         nav={<PageTabs page={page} className="max-w-[52vw]" />}
         onRefresh={requestRefresh}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => { setSettingsTab("trading"); setSettingsOpen(true); }}
       />
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsDialog open={settingsOpen} initialTab={settingsTab} onClose={() => setSettingsOpen(false)} />
 
       <View />
 
