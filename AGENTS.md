@@ -160,10 +160,11 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
 - **分时缓存**：合约分时/买卖点走 `usePolling` 的 IndexedDB 缓存（kind=`trends`/`levels`），
   切合约先渲染缓存；**缓存比轮询周期新时不发首轮请求**，来回切标的/合约几乎不产生请求。
   盘中 15s、非交易 120s，页面切后台暂停。
-- **排序与口径（2026-11-06）**：四个资金页的排序统一为 `涨幅｜涨速｜资金`。涨速取东财
-  `f22`：板块在 `rank_snapshots.speed`（clist 采集），ETF 在 `etf_rank_snapshots.speed`
-  （采集器每轮用 `ulist.np/get` 批量取 100 只/次合并，stock/get 不返回 f22）；
-  多日页的「涨速」取区间最新交易日的瞬时值（`read_rank_range` 已带 speed）。
+- **排序与口径（2026-11-06）**：四个资金页的排序统一为 `涨幅｜涨速｜资金`。
+  **涨速 = 近 5 分钟涨跌幅**（用户口径；东财 `f22` 是 3 分钟，不能用）。板块/ETF 由采集器
+  在内存里记 pct 历史算好写进 `rank_snapshots.speed` / `etf_rank_snapshots.speed`
+  （进程重启后 5 分钟内回落到 f22 的 3 分钟值）；指数/4 维用 `em_flow_points` 的分钟 pct
+  历史现算（`speed5_map`，`time` 只有 HH:MM）；多日页取区间最新交易日收盘时的 5 分钟涨速。
   ETF资金流口径 tab = **宽基(broad)｜窄基(sector)｜自定义(自选)**，不再有「全部」；
   旧链接 `scope=all` 自动归到宽基。**已下线两个指数**：47.800000 东方财富全A、
   1.000985 中证全指（`bf.EM_HIDDEN`，采集与 `/board/index-rank`、`/em-flow/targets` 都不再出现）。

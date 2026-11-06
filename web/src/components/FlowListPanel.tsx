@@ -105,7 +105,9 @@ export function FlowListPanel({
                   type="button"
                   onClick={() => onSort(o.key)}
                   aria-pressed={sortKey === o.key}
-                  title={`按${o.label}排序（再点切换升/降序）`}
+                  title={o.key === "speed"
+                    ? "按涨速排序（近 5 分钟涨跌幅；再点切换升/降序）"
+                    : `按${o.label}排序（再点切换升/降序）`}
                   className={cn("rounded px-2 py-0.5 font-medium transition-colors",
                     sortKey === o.key
                       ? "bg-primary text-primary-foreground shadow-xs"

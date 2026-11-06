@@ -424,3 +424,44 @@ class TestExtraEmTargets:
     def test_name_falls_back_to_rank(self):
         out = bf.extra_em_targets(self.rank, [{"code": "BK0002"}], [])
         assert out == [{"code": "BK0002", "name": "电力设备", "kind": "industry"}]
+
+
+class TestSpeed5:
+    """涨速统一为「近 5 分钟涨跌幅」（东财 f22 是 3 分钟，不能用）。"""
+
+    date = "2026-11-06"
+
+    def test_speed5_uses_pct_five_minutes_ago(self):
+        from services import board_collector as bc
+        hist: dict = {}
+        assert bc.speed5("BK1", -1.0, 1000.0, hist) is None      # 无 5 分钟前基准
+        bc.speed5("BK1", -1.2, 1120.0, hist)
+        bc.speed5("BK1", -1.4, 1240.0, hist)
+        # 1300 - 300 = 1000：基准取 t=1000 的 -1.0 → -1.6 - (-1.0) = -0.6
+        assert bc.speed5("BK1", -1.6, 1300.0, hist) == pytest.approx(-0.6)
+
+    def test_speed5_ignores_stale_history(self):
+        from services import board_collector as bc
+        hist = {"BK1": [(0.0, 5.0)]}                           # 20 分钟前的旧记录被清掉
+        assert bc.speed5("BK1", 1.0, 1200.0, hist) is None
+
+    @pytest.fixture()
+    def temp_db(self, tmp_path, monkeypatch):
+        from services import boardflow as b
+        monkeypatch.setattr(b, "_DATA_DIR", str(tmp_path))
+        monkeypatch.setattr(b, "_DB_FILE", str(tmp_path / "board_flow.db"))
+        b.init_db()
+        return b
+
+    def test_latest_em_flows_speed_from_pct(self, temp_db):
+        b = temp_db
+        with b._db() as conn:
+            for t, pct in [("09:30", 0.0), ("09:35", 0.2), ("09:40", 0.9)]:
+                conn.execute(
+                    "INSERT OR REPLACE INTO em_flow_points"
+                    "(date,code,name,kind,time,inst,large,medium,retail,pct)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (self.date, "1.000001", "上证指数", "index", t, 1, 2, 3, 4, pct))
+        rows = b.latest_em_flows(self.date)
+        # 5 分钟前（09:35）0.2 → 最新 0.9 = +0.7
+        assert rows[0]["speed"] == pytest.approx(0.7)

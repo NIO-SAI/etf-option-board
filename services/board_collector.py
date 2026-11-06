@@ -23,6 +23,36 @@ _CYCLE_SEC = 30
 _IDLE_SEC = 120
 
 _state: dict = {"cycles": 0, "last_cycle": None, "last_error": None, "boards": 0}
+
+# 5 分钟涨速：库里每天只留一行快照（没有 pct 历史），所以在采集器内存里按轮次记录
+# pct，取「5 分钟前那一轮」的 pct 与当前 pct 相减。进程重启后 5 分钟内为 None
+# （回落成东财 f22 的 3 分钟涨速，只在启动初期出现）。
+_SPEED_WINDOW = 300.0
+_speed_hist: dict[str, list[tuple[float, float]]] = {}
+
+
+def speed5(code: str, pct: float | None, now: float,
+           hist: dict | None = None, window: float = _SPEED_WINDOW) -> float | None:
+    """用 pct 历史算 5 分钟涨速（%）。返回 None 表示历史不足（刚启动）。纯函数（hist 可注入）。"""
+    if pct is None:
+        return None
+    h = _speed_hist if hist is None else hist
+    arr = h.setdefault(code, [])
+    while arr and now - arr[0][0] > window * 2:   # 只保留最近 10 分钟
+        arr.pop(0)
+    cutoff = now - window
+    ref = None
+    for t, p in reversed(arr):                    # 最新的「至少 5 分钟前」那一轮
+        if t <= cutoff:
+            ref = p
+            break
+    try:
+        arr.append((now, float(pct)))
+    except (TypeError, ValueError):
+        return None
+    if ref is None:
+        return None
+    return round(float(pct) - ref, 2)
 _busy = False
 _prev_ranks: dict[str, int] = {}
 _prev_date: str | None = None
@@ -76,6 +106,11 @@ async def _cycle() -> None:
             _prev_date = date
 
         ranked = bf.assign_ranks_by_type(rows, _prev_ranks)
+        mono = asyncio.get_event_loop().time()
+        for r in ranked:
+            sp = speed5(str(r["code"]), r.get("pct"), mono)
+            if sp is not None:
+                r["speed"] = sp          # 5 分钟涨速（历史不足时保留 f22 的 3 分钟值）
         n = await asyncio.to_thread(bf.save_cycle, date, hhmm, ranked)
         _prev_ranks = {r["code"]: r["rank"] for r in ranked}
 
@@ -218,12 +253,15 @@ async def _etf_cycle() -> None:
     results = await asyncio.gather(*(one(it) for it in _etf_universe))
     rows = [r for r in results if r]
     if rows:
+        mono = asyncio.get_event_loop().time()
+        f22: dict[str, float] = {}
         try:
-            speeds = await _etf_speeds(_etf_universe)
-            for r in rows:
-                r["speed"] = speeds.get(r["code"], 0.0)
+            f22 = await _etf_speeds(_etf_universe)   # 冷启动前 5 分钟的回退值（东财 f22）
         except Exception as exc:  # noqa: BLE001 — 涨速拉不到不影响资金流采集
             log.debug("ETF 涨速批量获取失败: %s", exc)
+        for r in rows:
+            sp = speed5(str(r["code"]), r.get("pct"), mono)
+            r["speed"] = sp if sp is not None else f22.get(r["code"], 0.0)
         await asyncio.to_thread(bf.save_etf_cycle, date, hhmm, rows)
 
 

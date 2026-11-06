@@ -1189,7 +1189,8 @@ async def em_flow_targets(date: str | None = Query(None)):
         r = by.get(code)
         return {"code": code, "name": name,
                 "flow": (float(r["inst"]) + float(r["large"])) if r else None,
-                "pct": r.get("pct") if r else None}
+                "pct": r.get("pct") if r else None,
+                "speed": (r.get("speed") or 0) if r else 0}
 
     return {"date": date,
             "indices": [item(i["secid"], i["name"]) for i in INDICES]}
@@ -1354,7 +1355,7 @@ async def board_index_rank(date: str | None = Query(None)):
         nm = names.get(r["code"]) or r.get("name") or r["code"]
         items.append({"code": r["code"], "name": nm, "type": "index",
                       "flow": r["inst"] + r["large"], "pct": r.get("pct"),
-                      "speed": 0.0, "py": pinyin_svc.initials(nm)})
+                      "speed": r.get("speed") or 0, "py": pinyin_svc.initials(nm)})
     items.sort(key=lambda x: -abs(x["flow"]))
     out = {"date": date, "items": items, "error": None if items else "暂无 4 维采集数据"}
     return out

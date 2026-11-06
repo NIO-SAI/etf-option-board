@@ -330,6 +330,49 @@ def load_prev_ranks(date: str) -> dict[str, int]:
         return {str(c): int(r) for c, r in cur.fetchall()}
 
 
+def speed5_map(conn: sqlite3.Connection, table: str, date: str,
+               time_col: str = "ts") -> dict[str, float]:
+    """5 分钟涨速（%）：用 pct 的变化量近似 —— pct_now - pct_5min_ago。
+
+    东财 f22 是「3 分钟涨速」，用户口径要 5 分钟。4 维表每分钟一行、带 pct（相对昨收），
+    两行相减即 5 分钟涨跌幅（小幅度下与价格口径误差 <0.03pp）。
+    注意：rank_snapshots / etf_rank_snapshots 每天只保留**一行**最终快照，没有 pct 历史，
+    板块/ETF 的 5 分钟涨速由采集器在内存里按 pct 历史算好再写入 speed 列。
+    ``time_col``：4 维表用 time。表名只来自内部常量，不走外部输入。
+    """
+    row = conn.execute(f"SELECT MAX({time_col}) FROM {table} WHERE date=?", (date,)).fetchone()
+    last = row[0] if row else None
+    if not last:
+        return {}
+    cut = None
+    for fmt in ("%Y-%m-%d %H:%M", "%H:%M"):   # 排行表是完整时间，4 维表只有 HH:MM
+        try:
+            cut = (dt.datetime.strptime(str(last), fmt)
+                   - dt.timedelta(minutes=5)).strftime(fmt)
+            break
+        except ValueError:
+            continue
+    if not cut:
+        return {}
+    cur = {str(c): p for c, p in conn.execute(
+        f"SELECT code, pct FROM {table} WHERE date=? AND {time_col}=?", (date, last))}
+    past = {str(c): p for c, p in conn.execute(
+        f"SELECT t.code, t.pct FROM {table} t JOIN ("
+        f"  SELECT code, MAX({time_col}) AS mts FROM {table} WHERE date=? AND {time_col}<=?"
+        f"  GROUP BY code) m ON t.code=m.code AND t.{time_col}=m.mts WHERE t.date=?",
+        (date, cut, date))}
+    out: dict[str, float] = {}
+    for code, p in cur.items():
+        q = past.get(code)
+        if p is None or q is None:
+            continue
+        try:
+            out[code] = round(float(p) - float(q), 2)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def read_rank(date: str, board_type: str | None = None) -> list[dict]:
     sql = ("SELECT code,name,type,flow,pct,rank,prev_rank,speed,ts FROM rank_snapshots WHERE date=?")
     args: list = [date]
@@ -857,8 +900,10 @@ def latest_em_flows(date: str) -> list[dict]:
             "  SELECT code, MAX(time) AS t FROM em_flow_points WHERE date=? GROUP BY code"
             ") m ON p.code=m.code AND p.time=m.t"
             " WHERE p.date=?", (date, date))
+        sp = speed5_map(conn, "em_flow_points", date, time_col="time")
         return [{"code": c, "name": n, "kind": k, "inst": float(i), "large": float(l),
-                 "medium": float(md), "retail": float(r), "pct": float(pc or 0)}
+                 "medium": float(md), "retail": float(r), "pct": float(pc or 0),
+                 "speed": sp.get(str(c), 0.0)}
                 for c, n, k, i, l, md, r, pc in cur.fetchall()]
 
 
