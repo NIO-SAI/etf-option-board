@@ -1,27 +1,23 @@
 # ETF 期权日内决策看板 — Docker Compose 一键部署
 #
-#   docker compose up -d                          # 拉取镜像并后台启动，打开 http://<主机IP>:6799
-#   docker compose logs -f                        # 看日志
-#   docker compose pull && docker compose up -d   # 升级到最新镜像
+# 在完整源码仓库根目录执行：
+#   docker compose up -d --build   # 构建当前源码并后台启动，打开 http://<主机IP>:6799
+#   docker compose logs -f        # 看日志
+# 更新源码后再次执行 docker compose up -d --build。
 #
 # 可选配置写在同目录的 .env（已 gitignore），例如：
-#   ETF_IMAGE=vissong/etf-option-board:latest     # 镜像
+#   ETF_IMAGE=etf-option-board:latest             # 本地镜像名，或你自己的镜像仓库地址
 #   ETF_PORT=6799                                 # 宿主机端口
 #   LLM_API_KEY=...                               # 大模型决策用的 opencode key；不填则该功能显示不可用
 #
-# ── 给原作者 / 其他 fork 者：把镜像换到自己的 Docker Hub 名下 ──
-# 默认镜像在 vissong 名下，换成你自己的：
-#   1. docker login                               # 登录你自己的 Docker Hub 账号
-#   2. 在仓库根目录构建并推送多架构镜像（<你的用户名> 换成自己的，如 xiwen0217）：
-#        docker buildx create --name etf-builder --driver docker-container --use   # 只需一次
-#        docker buildx build --platform linux/amd64,linux/arm64 \
-#          -t <你的用户名>/etf-option-board:latest --push .
-#   3. 在 .env 写 ETF_IMAGE=<你的用户名>/etf-option-board:latest，
-#      或者直接把下面 image 默认值里的 vissong 改成你的用户名。
+# 使用已发布的自有镜像：在 .env 设置 ETF_IMAGE，再执行
+#   docker compose pull && docker compose up -d --no-build
+# 多架构构建与推送方法见 README「Docker 部署」。
 
 services:
   etf-option-board:
-    image: ${ETF_IMAGE:-vissong/etf-option-board:latest}
+    image: ${ETF_IMAGE:-etf-option-board:latest}
+    build: .
     container_name: etf-option-board
     # /api/admin/restart 退出进程后由它拉起，相当于原来的 LaunchAgent
     restart: unless-stopped
@@ -29,6 +25,7 @@ services:
       # /api/admin/* 没有鉴权；只想本机访问就改成 "127.0.0.1:${ETF_PORT:-6799}:6799"
       - "${ETF_PORT:-6799}:6799"
     environment:
+      TZ: Asia/Shanghai
       LLM_API_KEY: ${LLM_API_KEY:-}
     volumes:
       # 设置、自选、板块库、分钟线累积都在这里，重建容器不丢
