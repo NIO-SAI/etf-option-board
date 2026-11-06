@@ -75,3 +75,25 @@ class TestMatchAll:
         assert [r["code"] for r in out] == ["BK1", "BK4"]
         assert out[0]["source"] == "异动"
         assert out[0]["cls_name"] == "半导体概念"
+
+
+class TestIsUpMove:
+    """热门只收上涨方向的异动：下跌播报与新闻类噪音必须滤掉。"""
+
+    def test_negative_moves_dropped(self):
+        assert not cls_hot.is_up_move("算力硬件股大幅低开 “易中天”均跌超10%")
+        assert not cls_hot.is_up_move("高股息红利股持续走弱 中国石油等多股跌超5%")
+        assert not cls_hot.is_up_move("CPO概念震荡下挫 中际旭创跌近10%")
+
+    def test_news_noise_dropped(self):
+        assert not cls_hot.is_up_move("盘前题材挖掘")
+        assert not cls_hot.is_up_move("财联社11月5日早间新闻精选")
+        assert not cls_hot.is_up_move("国内商品期货开盘涨跌不一 LU燃油涨超3%")
+        assert not cls_hot.is_up_move("")
+
+    def test_up_moves_kept(self):
+        assert cls_hot.is_up_move("农业板块震荡拉升 万向德农触及涨停")
+        assert cls_hot.is_up_move("中字头概念局部异动 中成股份3天2板")
+        assert cls_hot.is_up_move("冰雪经济概念局部异动 龙江交通直线涨停")
+        assert cls_hot.is_up_move("光伏概念延续强势 永臻股份4连板")
+        assert cls_hot.is_up_move("白酒概念震荡回升 皇台酒业直线涨停")

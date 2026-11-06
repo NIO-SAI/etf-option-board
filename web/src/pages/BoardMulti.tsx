@@ -67,8 +67,8 @@ export function BoardMultiPage() {
   // forceHot：只有「刷新」按钮才置 true → 请求带 force=1 绕过后端缓存回源财联社
   const forceHot = useRef(false);
   const { data: hotView, refresh: refreshHot } = usePolling(
-    () => api.boardClsHot(end || undefined, forceHot.current), 300_000, [end],
-    { kind: "ctx", code: `mcls:${end || "latest"}` });
+    // 不挂 IndexedDB 缓存：热门板块变化快，前端缓存会让页面停在几分钟前的名单
+    () => api.boardClsHot(end || undefined, forceHot.current), 120_000, [end]);
   const [refreshing, setRefreshing] = useState(false);
   useEffect(() => {
     if (Array.isArray(watchView?.items)) setWatchItems(watchView.items);

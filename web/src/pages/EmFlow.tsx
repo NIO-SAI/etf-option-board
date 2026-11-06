@@ -72,7 +72,8 @@ export function EmFlowPage() {
   // forceHot：只有「刷新」按钮才置 true → 请求带 force=1 绕过后端缓存回源财联社
   const forceHot = useRef(false);
   const { data: hotView, refresh: refreshHot } = usePolling(
-    () => api.boardClsHot(undefined, forceHot.current), 300_000, [], { kind: "ctx", code: "cls-hot" });
+    // 不挂 IndexedDB 缓存：热门板块变化快，前端缓存会让页面停在几分钟前的名单
+    () => api.boardClsHot(undefined, forceHot.current), 120_000, []);
   // 自定义：与「主力资金分时」「主力资金多日」共用同一份自选（data/board_watch.json）
   const { data: watchView, refresh: refreshWatch } = usePolling(
     () => api.boardWatch(), 300_000, []);

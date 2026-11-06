@@ -87,8 +87,8 @@ export function BoardFlowPage() {
   // forceHot：只有「刷新」按钮才置 true → 请求带 force=1 绕过后端缓存回源财联社
   const forceHot = useRef(false);
   const { data: hotView, refresh: refreshHot } = usePolling(
-    () => api.boardClsHot(date || undefined, forceHot.current), 300_000, [date],
-    { kind: "ctx", code: `cls-hot:${date || "latest"}` });
+    // 不挂 IndexedDB 缓存：热门板块变化快，前端缓存会让页面停在几分钟前的名单
+    () => api.boardClsHot(date || undefined, forceHot.current), 120_000, [date]);
   // 刷新按钮的忙碌态：至少让用户看到图标在转，而不是「点了没反应」
   const [refreshing, setRefreshing] = useState(false);
   // 自选的本地真实来源：点击 + 立即翻转（乐观更新），服务端返回后以 watchView 对齐

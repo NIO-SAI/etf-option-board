@@ -26,10 +26,21 @@ CLS_REFERER = "https://www.cls.cn/"
 _HOT_URL = "https://x-quote.cls.cn/web_quote/plate/hot_plate"
 _ARTICLE_URL = "https://www.cls.cn/v3/transaction/articles"
 _CLS_BASE = {"app": "CailianpressWeb", "os": "web", "sv": "8.4.6"}
-_TTL = 300.0
+# 名称缓存 TTL：热门板块早盘变化快，5 分钟太长（用户会看到已经跌下去的板块）。
+# 后台轮询最多每 2 分钟回源一次，刷新按钮另有 force=1 立即回源。
+_TTL = 120.0
 
 # 板块名后缀：去掉后「半导体概念」与「半导体」才能对齐
 _SUFFIXES = ("概念板块", "行业板块", "板块", "概念", "行业", "指数")
+
+# 盘面直播里「属于上涨行情」的措辞。热门只要上涨/活跃的板块：
+# 下跌（CPO 低开跌超10%）、走弱（高股息）、以及纯新闻（早间新闻精选/商品期货开盘）
+# 都不该出现在「热门」里。
+_UP_WORDS = ("拉升", "走强", "走高", "涨停", "活跃", "反弹", "新高", "大涨", "涨超",
+             "涨幅", "涨势", "强势", "上涨", "冲高", "领涨", "异动", "连板", "封板",
+             "回升", "走红", "涨逾", "涨近")
+_DOWN_WORDS = ("跌", "低开", "走弱", "下挫", "回调", "跳水", "走低", "杀跌", "领跌",
+               "重挫", "下探", "新低", "走软", "跌幅", "翻绿")
 
 # CLS 的叫法与东财板块名不同、且没有公共子串，只能显式列别名（值为东财板块名）
 _ALIASES = {
@@ -118,11 +129,27 @@ async def fetch_hot_plates(force: bool = False) -> list[tuple[str, str]]:
     return out
 
 
+def is_up_move(title: str) -> bool:
+    """这条播报是不是「上涨方向」的板块行情。纯函数。
+
+    先一票否决下跌措辞（跌/低开/走弱/下挫…），再要求命中上涨措辞
+    （拉升/走强/涨停/活跃/异动…）。这样能同时滤掉下跌异动与纯新闻条目
+    （「盘前题材挖掘」「早间新闻精选」「商品期货开盘涨跌不一」）。
+    """
+    t = str(title or "")
+    if not t:
+        return False
+    if any(w in t for w in _DOWN_WORDS):
+        return False
+    return any(w in t for w in _UP_WORDS)
+
+
 async def fetch_abnormal(force: bool = False) -> list[str]:
-    """当日盘面直播里所有带 ``plate_name`` 的条目（每条都是一次板块异动播报）。
+    """当日盘面直播里「上涨方向」的板块异动名（按 ``plate_name`` 取）。
 
     以前只取标题含「异动」的，2026-11-05 实测一天只有 2 条，漏掉 20 多个板块；
-    ``plate_name`` 本身就是财联社给这条播报打的板块标签，不需要再靠标题判断。
+    ``plate_name`` 本身就是财联社给这条播报打的板块标签，不需要再靠标题判断，
+    但要用标题判方向：热门只收上涨/活跃的，下跌与新闻类噪音一律丢掉。
     """
     d = await _get_json(_ARTICLE_URL, dict(_CLS_BASE), force=force)
     arts = (d or {}).get("data") if isinstance(d, dict) else None
@@ -131,7 +158,7 @@ async def fetch_abnormal(force: bool = False) -> list[str]:
         if not isinstance(a, dict):
             continue
         nm = str(a.get("plate_name") or "").strip()
-        if nm:
+        if nm and is_up_move(a.get("title") or ""):
             out.append(nm)
     return out
 
