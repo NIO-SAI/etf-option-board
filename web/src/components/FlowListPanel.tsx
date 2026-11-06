@@ -153,7 +153,7 @@ export function FlowListPanel({
                       "flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-[11px] transition-colors hover:bg-muted/60",
                       on && "bg-primary/5",
                     )}
-                    title="单击勾选 / 取消"
+                    title={`${b.code} · ${showCheckbox ? "单击勾选 / 取消" : "单击切换"}`}
                   >
                     {showCheckbox && (
                       <input type="checkbox" checked={on} readOnly aria-label={`勾选${b.name}`}

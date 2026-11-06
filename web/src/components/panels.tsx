@@ -191,6 +191,7 @@ export function EtfList({
                 key={e.code}
                 type="button"
                 aria-current={on ? "true" : undefined}
+                title={`${e.code} · ${e.name}`}
                 onClick={() => onSelect(e.code)}
                 className={cn(
                   "flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors",
@@ -232,6 +233,7 @@ export function EtfList({
                     key={f.code}
                     type="button"
                     aria-current={on ? "true" : undefined}
+                    title={`${f.code} · ${f.name}`}
                     onClick={() => onSelect(f.code)}
                     className={cn(
                       "flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors",
@@ -281,8 +283,8 @@ export function EtfList({
                   key={ix.code}
                   {...rowProps}
                   title={ix.code === "800005"
-                    ? "该指数没有分钟/历史行情源（腾讯不认板块代码、东财 push2 当前不可达）：走势依赖交易时段内的快照累积，开盘后自动补齐"
-                    : undefined}
+                    ? `${ix.code} · 该指数没有分钟/历史行情源（腾讯不认板块代码、东财 push2 当前不可达）：走势依赖交易时段内的快照累积，开盘后自动补齐`
+                    : `${ix.code} · ${ix.name}`}
                   className={cn(
                     "flex w-full items-center gap-2.5 px-3 py-2.5 text-left",
                     clickable && "transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
