@@ -5,6 +5,7 @@
 """
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -51,10 +52,14 @@ def stubbed(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _clean_cache():
-    ms._CTX_CACHE.clear()  # noqa: SLF001 — 测试间隔离
-    yield
-    ms._CTX_CACHE.clear()  # noqa: SLF001
+def clock(monkeypatch):
+    """时间全部注入；缓存与绑定事件循环的锁都按用例隔离。"""
+    now = [1000.0]
+    monkeypatch.setattr(ms, "time", SimpleNamespace(
+        time=lambda: now[0], strftime=lambda fmt: "2026-11-06"))
+    monkeypatch.setattr(ms, "_CTX_CACHE", {})
+    monkeypatch.setattr(ms, "_CTX_LOCKS", {})
+    return now
 
 
 def test_concurrent_calls_share_one_build(stubbed):
@@ -75,7 +80,7 @@ def test_concurrent_calls_share_one_build(stubbed):
     assert stubbed["stock_get"] == 1
 
 
-def test_ttl_expiry_triggers_rebuild(stubbed, monkeypatch):
+def test_ttl_expiry_triggers_rebuild(stubbed, clock):
     """TTL 内命中缓存；过期后重新构建（freshness 不降级）。"""
     _run(ms.etf_context("510300", "1.510300"))
     before = dict(stubbed)
@@ -83,8 +88,7 @@ def test_ttl_expiry_triggers_rebuild(stubbed, monkeypatch):
     _run(ms.etf_context("510300", "1.510300"))
     assert stubbed == before
     # 手动把时间推过 TTL：应触发重建
-    at, data = ms._CTX_CACHE["510300"]  # noqa: SLF001
-    ms._CTX_CACHE["510300"] = (at - ms._CTX_TTL - 1, data)  # noqa: SLF001
+    clock[0] += ms._CTX_TTL + 1
     _run(ms.etf_context("510300", "1.510300"))
     assert stubbed["quote"] == before["quote"] + 1
     assert stubbed["fflow"] == before["fflow"] + 1
@@ -99,3 +103,63 @@ def test_different_codes_cached_separately(stubbed):
     _run(main())
     assert stubbed["quote"] == 2
     assert stubbed["fflow"] == 2
+
+
+def test_failed_build_can_retry(stubbed, monkeypatch):
+    """构建失败不缓存异常，下一次调用可重新获取数据。"""
+    original = ms._build_etf_context
+    attempts = 0
+
+    async def build(code, secid):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("模拟上游失败")
+        return await original(code, secid)
+
+    monkeypatch.setattr(ms, "_build_etf_context", build)
+
+    async def main():
+        with pytest.raises(RuntimeError, match="模拟上游失败"):
+            await ms.etf_context("510300", "1.510300")
+        assert not ms._CTX_CACHE
+        return await ms.etf_context("510300", "1.510300")
+
+    assert _run(main())["code"] == "510300"
+    assert attempts == 2
+    assert stubbed["quote"] == 1
+
+
+def test_cancelled_builder_releases_waiter(stubbed, monkeypatch):
+    """构建者取消后，已排队的同标调用可以继续构建，不留下锁死状态。"""
+    original = ms._build_etf_context
+
+    async def main():
+        entered = asyncio.Event()
+        waiting = asyncio.Event()
+        attempts = 0
+
+        async def build(code, secid):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                entered.set()
+                await asyncio.Event().wait()
+            return await original(code, secid)
+
+        async def waiter():
+            waiting.set()
+            return await ms.etf_context("510300", "1.510300")
+
+        monkeypatch.setattr(ms, "_build_etf_context", build)
+        first = asyncio.create_task(ms.etf_context("510300", "1.510300"))
+        await entered.wait()
+        second = asyncio.create_task(waiter())
+        await waiting.wait()
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        return await second
+
+    assert _run(main())["code"] == "510300"
+    assert stubbed["quote"] == 1
