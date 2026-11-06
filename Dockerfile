@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # ETF 期权日内决策看板：Vite 构建前端 → FastAPI 托管 web/dist，单容器跑在 :6799。
 #
-# 本地构建：docker build -t etf-option-board:latest .
+# 本地构建：docker build -t vissong/etf-option-board:latest .
 # 多架构构建并推送到自己的仓库，详见 README「Docker 部署」。
 
 # ---- 前端：产物是纯静态文件，固定在构建机原生架构上跑，省掉 QEMU 模拟 ----

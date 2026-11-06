@@ -74,14 +74,18 @@ bash web/dev.sh      # 前端 :5273（/api 代理到 6799）
 
 ### Docker 部署
 
-在完整源码仓库根目录执行以下命令。默认镜像名为本地的 `etf-option-board:latest`，
-由当前源码构建；前端在镜像构建阶段生成，无需提交 `web/dist/`。
+未配置 `ETF_IMAGE` 或将其设为空时，默认使用 Docker Hub 镜像
+`vissong/etf-option-board:latest`。在 `docker-compose.yml` 所在目录执行：
 
 ```bash
-docker compose up -d --build   # 构建并后台启动，打开 http://<主机IP>:6799
+docker compose pull           # 拉取默认镜像，或 ETF_IMAGE 指定的镜像
+docker compose up -d --no-build   # 后台启动，打开 http://<主机IP>:6799
 docker compose logs -f        # 看日志
-# 更新源码后，再执行 docker compose up -d --build 重建并替换容器
+# 后续升级再次执行 docker compose pull && docker compose up -d --no-build
 ```
+
+如需从当前源码构建，在完整源码仓库根目录执行 `docker compose up -d --build`。
+前端在镜像构建阶段生成，无需提交 `web/dist/`；本地构建不会自动推送 Docker Hub。
 
 - 数据（设置、自选、板块库、分钟线累积）保存在命名卷 `etf-data`，挂载到容器内 `/app/data`。
   重建容器会复用该卷；`docker compose down -v` 会删除卷及其中的数据。

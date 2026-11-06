@@ -1,12 +1,13 @@
 # ETF 期权日内决策看板 — Docker Compose 一键部署
 #
-# 在完整源码仓库根目录执行：
-#   docker compose up -d --build   # 构建当前源码并后台启动，打开 http://<主机IP>:6799
+# 默认拉取 Docker Hub 镜像并启动，打开 http://<主机IP>:6799：
+#   docker compose pull
+#   docker compose up -d --no-build
 #   docker compose logs -f        # 看日志
-# 更新源码后再次执行 docker compose up -d --build。
+# 如需从当前源码构建，在完整源码仓库根目录执行 docker compose up -d --build。
 #
 # 可选配置写在同目录的 .env（已 gitignore），例如：
-#   ETF_IMAGE=etf-option-board:latest             # 本地镜像名，或你自己的镜像仓库地址
+#   ETF_IMAGE=vissong/etf-option-board:latest     # 默认镜像；可覆盖为其他仓库地址或本地镜像名
 #   ETF_PORT=6799                                 # 宿主机端口
 #   LLM_API_KEY=...                               # 大模型决策用的 opencode key；不填则该功能显示不可用
 #
@@ -16,7 +17,7 @@
 
 services:
   etf-option-board:
-    image: ${ETF_IMAGE:-etf-option-board:latest}
+    image: ${ETF_IMAGE:-vissong/etf-option-board:latest}
     build: .
     container_name: etf-option-board
     # /api/admin/restart 退出进程后由它拉起，相当于原来的 LaunchAgent
