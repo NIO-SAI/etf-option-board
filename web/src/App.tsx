@@ -5,7 +5,7 @@ import { BoardSubNav } from "@/components/BoardSubNav";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { usePageRoute, titleOf, type PageKey } from "@/lib/route";
 import {
-  isBoardPage, readNavOpen, rememberBoardPage, useIsWide, writeNavOpen,
+  isBoardPage, pageLabel, readNavOpen, rememberBoardPage, useIsWide, writeNavOpen,
 } from "@/lib/nav";
 import { requestRefresh } from "@/lib/refresh";
 import { ensureAlertsStarted } from "@/lib/alertBus";
@@ -125,6 +125,7 @@ export default function App() {
           national={national}
           health={health}
           clock={clock}
+          subtitle={pageLabel(page)}
           navOpen={inlineNav}
           onToggleNav={toggleNav}
           onRefresh={requestRefresh}

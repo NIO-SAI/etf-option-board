@@ -6,7 +6,7 @@ import { Activity, Bell, BellOff, PanelLeft, PanelLeftClose, RefreshCw, Settings
 import { useState } from "react";
 
 export function TopBar({
-  external, national, health, clock, onRefresh, onOpenSettings, navOpen, onToggleNav,
+  external, national, health, clock, onRefresh, onOpenSettings, navOpen, onToggleNav, subtitle,
 }: {
   external: any[];
   national: any;
@@ -14,6 +14,8 @@ export function TopBar({
   clock: string;
   onRefresh: () => void;
   onOpenSettings: () => void;
+  /** 当前页名，跟在标题后面（如「ETF 期权日内决策看板 - 四维资金」） */
+  subtitle?: string;
   /** 左侧导航当前是否常驻展开（决定按钮图标与提示） */
   navOpen?: boolean;
   onToggleNav?: () => void;
@@ -38,9 +40,17 @@ export function TopBar({
             {navOpen ? <PanelLeftClose aria-hidden /> : <PanelLeft aria-hidden />}
           </Button>
         ) : null}
-        <div className="flex items-center gap-2 pr-2">
+        <div className="flex min-w-0 items-center gap-2 pr-2">
           <Activity className="size-4 shrink-0 text-primary" aria-hidden />
-          <span className="hidden text-sm font-semibold whitespace-nowrap sm:inline">ETF 期权日内决策看板</span>
+          <span
+            className="hidden min-w-0 truncate text-sm font-semibold whitespace-nowrap sm:inline"
+            title={subtitle ? `ETF 期权日内决策看板 - ${subtitle}` : "ETF 期权日内决策看板"}
+          >
+            ETF 期权日内决策看板
+            {subtitle ? (
+              <span className="font-normal text-muted-foreground"> - {subtitle}</span>
+            ) : null}
+          </span>
         </div>
         <div className="flex-1" />
         <div className="hidden items-center gap-2 xl:flex">
