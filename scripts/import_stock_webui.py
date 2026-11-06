@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import os
+import pathlib
 import sqlite3
 import sys
 
@@ -43,14 +44,18 @@ def run_import(target_path: str, source_path: str, start: str, dry_run: bool = F
         raise FileNotFoundError(source_path)
 
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
-    conn = sqlite3.connect(target_path, timeout=30)
+    # uri=True 让连接支持 URI 解析（ATTACH 的只读 URI 依赖此开关，跨平台均生效）
+    conn = sqlite3.connect(target_path, timeout=30, uri=True)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     sys.path.insert(0, ROOT)
     from services import boardflow as bf
 
     conn.executescript(bf._SCHEMA)  # noqa: SLF001 — 复用唯一 schema 定义
-    conn.execute("ATTACH DATABASE ? AS src", (f"file:{source_path}?mode=ro",))
+    # as_uri() 产出 file:/// 形式的正斜杠 + 百分号编码路径，
+    # Windows 反斜杠路径直接拼进 file: URI 会导致 unable to open database
+    source_uri = pathlib.Path(source_path).resolve().as_uri()
+    conn.execute("ATTACH DATABASE ? AS src", (f"{source_uri}?mode=ro",))
 
     def count(sql: str) -> int:
         return conn.execute(sql).fetchone()[0]
