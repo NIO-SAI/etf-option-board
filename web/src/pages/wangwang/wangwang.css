@@ -22,7 +22,7 @@
 .ww-page .badge.live i{background:var(--blue);box-shadow:0 0 0 3px rgba(0,94,184,.13);animation:ww-pulse 2s infinite}
 .ww-page .badge.warn{border-color:rgba(255,71,19,.35);color:var(--orange)}
 .ww-page .badge.warn i{background:var(--orange)}
-.ww-page 50%{opacity:.45}
+@keyframes ww-pulse{50%{opacity:.45}}
 .ww-page .status .stamp{font-size:11px;color:var(--ink3)}
 .ww-page .verdict{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:26px 28px 22px;position:relative;overflow:hidden}
 .ww-page .verdict:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--line)}
