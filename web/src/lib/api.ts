@@ -107,6 +107,16 @@ export const api = {
   emFlowConfigRemove: async (code: string) =>
     (await fetch(`${BASE}/em-flow/config?code=${encodeURIComponent(code)}`, { method: "DELETE" })).json(),
   emFlowConfigReset: async () => (await fetch(`${BASE}/em-flow/config/reset`, { method: "POST" })).json(),
+
+  // 全A逐笔分档（资金流向页）：通达信 / Wind 两套口径
+  tapeFlowDates: (limit = 120) => get(`/tape-flow/dates?limit=${limit}`),
+  tapeFlowHealth: () => get("/tape-flow/health"),
+  tapeFlowSeries: (preset: string, date?: string, th?: string) => {
+    const qs = [`preset=${preset}`, date ? `date=${date}` : "", th ? `th=${encodeURIComponent(th)}` : ""]
+      .filter(Boolean).join("&");
+    return get(`/tape-flow/series?${qs}`);
+  },
+  tapeFlowScan: async () => (await fetch(`${BASE}/tape-flow/scan`, { method: "POST" })).json(),
   boardWatchAdd: async (code: string, name: string) =>
     (await fetch(`${BASE}/board/watch?code=${encodeURIComponent(code)}&name=${encodeURIComponent(name)}`,
       { method: "POST" })).json(),

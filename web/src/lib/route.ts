@@ -9,10 +9,10 @@
 
 import { useEffect, useState } from "react";
 
-export type PageKey = "options" | "board-flow" | "board-multi" | "board-etf" | "board-em";
+export type PageKey = "options" | "board-flow" | "board-multi" | "board-etf" | "board-em" | "flow-tape";
 
-/** 一级导航分组：期权看板 ｜ 资金分时（内含四个子页） */
-export type SectionKey = "options" | "board";
+/** 一级导航分组：期权看板 ｜ 资金分时（内含四个子页）｜ 资金流向（全A逐笔） */
+export type SectionKey = "options" | "board" | "flow";
 
 export type PageDef = {
   key: PageKey;
@@ -29,6 +29,7 @@ export const PAGES: PageDef[] = [
   { key: "board-multi", hash: "#/board/multi", label: "主力资金多日", title: "主力资金多日", section: "board" },
   { key: "board-etf", hash: "#/board/etf", label: "ETF资金流", title: "ETF资金流", section: "board" },
   { key: "board-em", hash: "#/board/em", label: "四维资金", title: "四维资金", section: "board" },
+  { key: "flow-tape", hash: "#/flow", label: "资金流向", title: "资金流向：全A逐笔分档（通达信 / Wind 两套口径）", section: "flow" },
 ];
 
 const BY_HASH = new Map(PAGES.map((p) => [p.hash, p.key]));

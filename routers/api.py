@@ -19,7 +19,8 @@ from services import (alerts, board_collector as bcol, boardflow as bf, cls_hot,
                       pinyin as pinyin_svc,
                       deploy as deploy_svc, em, index_levels, kronos, llm,
                       market_service as ms, monitor, option_playbook as playbook,
-                      option_service as osvc, reversal, strategy, user_settings as usv,
+                      option_service as osvc, reversal, strategy, tape_flow as tf,
+                      user_settings as usv,
                       vol)
 from services.universe import ETF_BY_CODE, ETFS, EXTERNAL, INDICES, NATIONAL_TEAM_ETFS
 
@@ -1290,6 +1291,105 @@ async def em_flow_series(target_type: str = Query("index", description="index / 
         out["error"] = ("该标的还没有 4 维分时点：自选/热门板块每 2 分钟自动纳入采集，稍后刷新即可；"
                         "概念/行业默认只采 |主力净流入| 前 40")
     return out
+
+
+# --------------------------------------------------------------------------
+# 全A逐笔分档（资金流向页）：通达信 / Wind 两套口径
+# --------------------------------------------------------------------------
+@router.get("/tape-flow/dates")
+async def tape_flow_dates(limit: int = Query(60, ge=1, le=365)):
+    """有逐笔直方图的交易日（新 → 旧）。"""
+    try:
+        dates = await asyncio.to_thread(bf.available_dates, limit, "tape")
+    except Exception:  # noqa: BLE001 — 库未初始化时返回空而不是 500
+        dates = []
+    return {"dates": dates}
+
+
+@router.get("/tape-flow/health")
+async def tape_flow_health():
+    """采集器状态 + 最新一天的数据概况（页面用来显示「覆盖 N/M 只」）。"""
+    meta: dict = {}
+    try:
+        dates = await asyncio.to_thread(bf.available_dates, 1, "tape")
+        if dates:
+            meta = await asyncio.to_thread(bf.read_tape_meta, dates[0])
+            meta["date"] = dates[0]
+    except Exception:  # noqa: BLE001
+        pass
+    return {"state": tf.state(), "latest": meta}
+
+
+@router.get("/tape-flow/series")
+async def tape_flow_series(
+        date: str | None = Query(None),
+        preset: str = Query("tdx", description="tdx（通达信）/ wind（Wind）"),
+        th: str | None = Query(None, description="逗号分隔的门槛（万元，降序），覆盖 preset")):
+    """全A逐笔分档的当日累计曲线 + 各档买/卖/净额。
+
+    门槛可临时覆盖（用库里存的直方图重算，毫秒级），用于现场拟合参考软件的口径。
+    """
+    key = preset if preset in tf.PRESETS else "tdx"
+    spec = tf.PRESETS[key]
+    if th:
+        raw: list[float] = []
+        for part in th.split(","):
+            try:
+                raw.append(float(str(part).strip()))
+            except (TypeError, ValueError):
+                continue
+        thresholds = tf.norm_thresholds(raw)
+        buckets = []
+        for i, thr in enumerate(thresholds):
+            base = spec["buckets"][i] if i < len(spec["buckets"]) else None
+            buckets.append({"key": (base or {}).get("key") or f"b{i}",
+                            "name": (base or {}).get("name") or f"档{i + 1}", "thr": thr})
+    else:
+        thresholds = [b["thr"] for b in spec["buckets"]]
+        buckets = [dict(b) for b in spec["buckets"]]
+
+    if not date:
+        try:
+            dates = await asyncio.to_thread(bf.available_dates, 1, "tape")
+        except Exception:  # noqa: BLE001
+            dates = []
+        date = dates[0] if dates else dt.date.today().isoformat()
+
+    try:
+        rows = await asyncio.to_thread(bf.read_tape_bins, date)
+        meta = await asyncio.to_thread(bf.read_tape_meta, date)
+    except Exception as exc:  # noqa: BLE001
+        return {"date": date, "preset": key, "axis": [], "series": [], "buckets": buckets,
+                "error": f"逐笔库读取失败: {exc}"}
+
+    axis = tf.session_axis()
+    out = {"date": date, "preset": key, "preset_label": spec["label"],
+           "thresholds": thresholds, "buckets": buckets, "axis": axis, "series": [], "meta": meta}
+    if not rows:
+        out["error"] = ("这一天还没有逐笔数据：盘中每 10 分钟重算一次、收盘后 15:05 定稿"
+                        "（逐笔只保留最新一个交易日，历史靠本地库）")
+        return out
+
+    cum = tf.cumulative(rows, thresholds, axis)
+    sums = tf.summarize(rows, thresholds)
+    for k, b in enumerate(buckets):
+        vals = [row[k] for row in cum] if cum and k < len(cum[0]) else []
+        item = dict(b)
+        item.update({"values": vals, "last": vals[-1] if vals else None})
+        if k < len(sums):
+            item.update({x: sums[k][x] for x in ("buy", "sell", "net", "share")})
+        out["series"].append({"code": item["key"], "name": item["name"], "values": vals,
+                             "last": item["last"]})
+        item.pop("values", None)
+        out["buckets"][k] = item
+    return out
+
+
+@router.post("/tape-flow/scan")
+async def tape_flow_scan():
+    """手动重算一次全A逐笔（约 1~2 分钟，后台跑，立即返回）。"""
+    asyncio.create_task(tf.run_scan(force=True))
+    return {"ok": True, "msg": "已在后台重算全A逐笔，约 1~2 分钟后刷新页面"}
 
 
 @router.get("/board/index-rank")

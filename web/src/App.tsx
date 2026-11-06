@@ -16,6 +16,7 @@ import { EtfFlowPage } from "@/pages/EtfFlow";
 import { EmFlowPage } from "@/pages/EmFlow";
 import { BoardMultiPage } from "@/pages/BoardMulti";
 import { BoardFlowPage } from "@/pages/BoardFlow";
+import { TapeFlowPage } from "@/pages/TapeFlow";
 
 // 当前加载的前端 bundle 哈希（用于判断浏览器是否加载了最新构建）
 const BUNDLE_ID = (() => {
@@ -31,6 +32,7 @@ const VIEWS: Record<PageKey, () => JSX.Element> = {
   "board-multi": BoardMultiPage,
   "board-etf": EtfFlowPage,
   "board-em": EmFlowPage,
+  "flow-tape": TapeFlowPage,
 };
 
 /**

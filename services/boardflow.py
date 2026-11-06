@@ -114,6 +114,24 @@ CREATE TABLE IF NOT EXISTS em_flow_points (
     PRIMARY KEY (date, code, time)
 );
 CREATE INDEX IF NOT EXISTS idx_em_points_date ON em_flow_points(date, code, time);
+-- 全A逐笔分档直方图（资金流向页）：每分钟 × 金额档 × 买卖两列
+-- 存"直方图"而不是最终四档结果，是为了以后调门槛只重算、不重跑逐笔（逐笔不可回补）
+CREATE TABLE IF NOT EXISTS tape_flow_bins (
+    date TEXT NOT NULL,
+    time TEXT NOT NULL,
+    bin INTEGER NOT NULL,
+    buy REAL NOT NULL DEFAULT 0,
+    sell REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (date, time, bin)
+);
+CREATE INDEX IF NOT EXISTS idx_tape_bins_date ON tape_flow_bins(date, time);
+CREATE TABLE IF NOT EXISTS tape_flow_meta (
+    date TEXT PRIMARY KEY,
+    updated_at TEXT,
+    stocks_total INTEGER NOT NULL DEFAULT 0,
+    stocks_ok INTEGER NOT NULL DEFAULT 0,
+    amount REAL NOT NULL DEFAULT 0
+);
 """
 
 
@@ -402,7 +420,8 @@ def read_points(date: str, codes: list[str]) -> dict[str, list[tuple[str, float]
     return out
 
 
-_DATE_TABLES = {"board": "rank_snapshots", "etf": "etf_rank_snapshots", "em": "em_flow_points"}
+_DATE_TABLES = {"board": "rank_snapshots", "etf": "etf_rank_snapshots", "em": "em_flow_points",
+                "tape": "tape_flow_bins"}
 
 
 def available_dates(limit: int = 60, table: str = "board") -> list[str]:
@@ -441,18 +460,25 @@ def prune(today: dt.date | None = None) -> dict:
         etf_p = [r[0] for r in conn.execute("SELECT DISTINCT date FROM etf_flow_points").fetchall()]
         etf_r = [r[0] for r in conn.execute("SELECT DISTINCT date FROM etf_rank_snapshots").fetchall()]
         em_p = [r[0] for r in conn.execute("SELECT DISTINCT date FROM em_flow_points").fetchall()]
+        tape_p = [r[0] for r in conn.execute("SELECT DISTINCT date FROM tape_flow_bins").fetchall()]
     plan = prune_plan(today, p_dates, r_dates)
     # ETF / 4 维 与板块同口径：分时 30 天、排行 120 天
     plan["etf_flow_points"] = prune_plan(today, etf_p, etf_p)["flow_points"]
     plan["em_flow_points"] = prune_plan(today, em_p, em_p)["flow_points"]
     plan["etf_rank_snapshots"] = prune_plan(today, etf_r, etf_r)["rank_snapshots"]
+    # 逐笔直方图：一天只有 1 万行，留 120 天（逐笔本身补不回来，宁可多留）
+    plan["tape_flow_bins"] = prune_plan(today, tape_p, tape_p)["rank_snapshots"]
     removed = {"flow_points": 0, "rank_snapshots": 0, "etf_flow_points": 0,
-               "etf_rank_snapshots": 0, "em_flow_points": 0}
+               "etf_rank_snapshots": 0, "em_flow_points": 0, "tape_flow_bins": 0,
+               "tape_flow_meta": 0}
     with _db() as conn:
         for table, dates in plan.items():
             for d in dates:
                 cur = conn.execute(f"DELETE FROM {table} WHERE date=?", (d,))
                 removed[table] += cur.rowcount or 0
+                if table == "tape_flow_bins":
+                    removed["tape_flow_meta"] += conn.execute(
+                        "DELETE FROM tape_flow_meta WHERE date=?", (d,)).rowcount or 0
     if any(removed.values()):
         log.info("板块库裁剪完成: %s", removed)
     return removed
@@ -905,6 +931,48 @@ def latest_em_flows(date: str) -> list[dict]:
                  "medium": float(md), "retail": float(r), "pct": float(pc or 0),
                  "speed": sp.get(str(c), 0.0)}
                 for c, n, k, i, l, md, r, pc in cur.fetchall()]
+
+
+def save_tape_day(date: str, rows: Iterable[tuple[str, int, float, float]],
+                  meta: dict) -> int:
+    """整日覆盖写全A逐笔直方图（每次重算都是全天累计，所以先删后插）。
+
+    rows: (HH:MM, 档位下标, 主动买金额, 主动卖金额)；meta: updated_at/stocks_total/stocks_ok/amount。
+    """
+    rows = list(rows)
+    with _db() as conn:
+        conn.execute("DELETE FROM tape_flow_bins WHERE date=?", (date,))
+        conn.executemany(
+            "INSERT INTO tape_flow_bins(date,time,bin,buy,sell) VALUES(?,?,?,?,?)",
+            [(date, t, int(b), float(x), float(y)) for t, b, x, y in rows])
+        conn.execute(
+            "INSERT INTO tape_flow_meta(date,updated_at,stocks_total,stocks_ok,amount) "
+            "VALUES(?,?,?,?,?) ON CONFLICT(date) DO UPDATE SET "
+            "updated_at=excluded.updated_at, stocks_total=excluded.stocks_total, "
+            "stocks_ok=excluded.stocks_ok, amount=excluded.amount",
+            (date, str(meta.get("updated_at") or ""), int(meta.get("stocks_total") or 0),
+             int(meta.get("stocks_ok") or 0), float(meta.get("amount") or 0)))
+    return len(rows)
+
+
+def read_tape_bins(date: str) -> list[tuple[str, int, float, float]]:
+    """某日的逐笔直方图：[(HH:MM, 档位下标, 主动买, 主动卖)]，按时间+档位排序。"""
+    with _db() as conn:
+        cur = conn.execute(
+            "SELECT time, bin, buy, sell FROM tape_flow_bins WHERE date=? ORDER BY time, bin",
+            (date,))
+        return [(str(t), int(b), float(x), float(y)) for t, b, x, y in cur.fetchall()]
+
+
+def read_tape_meta(date: str) -> dict:
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT updated_at, stocks_total, stocks_ok, amount FROM tape_flow_meta WHERE date=?",
+            (date,)).fetchone()
+    if not row:
+        return {}
+    return {"updated_at": row[0], "stocks_total": int(row[1] or 0),
+            "stocks_ok": int(row[2] or 0), "amount": float(row[3] or 0)}
 
 
 def read_em_meta(date: str, code: str) -> dict:
