@@ -5,6 +5,48 @@
 """
 
 from services import llm
+import json
+
+
+class TestBrowserContext:
+    def test_reuses_snapshot_and_declares_action_and_cap(self):
+        bundle = {
+            "underlying": {"code": "510300"},
+            "strategy": {"strategy": "vertical", "vertical_kind": "bear_put"},
+            "position": {"max_contracts": 2},
+            "bias": {"direction": "put"}, "ts": "2026-11-06T13:30:00",
+        }
+        out = llm.browser_context(bundle)
+        assert out["system"] == llm._SYSTEM
+        assert json.loads(out["user"].split("\n", 1)[1]) == llm._compact(bundle)
+        assert out["guardrails"]["action"] == "bear_put_spread"
+        assert out["guardrails"]["max_contracts"] == 2
+        assert out["guardrails"]["action_labels"]["wait"] == "观望"
+        assert out["bundle_bias"] == bundle["bias"]
+        assert out["ts"] == bundle["ts"]
+
+    def test_context_does_not_read_server_credentials(self, monkeypatch):
+        def forbidden():
+            raise AssertionError("浏览器上下文不能读取服务端密钥")
+        monkeypatch.setattr(llm, "_load_key", forbidden)
+        out = llm.browser_context({"strategy": {"strategy": "wait"}})
+        assert out["guardrails"]["action"] == "wait"
+        assert set(out) == {"system", "user", "guardrails", "bundle_bias", "signals", "ts"}
+
+    def test_missing_rules_and_invalid_caps_are_unconstrained(self):
+        assert llm.browser_context({})["guardrails"]["action"] is None
+        for cap in (None, True, -1, "2", 1.5):
+            assert llm.browser_context({"position": {"max_contracts": cap}})["guardrails"]["max_contracts"] is None
+        assert llm.browser_context({"position": {"max_contracts": 0}})["guardrails"]["max_contracts"] == 0
+
+    def test_index_advice_keeps_wait_and_direction_constraints(self):
+        for advice, action in (({}, "wait"), ({"action": "观望", "side": "call"}, "wait"),
+                               ({"action": "买入", "side": "put"}, "buy_put"),
+                               ({"action": "买入", "side": "call"}, "buy_call")):
+            bundle = {"kind": "index", "advice": advice}
+            out = llm.browser_context(bundle)
+            assert out["guardrails"]["action"] == action
+            assert "strategy" not in bundle
 
 
 class TestCompactCarriesRuleLayer:

@@ -34,8 +34,11 @@ export const api = {
     get(`/strategy/${code}?kronos=${kronos ? 1 : 0}&klt=${klt}`),
   predict: (secid: string, klt = 5, lookback = 120, pred_len = 20) =>
     get(`/predict?secid=${secid}&klt=${klt}&lookback=${lookback}&pred_len=${pred_len}`),
-  llm: async (code: string, klt = 1) => {
-    const r = await fetch(`${BASE}/llm/${code}?klt=${klt}`, { method: "POST" });
+  llmContext: async (code: string, signal?: AbortSignal, klt = 1) => {
+    const r = await fetch(`${BASE}/llm/${encodeURIComponent(code)}/context?klt=${klt}`, {
+      signal, cache: "no-store", headers: { Accept: "application/json" },
+    });
+    if (!r.ok) throw new Error(`行情上下文请求失败（HTTP ${r.status}）`);
     return r.json();
   },
   expiry: () => get("/expiry"),

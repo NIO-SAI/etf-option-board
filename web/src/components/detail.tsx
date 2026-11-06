@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/reui/badge";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { OverlayChart, PredictChart } from "@/components/charts";
@@ -8,6 +8,7 @@ import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { AutoTip, GLOSSARY, Tip } from "@/components/ui/term";
 import { clsUpDown, flowMoney, money, nf, pct } from "@/lib/format";
 import { api } from "@/lib/api";
+import { browserDecision, openLlmSettings, protocolLabel, useLlmConfig } from "@/lib/browserLlm";
 import { usePolling } from "@/lib/usePolling";
 import { BrainCircuit, Loader2 } from "lucide-react";
 
@@ -134,16 +135,30 @@ export function KronosPredict({ secid, klt = 5 }: { secid: string; klt?: number 
 
 /* ---------------- LLM 决策 ---------------- */
 export function LlmPanel({ code }: { code: string }) {
+  const config = useLlmConfig();
   const [loading, setLoading] = useState(false);
   const [res, setRes] = useState<any>(null);
+  const request = useRef<AbortController | null>(null);
+  useEffect(() => {
+    request.current?.abort();
+    request.current = null;
+    setRes(null); setLoading(false);
+    return () => { request.current?.abort(); };
+  }, [code, config]);
   const run = async () => {
+    if (!config) { openLlmSettings(); return; }
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    setRes(null);
     setLoading(true);
     try {
-      setRes(await api.llm(code, 1));
+      const result = await browserDecision(code, config, controller.signal);
+      if (!controller.signal.aborted) setRes(result);
     } catch (e: any) {
-      setRes({ error: String(e) });
+      if (!controller.signal.aborted) setRes({ error: e.message || "模型请求失败" });
     } finally {
-      setLoading(false);
+      if (request.current === controller) { request.current = null; setLoading(false); }
     }
   };
   const d = res?.decision;
@@ -161,18 +176,25 @@ export function LlmPanel({ code }: { code: string }) {
           <FrameTitle className="flex items-center gap-1.5 text-xs">
             <BrainCircuit className="size-3.5 text-primary" /> 大模型决策
           </FrameTitle>
-          <Button size="sm" onClick={run} disabled={loading}>
+          <div className="flex items-center gap-1">
+          <Button size="sm" variant="ghost" onClick={openLlmSettings}>模型设置</Button>
+          <Button size="sm" onClick={run} disabled={loading || !config}>
             {loading ? <Loader2 className="animate-spin" /> : null}
             {loading ? "分析中…" : "生成决策"}
           </Button>
+          {loading && <Button size="sm" variant="ghost" onClick={() => {
+            request.current?.abort(); request.current = null; setLoading(false);
+          }}>取消</Button>}
+          </div>
         </FrameHeader>
         <div className="px-3 pb-3">
+          {config && <div className="mb-2 break-all text-[10px] text-muted-foreground">浏览器直连 · {protocolLabel(config.protocol)} · {config.model}</div>}
           {loading && !d && (
             <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />大模型分析中，通常需要 10–60 秒…
             </div>
           )}
-          {!res && !loading && <div className="py-3 text-center text-xs text-muted-foreground">点击「生成决策」调用大模型综合分析并给出买卖点</div>}
+          {!res && !loading && <div className="py-3 text-center text-xs text-muted-foreground">{config ? "点击「生成决策」调用已配置的模型综合分析并给出买卖点" : "请先在「模型设置」中配置服务地址、模型 ID 与兼容协议"}</div>}
           {err && (
             <div className="rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5">
               <div className="text-xs font-medium text-destructive">决策生成失败</div>

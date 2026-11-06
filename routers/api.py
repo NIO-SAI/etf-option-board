@@ -12,7 +12,7 @@ import time
 import logging
 
 from fastapi import APIRouter, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from services import (alerts, board_collector as bcol, boardflow as bf, cls_hot,
                       decision,
@@ -453,6 +453,18 @@ async def predict(secid: str, klt: int = 5, lookback: int = 120, pred_len: int =
     if "predictions" in pred:
         pred["summary"] = kronos.summarize(pred, bars[-1]["close"])
     return pred
+
+
+@router.get("/llm/{code}/context")
+async def llm_context(code: str, klt: int = 1):
+    """页面只取行情提示词；自定义模型的地址、密钥和响应均不经过后端。"""
+    try:
+        bundle = await strategy_view(code, kronos=1, klt=klt)
+        out = bundle if bundle.get("error") else llm.browser_context(bundle)
+    except Exception:  # noqa: BLE001
+        log.exception("生成大模型决策上下文失败")
+        out = {"error": "行情上下文暂不可用，请稍后重试"}
+    return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/llm/{code}")
