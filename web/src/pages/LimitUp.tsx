@@ -92,6 +92,13 @@ export function LimitUpPage() {
     () => api.limitupPrism(theme || undefined, curDate || undefined, 25),
     120_000, [theme, curDate]);
 
+  /** 棱镜标题里当前日期的主题涨停家数（取所选日期那一格，不是序列末尾——切历史日期时两者不同） */
+  const prismAtDate = (() => {
+    const ds: string[] = prism?.dates ?? [];
+    const i = ds.indexOf(curDate);
+    return i >= 0 ? (prism?.theme?.[i] ?? 0) : (prism?.theme?.[ds.length - 1] ?? 0);
+  })();
+
   const poolKind = poolTab === "theme" ? "zt" : poolTab;
   const { data: pool } = usePolling(
     () => api.limitupPool(curDate || undefined,
@@ -307,7 +314,7 @@ export function LimitUpPage() {
               <span className="text-[10px] text-muted-foreground">
                 {curDate} · 沪深涨停 <b className="text-foreground">{stats.total_zt ?? 0}</b> 家 ·
                 {themeName ? <> 主题 · {themeName} <b className="text-rose-600">
-                  {prism?.theme?.[prism.theme.length - 1] ?? 0}</b> 家</> : " 点左上表格选主题"}
+                  {prismAtDate}</b> 家</> : " 点左上表格选主题"}
               </span>
             </FrameHeader>
             <FramePanel className="p-1">
