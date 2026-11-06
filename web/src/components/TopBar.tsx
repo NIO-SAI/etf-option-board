@@ -3,10 +3,10 @@ import { Button } from "@/components/ui/button";
 import { clsUpDown, pct } from "@/lib/format";
 import { sound } from "@/lib/sound";
 import { Activity, Bell, BellOff, PanelLeft, PanelLeftClose, RefreshCw, Settings, ShieldCheck } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 
 export function TopBar({
-  external, national, health, clock, onRefresh, onOpenSettings, nav, navOpen, onToggleNav,
+  external, national, health, clock, onRefresh, onOpenSettings, navOpen, onToggleNav,
 }: {
   external: any[];
   national: any;
@@ -14,8 +14,6 @@ export function TopBar({
   clock: string;
   onRefresh: () => void;
   onOpenSettings: () => void;
-  /** 顶栏快捷页面标签（由外壳传入，页面本身不关心路由） */
-  nav?: ReactNode;
   /** 左侧导航当前是否常驻展开（决定按钮图标与提示） */
   navOpen?: boolean;
   onToggleNav?: () => void;
@@ -44,7 +42,6 @@ export function TopBar({
           <Activity className="size-4 shrink-0 text-primary" aria-hidden />
           <span className="hidden text-sm font-semibold whitespace-nowrap sm:inline">ETF 期权日内决策看板</span>
         </div>
-        {nav}
         <div className="flex-1" />
         <div className="hidden items-center gap-2 xl:flex">
           {(external ?? []).slice(0, 5).map((e) => (

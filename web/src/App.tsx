@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { TopBar } from "@/components/TopBar";
-import { PageTabs } from "@/components/PageTabs";
 import { SideNav } from "@/components/SideNav";
 import { BoardSubNav } from "@/components/BoardSubNav";
 import { SettingsDialog } from "@/components/SettingsDialog";
@@ -126,7 +125,6 @@ export default function App() {
           national={national}
           health={health}
           clock={clock}
-          nav={<PageTabs page={page} className="max-w-[52vw]" />}
           navOpen={inlineNav}
           onToggleNav={toggleNav}
           onRefresh={requestRefresh}
