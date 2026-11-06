@@ -63,34 +63,9 @@ async def _fut_chain(code: str, month: int | None = None) -> dict:
 
 
 async def _fut_bias(ch: dict) -> dict:
-    """股指方向：用现货分时/资金流算 bias（与 index_option.state 同一套纯函数）。
-
-    不直接调 `index_option.state`——它内部会再拉一次整条链（730 条合约），
-    期权链接口已经在拉，重复一次等于把响应时间翻倍。
-    """
-    from services import index_option as idxo
+    """读取与列表/详情相同的方向快照，不重复拉链、不按涨跌幅降级择边。"""
     fut = ch.get("fut") or {}
-    secid = fut.get("underlying") or ""
-    u = ch.get("underlying") or {}
-    try:
-        tr, flow = await asyncio.gather(
-            em.trends(secid), em.stock_get(secid, "f137", ttl=20.0),
-            return_exceptions=True,
-        )
-        b = idxo.bias(
-            tr if isinstance(tr, list) else [],
-            [{"price": u.get("price") or 0, "high": u.get("high"), "low": u.get("low")}],
-            flow if isinstance(flow, dict) else None,
-            {"basis_pct": idxo._basis_pct(ch, u.get("price") or 0)},
-        )
-        if b.get("direction"):
-            return {"direction": b["direction"], "score": b.get("score", 0),
-                    "confidence": b.get("confidence", 0)}
-    except Exception:  # noqa: BLE001 — 方向不可得不阻断期权链
-        pass
-    pct = u.get("pct") or 0
-    return {"direction": "call" if pct > 0.2 else "put" if pct < -0.2 else "neutral",
-            "score": round(pct * 20, 1), "confidence": round(min(abs(pct) / 3, 1), 2)}
+    return await strategy.direction_for(fut.get("code") or "")
 
 
 @router.get("/health")
@@ -300,19 +275,7 @@ async def option_chain(code: str, month: int | None = None):
         "call": osvc.rank_candidates(ch, "call", 6),
         "put": osvc.rank_candidates(ch, "put", 6),
     }
-    # 结合标的实时趋势（strategy.directions 有 60s 缓存），多/空各选一只首选合约
-    trend = None
-    try:
-        d = (await strategy.directions()).get(code)
-        if d:
-            trend = {"direction": d.get("direction"), "score": d.get("score"),
-                     "confidence": d.get("confidence")}
-    except Exception:  # noqa: BLE001 — 降级到标的涨跌幅，不阻断期权链
-        pass
-    if trend is None:
-        pct = (ch.get("underlying") or {}).get("pct") or 0
-        trend = {"direction": "call" if pct > 0.2 else "put" if pct < -0.2 else "neutral",
-                 "score": round(pct * 20, 1), "confidence": round(min(abs(pct) / 3, 1), 2)}
+    trend = await strategy.direction_for(code)
     ch["best"] = osvc.best_buys(ch, trend)
     return ch
 

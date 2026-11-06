@@ -70,7 +70,6 @@ class TestBias:
             _trends((100, 100.2, 100.4, 100.6, 100.8, 101.0)),
             [{"price": 101, "high": 101, "low": 100}],
             {"f137": 3000000000.0},
-            {"basis_pct": 0.5},
         )
         assert b["score"] > 15 and b["direction"] == "call"
         assert 0 < b["confidence"] <= 1
@@ -80,20 +79,39 @@ class TestBias:
             _trends((101, 100.8, 100.6, 100.4, 100.2, 100)),
             [{"price": 100, "high": 101, "low": 100}],
             {"f137": -3000000000.0},
-            {"basis_pct": -0.5},
         )
         assert b["score"] < -15 and b["direction"] == "put"
 
     def test_no_data_is_neutral(self):
-        b = idx.bias([], [{"price": 100, "high": 100, "low": 100}], None, None)
+        b = idx.bias([], [{"price": 100, "high": 100, "low": 100}], None)
         assert b["score"] == 0 and b["direction"] == "neutral"
 
-    def test_basis_discount_leans_bearish(self):
-        base = idx.bias(_trends([]), [{"price": 100, "high": 100, "low": 100}], None, None)
-        disc = idx.bias(_trends([]), [{"price": 100, "high": 100, "low": 100}], None,
-                        {"basis_pct": -1.0})
-        assert disc["score"] < base["score"] == 0
-        assert disc["score"] == -12
+    def test_afternoon_weakness_is_not_opening_rebound(self):
+        # 收盘仍高于低开点，但近 15 分钟已转弱：旧算法动量会给 +25。
+        tr = [{"time": "2026-11-06 09:30", "price": 6413.94},
+              {"time": "2026-11-06 13:00", "price": 6542.30},
+              {"time": "2026-11-06 14:45", "price": 6511.70},
+              {"time": "2026-11-06 15:00", "price": 6505.35}]
+        b = idx.bias(tr, [{"price": 6505.35, "high": 6597.06, "low": 6413.94}],
+                     {"f137": -12254082304.0})
+        assert b["direction"] == "neutral"
+        assert b["score"] == -12.5
+        assert b["detail"]["现货15分钟动量"] < 0
+
+    @pytest.mark.parametrize("sign", [1, -1])
+    def test_rounding_must_not_trigger_direction(self, sign):
+        # 仅区间位置产生 ±14.975：显示 ±15.0，仍未达到方向阈值。
+        b = idx.bias([], [{"price": 100 + sign * 14.975 / 15, "high": 101, "low": 99}], None)
+        assert b["score"] == sign * 15
+        assert b["direction"] == "neutral"
+
+    def test_recent_rebound_is_not_morning_selloff(self):
+        tr = [{"time": "2026-11-06 09:30", "price": 103},
+              {"time": "2026-11-06 14:45", "price": 100},
+              {"time": "2026-11-06 15:00", "price": 101}]
+        b = idx.bias(tr, [{"price": 101, "high": 103, "low": 99}], {"f137": 3e8})
+        assert b["direction"] == "call"
+        assert b["detail"]["现货15分钟动量"] == 25
 
 
 class TestRealizedVol:
