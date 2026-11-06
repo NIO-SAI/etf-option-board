@@ -19,6 +19,8 @@ export type EndLabelItem = {
   color: string;
   /** 数据坐标 [x 轴索引, y 轴数值] */
   coord: [number, number];
+  /** 该标签对应的 Y 轴（叠加价格线各占一根轴，默认 0 = 资金轴） */
+  yAxisIndex?: number;
   /** 空间不足时按 |weight| 优先占位 */
   weight: number;
   /** 悬停/高亮：一定显示 */
@@ -96,7 +98,8 @@ export function FlowEndLabels({
     for (const it of items) {
       let p: number[] | null = null;
       try {
-        p = chart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 }, it.coord);
+        p = chart.convertToPixel(
+          { xAxisIndex: 0, yAxisIndex: it.yAxisIndex ?? 0 }, it.coord);
       } catch {
         p = null;
       }

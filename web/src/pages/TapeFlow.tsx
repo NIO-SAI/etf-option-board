@@ -248,6 +248,7 @@ export function TapeFlowPage() {
               axis={data?.axis ?? []}
               series={series}
               extra={extra}
+              lineWidth={2}
               height="100%"
               endLabels
             />

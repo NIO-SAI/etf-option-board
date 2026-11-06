@@ -18,8 +18,9 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from config import settings
-from routers import api, arisk, wangwang
-from services import board_collector, em, kronos, monitor, tape_flow, wangwang as ww_svc
+from routers import api, arisk, limitup, wangwang
+from services import (board_collector, em, kronos, limitup as lu_svc, monitor, tape_flow,
+                      wangwang as ww_svc)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -45,12 +46,15 @@ async def lifespan(app: FastAPI):
     task_t = asyncio.create_task(tape_flow.run_forever())
     # 汪汪队 ETF 跟踪器：15:02 之后把当日份额写死一次（份额历史无公开源，只能每日累积）
     task_w = asyncio.create_task(ww_svc.run_forever())
+    # 涨停棱镜：盘中每 2 分钟刷当日快照，15:05 定稿；启动时回补最近 20 个交易日
+    task_l = asyncio.create_task(lu_svc.run_forever())
     yield
     log.info("关闭：停止监控与推理子进程")
-    for t in (task_k, task_m, task_b, task_t, task_w):
+    for t in (task_k, task_m, task_b, task_t, task_w, task_l):
         t.cancel()
     with contextlib.suppress(asyncio.CancelledError):
-        await asyncio.gather(task_k, task_m, task_b, task_t, task_w, return_exceptions=True)
+        await asyncio.gather(task_k, task_m, task_b, task_t, task_w, task_l,
+                             return_exceptions=True)
     await kronos.shutdown()
     await em.close()
     await ww_svc.close()

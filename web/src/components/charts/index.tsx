@@ -710,11 +710,13 @@ const EXTRA_COLORS = ["#0ea5e9", "#64748b", "#e11d48", "#ca8a04"];
 
 export function MoneyLinesChart({
   id, axis, series, height = 320, maxLines = 8, mode = "line", vLines, endLabels = false,
-  extra = [],
+  extra = [], lineWidth = 1.4,
 }: {
   id: string;
   axis: string[];
   series: { code: string; name: string; values: (number | null)[]; watch?: boolean }[];
+  /** 资金主线的基础线宽（px）：悬停/加粗时在此基础上加 */
+  lineWidth?: number;
   /** 叠加线（价格等）：每条各自一根右侧 Y 轴，互不压缩，充分利用图高 */
   extra?: { code: string; name: string; values: (number | null)[]; color?: string }[];
   height?: number | string;
@@ -816,8 +818,8 @@ export function MoneyLinesChart({
         connectNulls: false,
         z: focus ? 5 : 2,
         ...(mode === "stack"
-          ? { stack: "total", areaStyle: { opacity: dim ? 0.07 : 0.35 }, lineStyle: { width: focus ? 2.6 : 1, opacity: dim ? 0.18 : 1, color } }
-          : { lineStyle: { width: focus ? 3.2 : s.watch ? 2.4 : 1.4, opacity: dim ? 0.18 : 1, color } }),
+          ? { stack: "total", areaStyle: { opacity: dim ? 0.07 : 0.35 }, lineStyle: { width: focus ? lineWidth + 1.2 : Math.max(1, lineWidth - 0.4), opacity: dim ? 0.18 : 1, color } }
+          : { lineStyle: { width: focus ? lineWidth + 1.8 : s.watch ? lineWidth + 1 : lineWidth, opacity: dim ? 0.18 : 1, color } }),
         data: s.values,
       };
     }).concat(extras.map((s, i) => ({
@@ -830,13 +832,29 @@ export function MoneyLinesChart({
       connectNulls: true,
       z: 1,
       itemStyle: { color: extraColor(s, i) },
-      lineStyle: { width: 1.1, color: extraColor(s, i), opacity: 0.9 },
+      lineStyle: { width: Math.max(1, lineWidth * 0.85), color: extraColor(s, i), opacity: 0.9 },
     }))),
-  }), [axis, shown, mode, vLines, endLabels, hoverCode, extras, gutterRight, gutterLeft]);
+  }), [axis, shown, mode, vLines, endLabels, hoverCode, extras, gutterRight, gutterLeft, lineWidth]);
 
   const labels = useMemo<EndLabelItem[]>(() => {
     if (!endLabels) return [];
     const out: EndLabelItem[] = [];
+    extras.forEach((s, i) => {
+      let idx = -1;
+      for (let k = s.values.length - 1; k >= 0; k--) {
+        if (s.values[k] != null) { idx = k; break; }
+      }
+      if (idx < 0) return;
+      const v = Number(s.values[idx]);
+      out.push({
+        id: `extra-${s.code}`,
+        text: `${s.name} ${v.toFixed(2)}`,
+        color: s.color ?? EXTRA_COLORS[i % EXTRA_COLORS.length],
+        coord: [idx, v],
+        yAxisIndex: i + 1,
+        weight: 1e6 - i,          // 价格线的值很小，靠 weight 保证不被资金标签挤掉
+      });
+    });
     shown.forEach((s, i) => {
       let idx = -1;
       for (let k = s.values.length - 1; k >= 0; k--) {
@@ -854,7 +872,7 @@ export function MoneyLinesChart({
       });
     });
     return out;
-  }, [shown, endLabels, hoverCode]);
+  }, [shown, extras, endLabels, hoverCode]);
 
   // 参考线：半小时竖虚线（单日）/ 日分隔线（多日）+ y=0 横线
   const withGuides = (opt: any) => {
@@ -885,7 +903,7 @@ export function MoneyLinesChart({
   }, [chart]);
 
   if (!axis.length) return null;
-  const labelVersion = `${axis.length}:${shown.map((x) => x.code).join(",")}`;
+  const labelVersion = `${axis.length}:${shown.map((x) => x.code).join(",")}|${extras.map((x) => x.code).join(",")}`;
   return (
     <div className="relative" style={{ height }}>
       <ReactECharts key={id} option={withGuides(option)} notMerge style={{ height: "100%" }}

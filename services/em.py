@@ -224,14 +224,26 @@ def _build(url: str, params: dict) -> str:
     return f"{url}?{urlencode(params, safe=',:')}"
 
 
+def _hdr_args(headers: dict[str, str] | None) -> list[str]:
+    """自定义请求头 → curl 参数（User-Agent 单独走 -A，避免与默认 UA 打架）。"""
+    args: list[str] = []
+    for k, v in (headers or {}).items():
+        if k.lower() == "user-agent":
+            continue
+        args += ["-H", f"{k}: {v}"]
+    return args
+
+
 async def _curl_json(url: str, params: dict | None = None,
-                     referer: str | None = None) -> object:
+                     referer: str | None = None,
+                     headers: dict[str, str] | None = None) -> object:
     p = dict(params or {})
     p["_"] = int(time.time() * 1000)
     full = _build(url, p)
+    ua = (headers or {}).get("User-Agent") or (headers or {}).get("user-agent") or _UA
     proc = await asyncio.create_subprocess_exec(
-        "curl", "-s", "-m", "8", "-A", _UA, "-e", referer or _REFERER,
-        "-H", "Accept: application/json, text/plain, */*",
+        "curl", "-s", "-m", "8", "-A", ua, "-e", referer or _REFERER,
+        "-H", "Accept: application/json, text/plain, */*", *_hdr_args(headers),
         full,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
@@ -242,11 +254,13 @@ async def _curl_json(url: str, params: dict | None = None,
 
 async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
                    force: bool = False, referer: str | None = None,
-                   tries: int | None = None) -> object | None:
+                   tries: int | None = None,
+                   headers: dict[str, str] | None = None) -> object | None:
     """带缓存与传输兜底的 GET JSON。失败返回 None（绝不抛给上层）。
 
     tries 可覆盖重试轮数（默认 _RETRY_TRIES）；对"已确定死掉且非关键"的兜底主机
-    传 tries=1 以快速失败。
+    传 tries=1 以快速失败。headers 用于个别上游要求特定 UA/头的场景（如同花顺），
+    只在 httpx 直连与 curl 两条通道上生效，不影响缓存键。
     """
     params = params or {}
     key = _build(url, params)
@@ -262,13 +276,14 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
     prefer = memo[0] if memo and now - memo[1] < _MEMO_TTL else None
 
     async def _direct():
-        r = await _client().get(_build(url, params),
-                                headers={"Referer": referer} if referer else None)
+        h = {"Referer": referer} if referer else {}
+        h.update(headers or {})
+        r = await _client().get(_build(url, params), headers=h or None)
         r.raise_for_status()
         return r.json()
 
     async def _curl():
-        return await _curl_json(url, params, referer)
+        return await _curl_json(url, params, referer, headers)
 
     async def _curl6():
         return await _curl_json_v6(url, params, referer)
