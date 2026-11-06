@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 # ETF 期权日内决策看板：Vite 构建前端 → FastAPI 托管 web/dist，单容器跑在 :6799。
 #
-# 本地构建：docker build -t vissong/etf-option-board:latest .
-# 多架构构建并推送到自己的仓库，详见 README「Docker 部署」。
+# 本地构建：bash scripts/compose.sh build（自动识别当前仓库的 GHCR 路径）。
+# GitHub Actions 在当前仓库中构建并推送，详见 README「Docker 部署」。
 
 # ---- 前端：产物是纯静态文件，固定在构建机原生架构上跑，省掉 QEMU 模拟 ----
 FROM --platform=$BUILDPLATFORM node:22-alpine AS web
@@ -38,6 +38,13 @@ COPY --chown=app:app services ./services
 COPY --chown=app:app scripts ./scripts
 COPY --chown=app:app --from=web /web/dist ./web/dist
 RUN mkdir -p data && chown app:app data
+
+# 由 Compose / GitHub Actions 传入；放在依赖安装之后，提交变化不会让依赖缓存失效。
+ARG SOURCE_URL=""
+ARG VCS_REF=""
+LABEL org.opencontainers.image.source="${SOURCE_URL}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.title="ETF 期权日内决策看板"
 
 USER app
 EXPOSE 6799

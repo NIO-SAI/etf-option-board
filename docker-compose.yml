@@ -1,24 +1,27 @@
 # ETF 期权日内决策看板 — Docker Compose 一键部署
 #
-# 默认拉取 Docker Hub 镜像并启动，打开 http://<主机IP>:6799：
-#   docker compose pull
-#   docker compose up -d --no-build
-#   docker compose logs -f        # 看日志
-# 如需从当前源码构建，在完整源码仓库根目录执行 docker compose up -d --build。
+# 在完整源码仓库根目录执行，自动按 origin 选择当前仓库的 GHCR 镜像：
+#   bash scripts/compose.sh pull
+#   bash scripts/compose.sh up -d --no-build
+#   bash scripts/compose.sh logs -f
+# 从当前源码构建：bash scripts/compose.sh up -d --build
 #
 # 可选配置写在同目录的 .env（已 gitignore），例如：
-#   ETF_IMAGE=vissong/etf-option-board:latest     # 默认镜像；可覆盖为其他仓库地址或本地镜像名
+#   ETF_IMAGE=ghcr.io/<owner>/<repo>:latest        # 显式覆盖自动选择的镜像
 #   ETF_PORT=6799                                 # 宿主机端口
 #   LLM_API_KEY=...                               # 大模型决策用的 opencode key；不填则该功能显示不可用
 #
-# 使用已发布的自有镜像：在 .env 设置 ETF_IMAGE，再执行
-#   docker compose pull && docker compose up -d --no-build
-# 多架构构建与推送方法见 README「Docker 部署」。
+# 直接使用 docker compose 时，在环境变量或 .env 中设置 GITHUB_REPOSITORY=<owner>/<repo>，
+# 或直接设置 ETF_IMAGE。Compose 本身不能执行 git 来识别仓库。
 
 services:
   etf-option-board:
-    image: ${ETF_IMAGE:-vissong/etf-option-board:latest}
-    build: .
+    image: ${ETF_IMAGE:-ghcr.io/${GITHUB_REPOSITORY:?请用 bash scripts/compose.sh 执行，或设置 GITHUB_REPOSITORY 或 ETF_IMAGE}:latest}
+    build:
+      context: .
+      args:
+        SOURCE_URL: ${GITHUB_REPOSITORY:+https://github.com/${GITHUB_REPOSITORY}}
+        VCS_REF: ${VCS_REF:-}
     container_name: etf-option-board
     # /api/admin/restart 退出进程后由它拉起，相当于原来的 LaunchAgent
     restart: unless-stopped
