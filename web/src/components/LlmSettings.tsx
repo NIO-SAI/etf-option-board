@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/misc";
 import {
   clearLlmConfig, EMPTY_LLM_CONFIG, llmEndpoint, loadLlmConfig, saveLlmConfig,
-  testLlmConnection, type LlmConfig, type LlmProtocol,
+  testLlmConnection, type LlmConfig, type LlmProtocol, type LlmTransport,
 } from "@/lib/browserLlm";
 
 const INPUT = "h-8 w-full rounded-md border border-input bg-transparent px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring";
@@ -53,7 +53,17 @@ export function LlmSettings() {
 
   return <div className="space-y-4 text-xs">
     <div className="rounded-md bg-muted/40 px-3 py-2 leading-relaxed text-muted-foreground">
-      配置和 API Key 仅保存在当前浏览器的本地存储中。行情快照由看板提供，模型请求由浏览器直接发送给你配置的服务。
+      配置和 API Key 仅保存在当前浏览器的本地存储中。行情快照由看板提供，模型请求按下方选择的方式发送。
+    </div>
+    <div className="space-y-1.5">
+      <div className="font-medium">请求方式</div>
+      <Tabs tabs={[{ key: "proxy", label: "看板后端代理" }, { key: "direct", label: "浏览器直连" }]}
+        value={config.transport} onChange={(v) => change("transport", v as LlmTransport)} />
+      <div className="leading-relaxed text-muted-foreground">
+        {config.transport === "proxy" ?
+          "适合无法调整模型服务跨域设置的情况。API Key 仅随本次请求交给看板后端转发，不保存到服务器，也不写入日志。" :
+          "适合已允许浏览器跨域的模型服务。请求直接发送给模型服务，API Key 与模型请求不经过看板后端。"}
+      </div>
     </div>
     <div className="space-y-1.5">
       <div className="font-medium">兼容协议</div>
@@ -88,8 +98,26 @@ export function LlmSettings() {
     {status && <div role="status" className="text-success-foreground dark:text-success">{status}</div>}
     {error && <div role="alert" className="break-words leading-relaxed text-destructive">{error}</div>}
     <div className="border-t border-border pt-2 leading-relaxed text-muted-foreground">
-      请求不携带 Referer 或 Cookie。服务端仍需允许浏览器跨域请求（CORS）；Service Worker 无法绕过跨域限制。
+      {config.transport === "proxy" ?
+        "模型地址由看板服务器访问；localhost / 127.0.0.1 指看板服务器本机。代理不记录 API Key、提示词、模型响应或原始错误正文。" :
+        "请求不携带 Referer 或 Cookie。模型服务仍需允许浏览器跨域请求（CORS）；Service Worker 无法绕过跨域限制。"}
       <div className="mt-1">测试连接仅发送简短测试提示。清除站点数据会删除配置，不同设备或访问地址需分别配置。</div>
     </div>
+    {config.transport === "direct" && <details className="rounded-md border border-border px-3 py-2">
+      <summary className="cursor-pointer font-medium">如何配置模型服务的跨域（CORS）</summary>
+      <div className="mt-2 space-y-2 leading-relaxed text-muted-foreground">
+        <p>在模型服务或其网关设置以下响应头，放行当前看板地址：</p>
+        <pre className="whitespace-pre-wrap break-all rounded bg-muted/40 p-2 text-[11px] text-foreground">{[
+          `Access-Control-Allow-Origin: ${location.origin}`,
+          "Access-Control-Allow-Methods: POST, OPTIONS",
+          `Access-Control-Allow-Headers: ${config.protocol === "anthropic" ?
+            "Content-Type, X-Api-Key, Anthropic-Version, Anthropic-Dangerous-Direct-Browser-Access" : "Content-Type, Authorization"}`,
+          "Vary: Origin",
+        ].join("\n")}</pre>
+        <p>OPTIONS 预检无需 API Key，应直接返回 200 或 204；实际 POST 响应（包括错误响应）也要带 Allow-Origin。</p>
+        <p>Allow-Origin 只能返回一份、一个值。网关和应用不要重复添加；Authorization 必须显式列出，不能只写 Allow-Headers: *。</p>
+        <p>通过 HTTPS 打开看板时，模型服务也应使用 HTTPS。跨设备访问地址改变后，需同步调整允许的 Origin。</p>
+      </div>
+    </details>}
   </div>;
 }

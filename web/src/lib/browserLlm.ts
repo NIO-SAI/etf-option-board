@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 
 export type LlmProtocol = "openai" | "anthropic";
+export type LlmTransport = "direct" | "proxy";
 export interface LlmConfig {
   protocol: LlmProtocol;
+  transport: LlmTransport;
   baseUrl: string;
   model: string;
   apiKey: string;
@@ -12,8 +14,9 @@ export interface LlmConfig {
 const STORAGE_KEY = "etf-board.llm-config.v1";
 const CHANGE_EVENT = "etf:llm-config-changed";
 const REQUEST_TIMEOUT = 180_000;
-export const EMPTY_LLM_CONFIG: LlmConfig = { protocol: "openai", baseUrl: "", model: "", apiKey: "" };
+export const EMPTY_LLM_CONFIG: LlmConfig = { protocol: "openai", transport: "direct", baseUrl: "", model: "", apiKey: "" };
 export const protocolLabel = (p: LlmProtocol) => p === "anthropic" ? "Anthropic" : "OpenAI Chat";
+export const transportLabel = (t: LlmTransport) => t === "proxy" ? "看板后端代理" : "浏览器直连";
 
 export function llmEndpoint(config: LlmConfig): string {
   let url: URL;
@@ -34,7 +37,10 @@ export function llmEndpoint(config: LlmConfig): string {
 
 export function validateLlmConfig(config: LlmConfig): LlmConfig {
   if (!["openai", "anthropic"].includes(config.protocol)) throw new Error("请选择兼容协议");
-  const out = { protocol: config.protocol, baseUrl: config.baseUrl.trim(), model: config.model.trim(), apiKey: config.apiKey.trim() };
+  // 旧配置没有 transport，继续使用浏览器直连，避免升级后自动把密钥传给后端。
+  const transport = config.transport ?? "direct";
+  if (!["direct", "proxy"].includes(transport)) throw new Error("请选择请求方式");
+  const out = { protocol: config.protocol, transport, baseUrl: config.baseUrl.trim(), model: config.model.trim(), apiKey: config.apiKey.trim() };
   llmEndpoint(out);
   if (!out.model) throw new Error("请填写模型 ID");
   if (/[\r\n]/.test(out.apiKey)) throw new Error("API Key 不能包含换行");
@@ -153,17 +159,24 @@ async function sendFromBrowser(request: ModelRequest, signal: AbortSignal): Prom
 
 async function modelText(config: LlmConfig, system: string, user: string, signal: AbortSignal, test = false): Promise<string> {
   let reply: ModelReply;
-  try { reply = await sendFromBrowser(modelRequest(config, system, user, test), signal); }
+  try {
+    reply = config.transport === "proxy" ? await api.llmProxy({
+      protocol: config.protocol, baseUrl: config.baseUrl, model: config.model, apiKey: config.apiKey,
+      system, user, test,
+    }, signal) : await sendFromBrowser(modelRequest(config, system, user, test), signal);
+  }
   catch (e) {
     if (signal.aborted) throw signal.reason;
-    if (e instanceof TypeError) throw new Error("浏览器直连失败：请检查地址、网络、HTTPS 和服务端 CORS 配置（仍需允许 Origin 与鉴权请求头）。请求未转交看板后端。");
+    if (e instanceof TypeError) throw new Error(config.transport === "proxy" ?
+      "无法连接看板后端，请检查看板服务与网络" :
+      "浏览器直连失败：请检查地址、网络、HTTPS 和服务端 CORS。无法调整跨域配置时，可在模型设置中选择「看板后端代理」。本次请求未转交后端。");
     throw e;
   }
   if (reply.error) throw new Error(reply.error);
   const status = reply.status || 0;
   // 不回显供应商原始错误正文，避免网关把请求头或密钥反射到界面。
   if (status < 200 || status >= 300) {
-    const hint = status === 401 || status === 403 ? "请检查 API Key、模型权限及浏览器直连权限" :
+    const hint = status === 401 || status === 403 ? "请检查 API Key 和模型访问权限" :
       status === 429 ? "额度或速率受限，请稍后重试" : status === 404 ? "请检查 Base URL 和模型 ID" : "请检查协议、模型参数及供应商服务状态";
     throw new Error(`模型服务返回 HTTP ${status}：${hint}`);
   }
@@ -248,6 +261,7 @@ export async function browserDecision(code: string, config: LlmConfig, signal: A
     if (context.error) throw new Error(context.error);
     if (!context.system || !context.user) throw new Error("行情上下文不完整，请稍后重试");
     const text = await modelText(valid, context.system, context.user, s);
-    return { decision: { ...parseDecision(text, context.guardrails), _model: valid.model, _via: "browser" }, ts: context.ts };
+    return { decision: { ...parseDecision(text, context.guardrails), _model: valid.model,
+      _via: valid.transport === "proxy" ? "proxy" : "browser" }, ts: context.ts };
   });
 }

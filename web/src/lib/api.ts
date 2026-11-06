@@ -41,6 +41,18 @@ export const api = {
     if (!r.ok) throw new Error(`行情上下文请求失败（HTTP ${r.status}）`);
     return r.json();
   },
+  llmProxy: async (body: {
+    protocol: string; baseUrl: string; model: string; apiKey: string;
+    system: string; user: string; test: boolean;
+  }, signal: AbortSignal) => {
+    const r = await fetch(`${BASE}/llm/proxy`, {
+      method: "POST", signal, cache: "no-store", credentials: "omit",
+      referrerPolicy: "no-referrer", headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`看板代理请求失败（HTTP ${r.status}）`);
+    return r.json();
+  },
   expiry: () => get("/expiry"),
   settings: () => get("/settings"),
   saveSettings: async (body: {

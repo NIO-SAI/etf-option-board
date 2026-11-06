@@ -8,7 +8,7 @@ import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { AutoTip, GLOSSARY, Tip } from "@/components/ui/term";
 import { clsUpDown, flowMoney, money, nf, pct } from "@/lib/format";
 import { api } from "@/lib/api";
-import { browserDecision, openLlmSettings, protocolLabel, useLlmConfig } from "@/lib/browserLlm";
+import { browserDecision, openLlmSettings, protocolLabel, transportLabel, useLlmConfig } from "@/lib/browserLlm";
 import { usePolling } from "@/lib/usePolling";
 import { BrainCircuit, Loader2 } from "lucide-react";
 
@@ -188,7 +188,7 @@ export function LlmPanel({ code }: { code: string }) {
           </div>
         </FrameHeader>
         <div className="px-3 pb-3">
-          {config && <div className="mb-2 break-all text-[10px] text-muted-foreground">浏览器直连 · {protocolLabel(config.protocol)} · {config.model}</div>}
+          {config && <div className="mb-2 break-all text-[10px] text-muted-foreground">{transportLabel(config.transport)} · {protocolLabel(config.protocol)} · {config.model}</div>}
           {loading && !d && (
             <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />大模型分析中，通常需要 10–60 秒…

@@ -218,6 +218,29 @@ async def close() -> None:
         _CLIENT = None
 
 
+async def llm_post(url: str, headers: dict, body: dict) -> dict:
+    """临时模型请求：独立客户端，不复用行情缓存、Cookie、Referer 或失败重试。"""
+    try:
+        async with asyncio.timeout(160):
+            async with httpx.AsyncClient(timeout=httpx.Timeout(150, connect=10),
+                                         follow_redirects=False) as client:
+                async with client.stream("POST", url, headers=headers, json=body) as response:
+                    if not 200 <= response.status_code < 300:
+                        # 错误正文可能反射 Authorization，既不读取也不返回它。
+                        return {"status": response.status_code}
+                    content = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        content.extend(chunk)
+                        if len(content) > 4 * 1024 * 1024:
+                            return {"error": "模型响应过大，请更换模型或缩短输出"}
+                    return {"status": response.status_code, "text": content.decode("utf-8", errors="replace")}
+    except (TimeoutError, httpx.TimeoutException):
+        return {"error": "看板后端连接模型超时，请稍后重试"}
+    except Exception:  # noqa: BLE001
+        # 不打印异常或请求对象：其中可能含 API Key、地址或提示词。
+        return {"error": "看板后端无法连接模型服务，请检查地址、网络和证书"}
+
+
 def _build(url: str, params: dict) -> str:
     if not params:
         return url

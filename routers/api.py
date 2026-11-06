@@ -11,13 +11,13 @@ import time
 
 import logging
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from services import (alerts, board_collector as bcol, boardflow as bf, cls_hot,
                       decision,
                       pinyin as pinyin_svc,
-                      deploy as deploy_svc, em, index_levels, kronos, llm,
+                      deploy as deploy_svc, em, index_levels, kronos, llm, llm_proxy,
                       market_service as ms, monitor, option_playbook as playbook,
                       option_service as osvc, reversal, strategy, user_settings as usv,
                       vol)
@@ -457,7 +457,7 @@ async def predict(secid: str, klt: int = 5, lookback: int = 120, pred_len: int =
 
 @router.get("/llm/{code}/context")
 async def llm_context(code: str, klt: int = 1):
-    """页面只取行情提示词；自定义模型的地址、密钥和响应均不经过后端。"""
+    """只生成行情提示词，模型调用由页面选择直连或临时代理。"""
     try:
         bundle = await strategy_view(code, kronos=1, klt=klt)
         out = bundle if bundle.get("error") else llm.browser_context(bundle)
@@ -465,6 +465,50 @@ async def llm_context(code: str, klt: int = 1):
         log.exception("生成大模型决策上下文失败")
         out = {"error": "行情上下文暂不可用，请稍后重试"}
     return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/llm/proxy")
+async def llm_proxy_request(request: Request):
+    """密钥只存在本次请求内存；不经设置存储、日志、缓存或旧模型的 CLI 回退。"""
+    def reply(data: dict) -> JSONResponse:
+        return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+    # 浏览器跨站页面不能借用本机代理；Vite 的同源 /api 转发仍可正常使用。
+    if request.headers.get("sec-fetch-site") in ("cross-site", "same-site"):
+        return reply({"error": "请从看板页面发起模型代理请求"})
+    if request.headers.get("content-type", "").split(";", 1)[0].lower() != "application/json":
+        return reply({"error": "代理请求需使用 application/json"})
+    try:
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw) > 1024 * 1024:
+                return reply({"error": "模型请求内容过大"})
+        data = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        # 手动解析，避免参数校验响应或日志回显带密钥的原始输入。
+        return reply({"error": "模型请求内容无效"})
+
+    async def disconnected():
+        # 请求体已读完，只等待 ASGI 断开事件。is_disconnected 的零等待轮询在
+        # BaseHTTPMiddleware 下会先被取消，漏掉真正的断开，导致上游继续生成。
+        while True:
+            message = await request.receive()
+            if message["type"] == "http.disconnect":
+                return
+
+    upstream = asyncio.create_task(llm_proxy.forward(data))
+    watcher = asyncio.create_task(disconnected())
+    try:
+        done, _ = await asyncio.wait((upstream, watcher), return_when=asyncio.FIRST_COMPLETED)
+        return reply(upstream.result() if upstream in done else {"error": "模型请求已取消"})
+    except Exception:  # noqa: BLE001
+        return reply({"error": "模型代理请求失败，请稍后重试"})
+    finally:
+        for task in (upstream, watcher):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(upstream, watcher, return_exceptions=True)
 
 
 @router.post("/llm/{code}")

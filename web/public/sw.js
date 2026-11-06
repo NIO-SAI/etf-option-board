@@ -31,7 +31,7 @@ self.addEventListener("message", (e) => {
       port.postMessage({ status: r.status, text: await r.text() });
     } catch {
       port.postMessage({ error: controller.signal.aborted ? "模型请求已取消或超时" :
-        "浏览器直连失败：请检查地址、网络、HTTPS 和服务端 CORS 配置（仍需允许 Origin 与鉴权请求头）。请求未转交看板后端。" });
+        "浏览器直连失败：请检查地址、网络、HTTPS 和服务端 CORS。无法调整跨域配置时，可在模型设置中选择「看板后端代理」。本次请求未转交后端。" });
     } finally {
       clearTimeout(timer);
       port.close();
