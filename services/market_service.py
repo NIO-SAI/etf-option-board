@@ -86,8 +86,38 @@ def _snap_num(v):
         return None
 
 
+# —— etf_context 结果缓存（TTL + 单飞）——
+# 同一批标的上下文被 5 条链路重复计算：monitor(30s×6)、directions(60s×6)、
+# national_team(30s×7)、/api/etf/{code}(10s)、指数期权。每条链路各自发 6 路上游
+# 请求，稳态下 300+ 次/分钟打东财，且大部分是同一窗口内同一批 secid 的重复取数
+# （这也是上游限流兜底逻辑复杂的根源）。加 8s TTL + 按 code 单飞：
+# 同一窗口内的并发调用共享一次构建，上游请求量预计下降约一半。
+# 8s 与 em 层 12s TTL 同量级，不会引入可感知的陈旧数据。
+_CTX_TTL = 8.0
+_CTX_CACHE: dict[str, tuple[float, dict]] = {}
+_CTX_LOCKS: dict[str, asyncio.Lock] = {}
+
+
 async def etf_context(code: str, etf_secid: str) -> dict:
-    """单只 ETF 的行情 + 分钟K + 分时 + 资金流。"""
+    """单只 ETF 的行情 + 分钟K + 分时 + 资金流（带 8s 缓存与按标单飞）。"""
+    now = time.time()
+    hit = _CTX_CACHE.get(code)
+    if hit and now - hit[0] < _CTX_TTL:
+        return hit[1]
+    lock = _CTX_LOCKS.setdefault(code, asyncio.Lock())
+    async with lock:
+        # 双检：等锁期间可能已有同标调用完成重建
+        now = time.time()
+        hit = _CTX_CACHE.get(code)
+        if hit and now - hit[0] < _CTX_TTL:
+            return hit[1]
+        ctx = await _build_etf_context(code, etf_secid)
+        _CTX_CACHE[code] = (time.time(), ctx)
+        return ctx
+
+
+async def _build_etf_context(code: str, etf_secid: str) -> dict:
+    """真正发上游请求构建上下文（无缓存版本）。"""
     q, k1, k5, tr, flr, fsnap = await asyncio.gather(
         quote(etf_secid),
         kline(etf_secid, klt=1, lmt=240),
