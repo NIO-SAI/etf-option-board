@@ -8,11 +8,13 @@
 
 A 股 6 只可交易期权的宽基 ETF 的**日内决策看板**。后端 FastAPI（Python）聚合东财行情/期权链/
 资金流/指数/外围，内置 BS 定价、Kronos 预测桥、大模型决策、实时告警；前端 REUI + React +
-Vite + Tailwind v4，深色看板，SSE 弹窗+声音告警。
+Vite + Tailwind v4，浅色看板（`.dark` 变量仍在但未启用，2026-10-13 起改浅色），SSE 弹窗+声音告警。
 
-顶栏是一排页面标签（hash 路由 `#/options` 与 `#/board/*`）：**期权看板**外加从 stock-webui
-移植的**板块资金四页**（主力资金分时 / 主力资金多日 / ETF资金流 / 四维资金），
-四页共用 `services/boardflow.py` 的本地 SQLite。规格见 `.scratch/board-flow/spec.md`、
+左侧是**一级导航**（`web/src/components/SideNav.tsx`），只有两项：**期权看板**与**资金分时**；
+顶栏仍保留一排页面标签作快捷切换（`PageTabs`）。hash 路由 `#/options` 与 `#/board/*` 不变，
+所以旧链接/书签照旧可用。资金分时内含从 stock-webui 移植的**板块资金四页**（主力资金分时 /
+主力资金多日 / ETF资金流 / 四维资金），四页切换放在页内子标签 `BoardSubNav.tsx` 里，
+共用 `services/boardflow.py` 的本地 SQLite。规格见 `.scratch/board-flow/spec.md`、
 取舍见 `docs/adr/0003-板块资金单写路径与本地缓存.md`。
 四页的「实时 / 历史」标签统一由 `web/src/components/DayTag.tsx` 给出（所选日期 = 库里最新
 交易日 → 实时，否则历史）；左侧列表统一用 `web/src/components/FlowListPanel.tsx`。
@@ -149,6 +151,15 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
 - 隐波/希腊字母由 `services/bs.py` 自算（Eastmoney 不直接给），到期日 = 到期月第 4 个星期三。
 - 前端组件：REUI（`web/src/components/reui/*`，Tailwind v4 语法）与自研 shadcn 风格
   `web/src/components/ui/*` 混用；图表用 ECharts（`components/charts`）。
+- **加页面的唯一入口（2026-11-06 起）**：`web/src/lib/route.ts` 的 `PAGES` 加一条（带
+  `key/hash/label/title/section`）+ `web/src/App.tsx` 的 `VIEWS` 加一行，**左侧导航与顶栏
+  快捷标签会自动出现**（`lib/nav.ts` 从 `PAGES[].section` 派生分组）。要新开一个一级分组，
+  再在 `nav.ts` 的 `SECTIONS` 里补文案与图标；同一个 `section` 下的页面会自动成为该页的
+  页内子标签（如 `BoardSubNav` 的四个资金页）。
+- **左侧导航行为**：常驻侧栏 200px（`md` 以上），收起后完全不占布局；收起状态点左上角
+  按钮弹 224px **浮层抽屉**（带遮罩、Esc 关闭、选完自动关、底部「固定展开」变回常驻）。
+  展开状态与「上次看的资金子页」都存 localStorage（`etf.nav.open` / `etf.nav.lastBoard`），
+  所以点侧栏「资金分时」会回到上次那个子页，而不是每次跳回第一页。
 - **中栏布局约定（2026-11-01）**：行情卡（分时图 + 两个横线开关 + 高度×2）→ T 型报价 →
   **合约分时图** → 决策区（策略与仓位 / 今日推荐合约 / 标的点位 / 合约买卖点，都在 `PlanCard`）
   → 优选合约 → 大模型决策。决策类卡片一律放中栏、合约分时图**下面**；右栏只留实时告警、

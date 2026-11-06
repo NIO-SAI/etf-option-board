@@ -1,8 +1,13 @@
 import { useEffect, useState } from "react";
 import { TopBar } from "@/components/TopBar";
 import { PageTabs } from "@/components/PageTabs";
+import { SideNav } from "@/components/SideNav";
+import { BoardSubNav } from "@/components/BoardSubNav";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { usePageRoute, titleOf, type PageKey } from "@/lib/route";
+import {
+  isBoardPage, readNavOpen, rememberBoardPage, useIsWide, writeNavOpen,
+} from "@/lib/nav";
 import { requestRefresh } from "@/lib/refresh";
 import { ensureAlertsStarted } from "@/lib/alertBus";
 import { api } from "@/lib/api";
@@ -37,6 +42,29 @@ export default function App() {
   const page = usePageRoute();
   const [clock, setClock] = useState(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 左侧导航：常驻展开状态（记住）+ 收起后的浮层抽屉（临时）
+  const [navOpen, setNavOpen] = useState<boolean>(readNavOpen);
+  const [drawer, setDrawer] = useState(false);
+  const wide = useIsWide();
+  const inlineNav = navOpen && wide;
+
+  const setNav = (open: boolean) => {
+    setNavOpen(open);
+    writeNavOpen(open);
+    if (open) setDrawer(false);
+  };
+
+  const toggleNav = () => {
+    if (inlineNav) {
+      setNav(false);
+      return;
+    }
+    if (drawer) {
+      setDrawer(false);
+      return;
+    }
+    setDrawer(true); // 收起状态下点按钮 = 临时浮层，内容区不重排
+  };
 
   // 顶栏全局信息：所有页面都要看（外围市场 / 国家队评分 / 服务健康）
   const { data: health } = usePolling(() => api.health(), 60_000);
@@ -53,6 +81,26 @@ export default function App() {
     ensureAlertsStarted();
   }, []);
 
+  // 记住最近看的资金子页：点侧栏「资金分时」回到这里，而不是每次跳回第一页
+  useEffect(() => {
+    rememberBoardPage(page);
+  }, [page]);
+
+  // 常驻侧栏出现时（拉宽/固定），临时抽屉自动让位
+  useEffect(() => {
+    if (inlineNav) setDrawer(false);
+  }, [inlineNav]);
+
+  // 抽屉是浮层：Esc 关闭
+  useEffect(() => {
+    if (!drawer) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setDrawer(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawer]);
+
   // 页面标题跟着路由走（多设备/多标签时一眼能分清）
   useEffect(() => {
     document.title = titleOf(page);
@@ -62,24 +110,60 @@ export default function App() {
   const View = VIEWS[page] ?? VIEWS.options;
 
   return (
-    <div className="min-h-screen bg-background">
-      <TopBar
-        external={external?.items ?? []}
-        national={national}
-        health={health}
-        clock={clock}
-        nav={<PageTabs page={page} className="max-w-[52vw]" />}
-        onRefresh={requestRefresh}
-        onOpenSettings={() => setSettingsOpen(true)}
-      />
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+    <div className="flex min-h-screen bg-background">
+      {/* 常驻侧栏：收起后完全不占布局（内容区铺满） */}
+      {inlineNav ? (
+        <SideNav
+          page={page}
+          mode="inline"
+          onClose={() => setNav(false)}
+        />
+      ) : null}
 
-      <View />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar
+          external={external?.items ?? []}
+          national={national}
+          health={health}
+          clock={clock}
+          nav={<PageTabs page={page} className="max-w-[52vw]" />}
+          navOpen={inlineNav}
+          onToggleNav={toggleNav}
+          onRefresh={requestRefresh}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+        <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
-      <footer className="px-4 py-3 text-center text-[10px] text-muted-foreground">
-        数据来源：东方财富 · 期权定价 BS · 预测 Kronos · 决策大模型 — 仅供研究，不构成投资建议
-        <span className="ml-2">· 构建 {BUNDLE_ID}</span>
-      </footer>
+        {/* 资金分时：四个子页的页内标签（路由仍是 #/board/*） */}
+        {isBoardPage(page) ? <BoardSubNav page={page} /> : null}
+
+        <View />
+
+        <footer className="px-4 py-3 text-center text-[10px] text-muted-foreground">
+          数据来源：东方财富 · 期权定价 BS · 预测 Kronos · 决策大模型 — 仅供研究，不构成投资建议
+          <span className="ml-2">· 构建 {BUNDLE_ID}</span>
+        </footer>
+      </div>
+
+      {/* 收起后点左上角按钮弹的浮层抽屉（选完自动关，内容区不重排） */}
+      {!inlineNav && drawer ? (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[1px]"
+            onClick={() => setDrawer(false)}
+            aria-hidden
+          />
+          <div className="fixed inset-y-0 left-0 z-50">
+            <SideNav
+              page={page}
+              mode="drawer"
+              onNavigate={() => setDrawer(false)}
+              onClose={() => setDrawer(false)}
+              onPin={() => setNav(true)}
+            />
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

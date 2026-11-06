@@ -2,20 +2,33 @@
  *
  * 约定：`#/options`（期权看板，默认）与四个板块资金页 `#/board/*`。
  * 未知 hash 一律回落期权看板，绝不白屏。
+ *
+ * `section` 决定它属于左侧导航的哪个一级分组（见 lib/nav.ts）。
+ * 加一个新页面 = 这里加一条 + App.tsx 的 VIEWS 加一行，导航会自动出现。
  */
 
 import { useEffect, useState } from "react";
 
 export type PageKey = "options" | "board-flow" | "board-multi" | "board-etf" | "board-em";
 
-export type PageDef = { key: PageKey; hash: string; label: string; title: string };
+/** 一级导航分组：期权看板 ｜ 资金分时（内含四个子页） */
+export type SectionKey = "options" | "board";
+
+export type PageDef = {
+  key: PageKey;
+  hash: string;
+  label: string;
+  title: string;
+  /** 归属的一级导航分组 */
+  section: SectionKey;
+};
 
 export const PAGES: PageDef[] = [
-  { key: "options", hash: "#/options", label: "期权看板", title: "ETF 期权日内决策看板" },
-  { key: "board-flow", hash: "#/board/flow", label: "主力资金分时", title: "主力资金分时" },
-  { key: "board-multi", hash: "#/board/multi", label: "主力资金多日", title: "主力资金多日" },
-  { key: "board-etf", hash: "#/board/etf", label: "ETF资金流", title: "ETF资金流" },
-  { key: "board-em", hash: "#/board/em", label: "四维资金", title: "四维资金" },
+  { key: "options", hash: "#/options", label: "期权看板", title: "ETF 期权日内决策看板", section: "options" },
+  { key: "board-flow", hash: "#/board/flow", label: "主力资金分时", title: "主力资金分时", section: "board" },
+  { key: "board-multi", hash: "#/board/multi", label: "主力资金多日", title: "主力资金多日", section: "board" },
+  { key: "board-etf", hash: "#/board/etf", label: "ETF资金流", title: "ETF资金流", section: "board" },
+  { key: "board-em", hash: "#/board/em", label: "四维资金", title: "四维资金", section: "board" },
 ];
 
 const BY_HASH = new Map(PAGES.map((p) => [p.hash, p.key]));

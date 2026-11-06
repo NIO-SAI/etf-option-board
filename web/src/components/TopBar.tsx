@@ -2,11 +2,11 @@ import { Badge } from "@/components/reui/badge";
 import { Button } from "@/components/ui/button";
 import { clsUpDown, pct } from "@/lib/format";
 import { sound } from "@/lib/sound";
-import { Activity, Bell, BellOff, RefreshCw, Settings, ShieldCheck } from "lucide-react";
+import { Activity, Bell, BellOff, PanelLeft, PanelLeftClose, RefreshCw, Settings, ShieldCheck } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 export function TopBar({
-  external, national, health, clock, onRefresh, onOpenSettings, nav,
+  external, national, health, clock, onRefresh, onOpenSettings, nav, navOpen, onToggleNav,
 }: {
   external: any[];
   national: any;
@@ -14,8 +14,11 @@ export function TopBar({
   clock: string;
   onRefresh: () => void;
   onOpenSettings: () => void;
-  /** 左上角页面切换标签（由外壳传入，页面本身不关心路由） */
+  /** 顶栏快捷页面标签（由外壳传入，页面本身不关心路由） */
   nav?: ReactNode;
+  /** 左侧导航当前是否常驻展开（决定按钮图标与提示） */
+  navOpen?: boolean;
+  onToggleNav?: () => void;
 }) {
   const [muted, setMuted] = useState(!sound.enabled);
   const nt = national?.score ?? 0;
@@ -24,6 +27,19 @@ export function TopBar({
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-card/85 backdrop-blur">
       <div className="flex items-center gap-3 px-3 py-1.5">
+        {onToggleNav ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="-ml-1"
+            title={navOpen ? "收起左侧导航" : "展开左侧导航"}
+            aria-label={navOpen ? "收起左侧导航" : "展开左侧导航"}
+            aria-expanded={!!navOpen}
+            onClick={onToggleNav}
+          >
+            {navOpen ? <PanelLeftClose aria-hidden /> : <PanelLeft aria-hidden />}
+          </Button>
+        ) : null}
         <div className="flex items-center gap-2 pr-2">
           <Activity className="size-4 shrink-0 text-primary" aria-hidden />
           <span className="hidden text-sm font-semibold whitespace-nowrap sm:inline">ETF 期权日内决策看板</span>
