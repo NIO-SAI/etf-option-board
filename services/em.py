@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime as dt
 import json
 import logging
@@ -85,6 +86,10 @@ _V6_DEAD_TTL = 60.0
 _V6_FAILS: dict[str, int] = {}
 _V6_FAIL_LIMIT = 2
 _V6_TIMEOUT = "8"
+# IPv6 槽排队与整次取数的预算：等槽时间 curl 的 -m 覆盖不到，必须单独兜住，
+# 否则链路拥塞时请求会一直挂在队列里。
+_V6_QUEUE_BUDGET = 5.0
+_REQUEST_BUDGET = 20.0
 
 # AAAA 解析缓存：curl 每次用 --doh-url 都要现场 DoH 解析，实测占单请求 1.4s 里的
 # **1.11s**（79%）。解析一次缓存 10 分钟、改用 --resolve 固定 IPv6 地址，单请求降到
@@ -146,11 +151,16 @@ class _V6EmptyReply(RuntimeError):
 
 
 async def _curl_json_v6(url: str, params: dict | None = None,
-                        referer: str | None = None) -> object:
+                        referer: str | None = None,
+                        deadline: float | None = None) -> object:
     """curl -6 取 JSON（push2 域名的 IPv6 通道）。
 
     优先用缓存的 AAAA 地址 + `--resolve`（省掉每次 1.1s 的 DoH 解析）；
     解析失败/地址失效时才退回 `--doh-url` 现场解析。
+
+    限流由调用方 `_throttled()` 统一负责（IPv6 专用槽必须先于全局槽获取，见该函数）。
+    `deadline` 为 `time.monotonic()` 口径的截止时刻：预算用尽后不再发起新的 curl 尝试，
+    因为 `curl -m` 只约束单次进程运行时长，管不住排队和多次重试的累计耗时。
     """
     host = _host_of(url)
     p = dict(params or {})
@@ -165,16 +175,21 @@ async def _curl_json_v6(url: str, params: dict | None = None,
     err: str | None = None
     codes: list[int | None] = []
     for i, extra in enumerate(attempts):
+        budget = None if deadline is None else deadline - time.monotonic()
+        if budget is not None and budget <= 0.5:
+            err = f"try{i} 跳过（预算耗尽）"
+            break
+        timeout = _V6_TIMEOUT if budget is None else \
+            f"{max(1.0, min(float(_V6_TIMEOUT), budget)):.1f}"
         proc = await asyncio.create_subprocess_exec(
-            "curl", "-s", "-6", "-m", _V6_TIMEOUT, *extra,
+            "curl", "-s", "-6", "-m", timeout, *extra,
             "-A", _UA, "-e", referer or _REFERER,
             "-H", "Accept: application/json, text/plain, */*",
             full,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        async with _V6_SEM:
-            out, _ = await proc.communicate()
+        out, _ = await proc.communicate()
         codes.append(proc.returncode)
         body = out.decode("utf-8", "replace").strip()
         if not body:
@@ -198,6 +213,35 @@ _RETRY_DELAY = 0.3
 # 全局并发闸：东财对同 IP 并发突发很敏感；主源已切 H5/腾讯，且上游实测
 # httpx 直连 0.02~0.2s，放宽到 16 提升吞吐（9 只标的并发聚合时不再排队）
 _SEM = asyncio.Semaphore(16)
+
+
+class _V6Busy(RuntimeError):
+    """IPv6 专用槽排队超预算（通道未必坏，只是拥塞）。"""
+
+
+@contextlib.asynccontextmanager
+async def _throttled(name: str, deadline: float):
+    """按层次获取限流槽：IPv6 专用槽必须先于全局 `_SEM` 获取。
+
+    调用方（`get_json`）原本先拿全局槽再进传输函数，若 IPv6 专用槽在内部排队，
+    拥塞时 16 个全局槽会被等待者占满（实际只有 2 个 curl 在跑），共用 `_SEM`
+    的 H5/腾讯/直连请求会被一起拖住。这里把专用槽提到全局槽外层，并给它单独的
+    排队预算：等不到就抛 `_V6Busy`，让上层换下一条传输通道，而不是无限挂住。
+    """
+    if name != "curl6":
+        async with _SEM:
+            yield
+        return
+    budget = max(0.0, min(deadline - time.monotonic(), _V6_QUEUE_BUDGET))
+    try:
+        await asyncio.wait_for(_V6_SEM.acquire(), timeout=budget)
+    except asyncio.TimeoutError as exc:
+        raise _V6Busy(f"IPv6 通道排队超预算（>{budget:.1f}s）") from exc
+    try:
+        async with _SEM:
+            yield
+    finally:
+        _V6_SEM.release()
 
 
 def _client() -> httpx.AsyncClient:
@@ -294,6 +338,8 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
             return hit[2]
 
     n_tries = _RETRY_TRIES if tries is None else max(1, tries)
+    # 整次取数（含所有传输通道与重试）的总预算，避免拥塞时无限延长
+    deadline = time.monotonic() + _REQUEST_BUDGET
     hostkey = _host_of(url)
     memo = _MEMO.get(hostkey)
     prefer = memo[0] if memo and now - memo[1] < _MEMO_TTL else None
@@ -309,7 +355,7 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
         return await _curl_json(url, params, referer, headers)
 
     async def _curl6():
-        return await _curl_json_v6(url, params, referer)
+        return await _curl_json_v6(url, params, referer, deadline=deadline)
 
     if _v6_host(hostkey):
         # push2 家族：IPv6 优先（境外 IPv4 必被反爬），IPv6 熔断期间才退回 IPv4
@@ -324,15 +370,21 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
     data = None
     used = None
     v6_empty = False
+    v6_busy = False
     # 东财限流：单次成功率约 30~50%，失败即重试（direct 被 WAF 拒绝时很快失败）
     for attempt in range(n_tries):
         for name, fn in transports:
+            if time.monotonic() >= deadline:
+                break
             try:
-                async with _SEM:
+                async with _throttled(name, deadline):
                     data = await fn()
             except Exception as exc:  # noqa: BLE001
                 if isinstance(exc, _V6EmptyReply):
                     v6_empty = True
+                elif isinstance(exc, _V6Busy):
+                    # 排队超预算是"拥塞"，不是通道故障，不能计入熔断
+                    v6_busy = True
                 log.debug("em fetch %s via %s 失败: %s", hostkey, name, exc)
                 data = None
             if data is not None:
@@ -346,7 +398,7 @@ async def get_json(url: str, params: dict | None = None, ttl: float = 3.0,
     if _v6_host(hostkey):
         if data is not None:
             _v6_ok(hostkey)
-        elif not _v6_dead(hostkey) and not v6_empty:
+        elif not _v6_dead(hostkey) and not v6_empty and not v6_busy:
             _v6_fail(hostkey)
 
     if data is None:
