@@ -145,6 +145,8 @@ export const api = {
   // 涨停棱镜（自包含：data/limitup.db，涨停池 + 主题聚合 + 棱镜图）
   limitupOverview: (date?: string, days = 11, top = 15, mode = "zt") =>
     get(`/limitup/overview?days=${days}&top=${top}&mode=${mode}${date ? `&date=${date}` : ""}`),
+  limitupThemes: (date?: string, mode = "zt") =>
+    get(`/limitup/themes?mode=${mode}${date ? `&date=${date}` : ""}`),
   limitupPrism: (theme?: string, date?: string, days = 25, mode = "zt") => {
     const qs = [theme ? `theme=${encodeURIComponent(theme)}` : "",
       date ? `date=${date}` : "", `days=${days}`, `mode=${mode}`].filter(Boolean).join("&");
