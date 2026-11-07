@@ -37,7 +37,7 @@ function stampOf(b: Brief | null): string {
  * 大模型不可用/超时时自动降级为规则拼接（把涨停股的原因标签去重）。
  */
 export function BriefDialog({
-  open, onClose, date, mode, sort, level,
+  open, onClose, date, mode, sort, level, theme, themeName,
 }: {
   open: boolean;
   onClose: () => void;
@@ -45,6 +45,9 @@ export function BriefDialog({
   mode: string;
   sort: string;
   level: string;
+  /** 只分析这个板块（页面里永远传当前选中的板块） */
+  theme?: string;
+  themeName?: string;
 }) {
   const [data, setData] = useState<Brief | null>(null);
   const [loading, setLoading] = useState(false);
@@ -54,7 +57,7 @@ export function BriefDialog({
     setLoading(true);
     setErr("");
     try {
-      const r = await api.limitupBrief(date, mode, sort, level, refresh) as Brief;
+      const r = await api.limitupBrief(date, mode, sort, level, refresh, theme) as Brief;
       if (r?.error) setErr(r.error);
       setData(r);
     } catch (e: any) {
@@ -62,7 +65,7 @@ export function BriefDialog({
     } finally {
       setLoading(false);
     }
-  }, [date, mode, sort, level]);
+  }, [date, mode, sort, level, theme]);
 
   useEffect(() => {
     if (!open) return;
@@ -78,6 +81,9 @@ export function BriefDialog({
         <div className="flex items-center gap-2">
           <Sparkles size={14} className="text-rose-600" />
           <span className="text-sm font-semibold">主题猎手-涨停分析</span>
+          {themeName && (
+            <span className="rounded bg-rose-50 px-1.5 py-0.5 text-[11px] text-rose-700">{themeName}</span>
+          )}
           <span className="text-[10px] text-muted-foreground">{data?.date || date || ""}</span>
         </div>
         <div className="flex items-center gap-2 pr-6">
@@ -102,6 +108,12 @@ export function BriefDialog({
 
         {err && !themes.length && (
           <div className="py-10 text-center text-xs text-destructive">解读失败：{err}</div>
+        )}
+
+        {!loading && !err && !themes.length && (
+          <div className="py-10 text-center text-xs text-muted-foreground">
+            {themeName ? `「${themeName}」当日没有涨停个股` : "没有可分析的板块"}
+          </div>
         )}
 
         {themes.length > 0 && (
