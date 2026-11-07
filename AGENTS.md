@@ -193,6 +193,18 @@ bash web/dev.sh       # 前端开发模式 :5273（/api 代理到 :6799）
   **坑**：`_write_snapshot` 的 `boards` 必须永远传全量（它同时用于把概念名映射成
   `lu_stock_concepts.board` 的板块代码），历史回补不写资金时用 `write_boards=False` 控制，
   **不能把 boards 传空**——否则概念行落成中文名，按主题筛个股池恒为空。
+  **主题分级与排序口径**：`lu_themes.mode` 有 4 种（`zt`/`ext` × `_hot`）——
+  `_hot` 是「按炒作涨停」（一票一主概念，BOARD_RANK 最靠前那个），非 `_hot` 是「按板块涨停」
+  （一票计入所有命中概念）；「按涨幅」只改排序不改集合（历史日期没涨幅 → 回落按涨停数）。
+  主题等级用**板块成分股数**分档：`f104+f105+f106 ≥ 150` 算一级主题（存 `lu_board_meta`），
+  缺元数据的板块两个等级都保留。
+  **「涨停分析」弹窗**（`GET /api/limitup/brief`）：个股详细原因取同花顺 `block_top` 的
+  `reason_info`（长文本，历史可回补）→ `lu_pool.reason_detail`；个股主力净额 `ulist.np` 批量
+  → `lu_pool.main_net`（只有实时采集当天有值）；板块炒作原因**整份一次**大模型调用
+  （`llm.complete()`，REST 失败自动走 CLI），按 `日期+mode` 缓存 `lu_brief`。提示词必须保留
+  「只能归纳给出的个股原因、没有共同主线就明说」这条硬约束，否则会编宏观政策。
+  缓存命中判 `theme_reasons`（payload 不含个股列表），别判 `themes`。
+  个股池四个标签页**全部按当前板块过滤**，没有"全市场"页；名称列 104px + nowrap 防折行。
 - **板块资金（2026-11-04 新增，ADR-0003）**：单写路径 —— 只有 `services/board_collector.py`
   在交易时段写 `data/board_flow.db`（SQLite），`/api/board/*`、`/api/etf-flow/*`、`/api/em-flow/*`
   一律只读，**不要为了让页面有数据去实时抓东财**。采集分频：板块排行 30s（约 11 请求）、

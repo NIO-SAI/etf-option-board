@@ -58,6 +58,11 @@ _CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 _F10_URL = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
 _THS_URL = "https://data.10jqka.com.cn/dataapi/limit_up/limit_up_pool"
 _THS_POOL_URL = _THS_URL   # 同花顺涨停池（东财窗口外的历史兜底）
+_THS_BLOCK_URL = "https://data.10jqka.com.cn/dataapi/limit_up/block_top"
+_ULIST_URL = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+# 概念板块成分股数 ≥ 这个值就算「一级主题」（大方向），否则算「二级主题」（细分）。
+# 经传的主题分级是自有体系，这里用"板块有多宽"当粒度代理，见 ADR-0006。
+LEVEL_PRIMARY_MIN = 150
 
 _EM_UT = "7eea3edcaed734bea9cbfc24409ed989"
 _THS_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -207,6 +212,7 @@ _SEQ = """
 CREATE TABLE IF NOT EXISTS lu_pool(
   date TEXT, code TEXT, name TEXT, lbc INTEGER, fund REAL, fbt INTEGER, lbt INTEGER,
   zbc INTEGER, hybk TEXT, pct REAL, amount REAL, reason TEXT, sealed INTEGER, src TEXT,
+  reason_detail TEXT, main_net REAL,
   PRIMARY KEY(date, code));
 CREATE TABLE IF NOT EXISTS lu_broken(
   date TEXT, code TEXT, name TEXT, zbc INTEGER, pct REAL, hybk TEXT,
@@ -224,6 +230,10 @@ CREATE TABLE IF NOT EXISTS lu_themes(
 CREATE TABLE IF NOT EXISTS lu_boards(
   date TEXT, board TEXT, name TEXT, pct REAL, main REAL, d3 REAL, d5 REAL, ratio REAL,
   PRIMARY KEY(date, board));
+CREATE TABLE IF NOT EXISTS lu_board_meta(
+  board TEXT PRIMARY KEY, name TEXT, size INTEGER, ts TEXT);
+CREATE TABLE IF NOT EXISTS lu_brief(
+  date TEXT, mode TEXT, payload TEXT, src TEXT, ts TEXT, PRIMARY KEY(date, mode));
 CREATE TABLE IF NOT EXISTS lu_meta(
   date TEXT PRIMARY KEY, updated_at TEXT, total_zt INTEGER, total_ext INTEGER,
   total_zb INTEGER, finalized INTEGER);
@@ -251,6 +261,11 @@ def _migrate(c: sqlite3.Connection) -> None:
     elif pc and ("sealed" not in pc or "src" not in pc):
         for t in ("lu_pool", "lu_themes", "lu_meta"):
             c.execute(f"DROP TABLE IF EXISTS {t}")
+    else:
+        # 增量列（同花顺详细原因 / 个股主力净额）直接 ALTER，保留已有 30 个交易日
+        for col, typ in (("reason_detail", "TEXT"), ("main_net", "REAL")):
+            if pc and col not in pc:
+                c.execute(f"ALTER TABLE lu_pool ADD COLUMN {col} {typ}")
 
 
 def _conn() -> sqlite3.Connection:
@@ -313,7 +328,8 @@ async def _concept_boards() -> dict[str, dict[str, Any]]:
         data = await em.get_json(
             _CLIST_URL,
             {"pn": pn, "pz": 100, "po": 1, "np": 1, "fltt": 2, "invt": 2, "fid": "f62",
-             "fs": "m:90 t:3", "fields": "f12,f14,f3,f62,f184,f267,f268,f164,f165", "_": "1"},
+             "fs": "m:90 t:3",
+             "fields": "f12,f14,f3,f62,f184,f267,f268,f164,f165,f104,f105,f106", "_": "1"},
             ttl=120, referer="https://data.eastmoney.com/")
         body = (data or {}).get("data") or {}
         diff = body.get("diff") or []
@@ -321,6 +337,7 @@ async def _concept_boards() -> dict[str, dict[str, Any]]:
             name = r.get("f14")
             if not name:
                 continue
+            size = sum(int(_f(r.get(k), 0) or 0) for k in ("f104", "f105", "f106"))
             out[name] = {
                 "code": r.get("f12"),
                 "name": name,
@@ -329,6 +346,7 @@ async def _concept_boards() -> dict[str, dict[str, Any]]:
                 "ratio": _f(r.get("f184")),
                 "d3": _f(r.get("f267")),
                 "d5": _f(r.get("f164")),
+                "size": size or None,
             }
         total = int(body.get("total") or 0)
         if not diff or len(out) >= total:
@@ -384,6 +402,74 @@ def _lbc_of(high_days: Any) -> int:
     """同花顺 `high_days`：「首板」→ 1，「3天3板」→ 3，「5天4板」→ 4。"""
     m = re.search(r"(\d+)\s*板", str(high_days or ""))
     return int(m.group(1)) if m else 1
+
+
+async def _ths_block_top(date: str) -> dict[str, dict[str, str]]:
+    """同花顺板块榜：一次请求拿到当日各板块的涨停股 + **每只票的详细涨停原因**。
+
+    `reason_info` 是 300~400 字的分点说明（"1、据2026年9月23日投资者关系活动记录表…"），
+    正是弹窗里要展示的长文本；`reason_type` 是短标签（"光伏银粉+低温光伏浆料+…"）。
+    历史也能取（实测 6 月都有），所以可用来回补老日期的详细原因。
+    """
+    data = await em.get_json(
+        _THS_BLOCK_URL, {"filter": "HS,GEM2STAR", "date": date},
+        ttl=600, referer="https://data.10jqka.com.cn/", tries=2,
+        headers={"User-Agent": _THS_UA})
+    out: dict[str, dict[str, str]] = {}
+    for b in (data or {}).get("data") or []:
+        for st in b.get("stock_list") or []:
+            code = str(st.get("code") or "")
+            if not code:
+                continue
+            cur = out.get(code) or {}
+            detail = (st.get("reason_info") or "").strip()
+            # 同一只票会出现在多个板块里，取最长的那段原因（信息最全）
+            if len(detail) > len(cur.get("detail") or ""):
+                cur["detail"] = detail
+            if not cur.get("type"):
+                cur["type"] = st.get("reason_type") or ""
+            out[code] = cur
+    return out
+
+
+async def _stock_main_net(codes: list[str]) -> dict[str, float]:
+    """批量取个股「今日主力净额」（东财 ulist，一次最多 400 只 → 涨停股 1 个请求）。
+
+    只有实时采集当天有意义：ulist 给的是当下的资金，历史日期一律留空。
+    """
+    out: dict[str, float] = {}
+    for i in range(0, len(codes), 300):
+        chunk = codes[i:i + 300]
+        secids = ",".join(
+            (f"1.{c}" if _mkt_of(c) == 1 else f"0.{c}") for c in chunk)
+        data = await em.get_json(
+            _ULIST_URL,
+            {"fltt": 2, "invt": 2, "fields": "f12,f62", "secids": secids, "_": "1"},
+            ttl=60, referer="https://quote.eastmoney.com/")
+        for r in ((data or {}).get("data") or {}).get("diff") or []:
+            code = str(r.get("f12") or "")
+            v = _f(r.get("f62"))
+            if code and v is not None:
+                out[code] = v
+    return out
+
+
+def top_concepts(concepts: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    """「炒作口径」用的一票一主概念：每只票只保留 BOARD_RANK 最靠前的那一个概念。
+
+    与「板块口径」（一只票计入它所有命中概念，数字更大更泛）相对。
+    纯函数，单测覆盖。
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    for code, lst in concepts.items():
+        if not lst:
+            continue
+        best = min(lst, key=lambda c: (c.get("rank") or 99, c.get("name") or ""))
+        out[code] = [best]
+    return out
+
+
+METHOD_NAMES = {"hot": "炒作涨停", "board": "板块涨停", "pct": "涨幅"}
 
 
 async def _expanded_rows(date: str) -> list[dict[str, Any]]:
@@ -575,6 +661,20 @@ def aggregate_themes(pool: list[dict[str, Any]],
     return out
 
 
+def _save_board_meta(boards: dict[str, dict[str, Any]]) -> None:
+    """缓存概念板块的成分股数（一级/二级主题分级用，跨日期共用一份）。"""
+    rows = [(b["code"], b["name"], b.get("size"),
+             dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            for b in boards.values() if b.get("code")]
+    if not rows:
+        return
+    try:
+        with _conn() as c:
+            c.executemany("INSERT OR REPLACE INTO lu_board_meta VALUES(?,?,?,?)", rows)
+    except sqlite3.Error as exc:
+        log.warning("板块元数据写入失败: %s", exc)
+
+
 def _write_snapshot(date: str, *, pool: list[dict[str, Any]],
                     broken: list[dict[str, Any]],
                     themes: dict[str, list[dict[str, Any]]],
@@ -597,10 +697,10 @@ def _write_snapshot(date: str, *, pool: list[dict[str, Any]],
         c.execute("DELETE FROM lu_themes WHERE date=?", (date,))
         c.execute("DELETE FROM lu_boards WHERE date=?", (date,))
         c.executemany(
-            "INSERT OR REPLACE INTO lu_pool VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO lu_pool VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(date, p["code"], p["name"], p["lbc"], p["fund"], p["fbt"], p["lbt"],
               p["zbc"], p["hybk"], p["pct"], p["amount"], p["reason"], p["sealed"],
-              p.get("src") or "em")
+              p.get("src") or "em", p.get("reason_detail"), p.get("main_net"))
              for p in pool])
         c.executemany(
             "INSERT OR REPLACE INTO lu_broken VALUES(?,?,?,?,?,?)",
@@ -682,6 +782,9 @@ async def collect(date: str, *, finalize: bool = False, with_funds: bool = True)
     reasons = await _ths_reasons(date) if src == "em" else {}
     if src == "ths":                      # 同花顺的行自带 reason_type，不必再查
         reasons = {}
+    # 详细原因（弹窗里的长文本）与个股主力净额：一次板块榜 + 一次 ulist 批量
+    detail = await _ths_block_top(date)
+    mainnet = await _stock_main_net([b["code"] for b in base]) if with_funds else {}
 
     sem = asyncio.Semaphore(8)
 
@@ -704,7 +807,11 @@ async def collect(date: str, *, finalize: bool = False, with_funds: bool = True)
             "code": b["code"], "name": b["name"], "lbc": b["lbc"], "fund": b["fund"],
             "fbt": b["fbt"], "lbt": b["lbt"], "zbc": b["zbc"], "hybk": b["hybk"],
             "pct": b["pct"], "amount": b["amount"],
-            "reason": b.get("reason") or reasons.get(b["code"]) or b["hybk"] or "",
+            "reason": (b.get("reason") or reasons.get(b["code"])
+                       or (detail.get(b["code"]) or {}).get("type")
+                       or b["hybk"] or ""),
+            "reason_detail": (detail.get(b["code"]) or {}).get("detail") or "",
+            "main_net": mainnet.get(b["code"]),
             "sealed": 1, "src": b["src"],
         })
     # 扩充涨停：涨幅已超 9.9% 但没封板（封板金额/时间留空，标 sealed=0）
@@ -726,14 +833,18 @@ async def collect(date: str, *, finalize: bool = False, with_funds: bool = True)
         })
 
     sealed_pool = [p for p in pool if p["sealed"] == 1]
+    hot = top_concepts(concepts)          # 炒作口径：一票只算一个主概念
     themes = {
         "zt": aggregate_themes(sealed_pool, concepts, broken, boards),
         "ext": aggregate_themes(pool, concepts, broken, boards),
+        "zt_hot": aggregate_themes(sealed_pool, hot, broken, boards),
+        "ext_hot": aggregate_themes(pool, hot, broken, boards),
     }
     if not with_funds:
         for lst in themes.values():
             for t in lst:
                 t.update({"pct": None, "main": None, "d3": None, "d5": None, "ratio": None})
+    await asyncio.to_thread(_save_board_meta, boards)
     await asyncio.to_thread(_write_snapshot, date, pool=pool, broken=broken,
                             themes=themes, concepts=concepts, boards=boards,
                             total_zt=zt["tc"] or len(sealed_pool),
@@ -792,6 +903,41 @@ def composite_rank(series: dict[str, list[int]]) -> dict[str, float]:
     return {b: round((s / top) ** 0.75, 3) for b, s in scores.items()}
 
 
+def _mode_key(mode: str, sort: str = "hot") -> str:
+    """排序口径 → 库里的 mode 键。
+
+    `hot`（按炒作涨停）= 一票一主概念（`*_hot`）；`board`（按板块涨停）= 一票计入所有概念；
+    `pct`（按涨幅）沿用板块口径的集合，只是排序时改用板块涨幅。
+    """
+    m = mode if mode in ("zt", "ext") else "zt"
+    return f"{m}_hot" if sort == "hot" else m
+
+
+def board_levels() -> dict[str, str]:
+    """板块代码 → `primary`（成分股 ≥ LEVEL_PRIMARY_MIN）/ `secondary`。
+
+    没有元数据的板块不返回（调用方按"未知"处理，两个等级都保留，别因为缺数据就丢主题）。
+    """
+    try:
+        with _conn() as c:
+            rows = c.execute("SELECT board, size FROM lu_board_meta").fetchall()
+    except sqlite3.Error:
+        return {}
+    out: dict[str, str] = {}
+    for r in rows:
+        if r["size"] is None:
+            continue
+        out[r["board"]] = "primary" if int(r["size"]) >= LEVEL_PRIMARY_MIN else "secondary"
+    return out
+
+
+def _keep_level(board: str, level: str, levels: dict[str, str]) -> bool:
+    if level not in ("primary", "secondary"):
+        return True
+    lv = levels.get(board)
+    return lv is None or lv == level
+
+
 def _streak_map(dates: list[str], mode: str = "zt") -> dict[str, int]:
     """每个主题在这批日期里的涨停总数（周期表角标的「20 日涨停数」）。"""
     if not dates:
@@ -833,9 +979,15 @@ def _theme_series(boards: list[str], dates: list[str],
 
 
 def overview(date: str | None = None, *, days: int = 11, top: int = 15,
-             mode: str = "zt") -> dict[str, Any]:
-    """周期表 + 主题榜 + 图例分档（一次拿全，页面首屏一个请求）。"""
-    mode = mode if mode in MODES else "zt"
+             mode: str = "zt", sort: str = "hot",
+             level: str = "all") -> dict[str, Any]:
+    """周期表 + 主题榜 + 图例分档（一次拿全，页面首屏一个请求）。
+
+    `sort`：hot=按炒作涨停（一票一主概念）/ board=按板块涨停（一票计入所有概念）/
+    pct=按涨幅（板块口径的集合，排序改用当日板块涨幅；历史日期没有涨幅 → 回落按涨停数）。
+    `level`：all / primary（一级主题，成分股 ≥150）/ secondary（二级主题）。
+    """
+    mode = _mode_key(mode, sort)
     dates = _dates(KEEP_DAYS)
     if not dates:
         return {"error": "尚未采集到涨停数据", "matrix": [], "themes": [], "dates": []}
@@ -849,18 +1001,26 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 15,
     dq = ",".join("?" * len(cols))
     with _conn() as c:
         rows = c.execute(
-            f"SELECT date, board, name, zt, max_lbc FROM lu_themes "
+            f"SELECT date, board, name, zt, max_lbc, pct FROM lu_themes "
             f"WHERE mode=? AND date IN ({dq}) ORDER BY date, zt DESC", (mode, *cols)).fetchall()
     by_date: dict[str, list[dict[str, Any]]] = {x: [] for x in cols}
     for r in rows:
         by_date[r["date"]].append({"board": r["board"], "name": r["name"],
-                                   "zt": int(r["zt"] or 0), "max_lbc": int(r["max_lbc"] or 0)})
+                                   "zt": int(r["zt"] or 0), "max_lbc": int(r["max_lbc"] or 0),
+                                   "pct": r["pct"]})
     # 主题排除名单（默认排除「央国企改革」）：在算热度和建矩阵之前就剔掉，
     # 这样剩余主题的深浅仍然按"当前可见集合"归一，颜色不会被一个被排除的巨无霸压扁。
     excl = excluded_names()
-    if excl:
+    levels = board_levels() if level in ("primary", "secondary") else {}
+    for x in cols:
+        by_date[x] = [t for t in by_date[x]
+                      if t["name"] not in excl and _keep_level(t["board"], level, levels)]
+    # 按涨幅：有涨幅的日期按涨幅降序（没有涨幅的历史日期回落按涨停数，已在 SQL 里排好）
+    if sort == "pct":
         for x in cols:
-            by_date[x] = [t for t in by_date[x] if t["name"] not in excl]
+            if any(t.get("pct") is not None for t in by_date[x]):
+                by_date[x] = sorted(by_date[x],
+                                    key=lambda t: (-(t.get("pct") or -1e9), -t["zt"]))
     per_day = [{"date": x, "themes": by_date[x]} for x in cols]
 
     # 统计期间的综合排名（颜色深浅）：窗口 = 周期表实际展示的那些交易日
@@ -936,12 +1096,13 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 15,
     }
 
 
-def themes_of(date: str | None = None, mode: str = "zt") -> dict[str, Any]:
+def themes_of(date: str | None = None, mode: str = "zt", sort: str = "hot",
+              level: str = "all") -> dict[str, Any]:
     """某一天的主题榜（供"点周期表单元格 → 右侧切到那一天"用）。
 
     周期表的窗口锚定在页面选的日期上、不跟着点走，所以右侧要单独取这一天的主题榜。
     """
-    mode = mode if mode in MODES else "zt"
+    mode = _mode_key(mode, sort)
     dates = _dates(KEEP_DAYS)
     d = date or (dates[-1] if dates else None)
     if not d:
@@ -952,8 +1113,13 @@ def themes_of(date: str | None = None, mode: str = "zt") -> dict[str, Any]:
             "SELECT board, name, zt, zb, max_lbc, lianban, first_board, pct, main, d3, d5, ratio "
             "FROM lu_themes WHERE mode=? AND date=?", (mode, d)).fetchall()
     excl = excluded_names()
-    rows = [r for r in rows if r["name"] not in excl]
-    rows.sort(key=lambda r: (-int(r["zt"] or 0), -int(r["max_lbc"] or 0), r["name"] or ""))
+    levels = board_levels() if level in ("primary", "secondary") else {}
+    rows = [r for r in rows if r["name"] not in excl
+            and _keep_level(r["board"], level, levels)]
+    if sort == "pct" and any(r["pct"] is not None for r in rows):
+        rows.sort(key=lambda r: (-(r["pct"] or -1e9), -int(r["zt"] or 0)))
+    else:
+        rows.sort(key=lambda r: (-int(r["zt"] or 0), -int(r["max_lbc"] or 0), r["name"] or ""))
 
     win = dates[-20:] if len(dates) >= 20 else dates
     streak = _streak_map(win, mode)
@@ -995,9 +1161,9 @@ def themes_of(date: str | None = None, mode: str = "zt") -> dict[str, Any]:
 
 
 def prism(theme: str | None = None, date: str | None = None,
-          days: int = PRISM_DAYS, mode: str = "zt") -> dict[str, Any]:
+          days: int = PRISM_DAYS, mode: str = "zt", sort: str = "hot") -> dict[str, Any]:
     """棱镜图：全市场涨停数（黄线）+ 该主题涨停数（红面积）。"""
-    mode = mode if mode in MODES else "zt"
+    mode = _mode_key(mode, sort)
     dates = _dates(days)
     if not dates:
         return {"dates": [], "total": [], "theme": [], "theme_name": None}
@@ -1048,6 +1214,8 @@ def pool(date: str | None = None, *, theme: str | None = None,
         return {"error": "尚未采集到涨停数据", "date": None, "items": []}
 
     kind = (kind or "all").lower()
+    if kind == "all":
+        kind = "zt"          # 兼容旧参数：不再有"全市场"页，一律按板块口径
     if kind in ("broken", "lan"):
         with _conn() as c:
             rows = c.execute(
@@ -1071,14 +1239,19 @@ def pool(date: str | None = None, *, theme: str | None = None,
     if theme:
         sql += " AND p.code IN (SELECT code FROM lu_stock_concepts WHERE date=? AND board=?)"
         args += [d, theme]
-    sql += " ORDER BY p.sealed DESC, p.lbc DESC, p.fund DESC, p.pct DESC"
+    if kind == "hot":
+        # 「炒作涨停」= 同一批板块涨停股，但按**炒作强度**排（连板高度 → 涨幅），
+        # 而不是按封单额。四个标签页都只看当前选中板块，不再有"全市场"页。
+        sql += " ORDER BY p.sealed DESC, p.lbc DESC, p.pct DESC, p.fund DESC"
+    else:
+        sql += " ORDER BY p.sealed DESC, p.lbc DESC, p.fund DESC, p.pct DESC"
     with _conn() as c:
         rows = c.execute(sql, args).fetchall()
     items = [{"code": r["code"], "name": r["name"], "reason": r["reason"],
               "lbc": int(r["lbc"] or 1), "zbc": int(r["zbc"] or 0), "fund": r["fund"],
               "fbt": int(r["fbt"] or 0), "pct": r["pct"], "hybk": r["hybk"],
               "sealed": bool(r["sealed"]), "kind": "zt"} for r in rows]
-    return {"date": d, "kind": "theme" if theme else "all", "items": items,
+    return {"date": d, "kind": kind, "items": items,
             "theme": theme, "mode": mode}
 
 
@@ -1087,6 +1260,202 @@ def _theme_codes(date: str, board: str) -> set[str]:
         rows = c.execute("SELECT code FROM lu_stock_concepts WHERE date=? AND board=?",
                          (date, board)).fetchall()
     return {r["code"] for r in rows}
+
+
+BRIEF_THEMES = 5          # 弹窗里展示的板块数
+BRIEF_STOCKS = 8          # 每个板块列出的个股数
+
+
+def _load_brief(date: str, mode: str) -> dict[str, Any] | None:
+    try:
+        with _conn() as c:
+            r = c.execute("SELECT payload, src, ts FROM lu_brief WHERE date=? AND mode=?",
+                          (date, mode)).fetchone()
+    except sqlite3.Error:
+        return None
+    if not r:
+        return None
+    try:
+        d = json.loads(r["payload"])
+    except ValueError:
+        return None
+    d["src"] = r["src"]
+    d["cached_at"] = r["ts"]
+    return d
+
+
+def _save_brief(date: str, mode: str, payload: dict[str, Any], src: str) -> None:
+    try:
+        with _conn() as c:
+            c.execute("INSERT OR REPLACE INTO lu_brief VALUES(?,?,?,?,?)",
+                      (date, mode, json.dumps(payload, ensure_ascii=False), src,
+                       dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    except sqlite3.Error as exc:
+        log.warning("解读缓存写入失败: %s", exc)
+
+
+def _top_tags(reasons: list[str], n: int = 3) -> list[str]:
+    """从 "光伏边框+液冷铝材+机器人布局" 这类标签串里取出现最多的 n 个关键词。"""
+    cnt: dict[str, int] = {}
+    for r in reasons:
+        for tag in str(r or "").split("+"):
+            tag = tag.strip()
+            if 1 < len(tag) <= 8:
+                cnt[tag] = cnt.get(tag, 0) + 1
+    return [k for k, _ in sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))[:n]]
+
+
+def _rule_brief(themes: list[dict[str, Any]], total: int) -> dict[str, Any]:
+    """大模型不可用时的兜底文案：全部由数据拼出来，不编。"""
+    names = [t["name"] for t in themes]
+    head = names[:3] or ["无"]
+    return {
+        "headline": f"{'、'.join(head)}涨停股领衔，成为两市明星板块" if names
+                    else "今日无涨停个股",
+        "summary": f"今日沪深两市共 {total} 只股票涨停"
+                   + (f"，涨停集中在 {'、'.join(names[:5])} 等板块。" if names else "。"),
+        "themes": {t["name"]: (f"涨停原因集中在 {'、'.join(_top_tags([st['reason'] for st in t['stocks']]))} 等方向"
+                               if _top_tags([st['reason'] for st in t['stocks']])
+                               else "涨停原因待补充")
+                   for t in themes},
+    }
+
+
+def _parse_json_obj(text: str) -> dict[str, Any] | None:
+    text = (text or "").strip()
+    m = re.search(r"\{.*\}", text, re.S)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+async def _llm_brief(themes: list[dict[str, Any]], total: int) -> dict[str, Any] | None:
+    """一次调用生成整份解读（标题 + 概述 + 每个板块的炒作原因）。失败返回 None。"""
+    from services import llm
+
+    lines = [f"今日沪深两市共 {total} 只股票涨停。以下是涨停最集中的板块及其涨停股："]
+    for t in themes:
+        lines.append(f"\n【{t['name']}】涨停 {t['zt']} 家"
+                     + (f"，板块涨幅 {t['pct']:.2f}%" if t.get("pct") is not None else ""))
+        for st in t["stocks"][:6]:
+            detail = (st.get("reason_detail") or "").replace("\n", " ")[:110]
+            lines.append(f"- {st['name']}（{st['lbc']}连板）：{st.get('reason') or ''}"
+                         + (f"；{detail}" if detail else ""))
+    prompt = "\n".join(lines) + """
+
+请输出一个 JSON 对象（不要代码块标记），字段：
+{
+  "headline": "一句话标题，格式：X、Y、Z涨停股领衔，成为两市明星板块（不超过 40 字，只列 3-4 个板块）",
+  "summary": "一句话概述，格式：今日沪深两市共N只股票涨停，涨停集中在A、B、C等板块。（不超过 60 字）",
+  "themes": [{"name": "板块名（必须与上面完全一致）", "reason": "该板块今日的炒作原因，30-45 字，客观归纳驱动事件/逻辑，不要提个股买卖建议"}]
+}
+写作铁律（务必遵守）：
+1. reason 只能**归纳上面给出的这些个股原因**，不得引入上面没提到的宏观事件、政策、数据（编造会被追责）。
+2. 若该板块的几只个股原因各不相同、没有共同驱动，就写"板块内个股各自炒作，暂无统一主线"。
+3. 只能使用上面【】里出现过的板块名，不要新增板块。
+4. headline 里列 3-4 个当日最强的板块；summary 用上面给的总数。
+只输出上述 JSON。"""
+
+    res = await llm.complete(prompt, timeout=30, max_tokens=900, temperature=0.3)
+    if res.get("error"):
+        log.info("涨停复盘解读 LLM 不可用：%s", res["error"])
+        return None
+    obj = _parse_json_obj(res.get("text") or "")
+    if not obj:
+        return None
+    obj["_via"] = res.get("via")
+    return obj
+
+
+async def brief(date: str | None = None, mode: str = "zt", sort: str = "hot",
+                level: str = "all", refresh: bool = False) -> dict[str, Any]:
+    """「主题猎手-涨停分析」弹窗：一句话解读 + 各板块炒作原因 + 板块内个股与详细涨停原因。
+
+    炒作原因优先大模型（整份解读一次调用、按 日期+口径 缓存），失败自动降级为规则拼接。
+    """
+    mode_key = _mode_key(mode, sort)
+    levels = board_levels() if level in ("primary", "secondary") else {}
+    dates = _dates(KEEP_DAYS)
+    d = date or (dates[-1] if dates else None)
+    if not d:
+        return {"error": "尚未采集到涨停数据", "themes": []}
+
+    excl = excluded_names()
+    with _conn() as c:
+        meta = c.execute("SELECT * FROM lu_meta WHERE date=?", (d,)).fetchone()
+        rows = c.execute(
+            "SELECT board, name, zt, max_lbc, pct, main FROM lu_themes "
+            "WHERE mode=? AND date=? ORDER BY zt DESC", (mode_key, d)).fetchall()
+    rows = [r for r in rows if r["name"] not in excl
+            and _keep_level(r["board"], level, levels)][:BRIEF_THEMES]
+
+    total = int(meta["total_ext"] if (meta and str(mode).startswith("ext")) else
+                (meta["total_zt"] if meta else 0) or 0)
+
+    themes = []
+    for r in rows:
+        with _conn() as c:
+            st = c.execute(
+                "SELECT p.name, p.code, p.lbc, p.main_net, p.reason, p.reason_detail "
+                "FROM lu_pool p WHERE p.date=? AND p.code IN "
+                "(SELECT code FROM lu_stock_concepts WHERE date=? AND board=?) "
+                "ORDER BY p.lbc DESC, p.main_net DESC LIMIT ?",
+                (d, d, r["board"], BRIEF_STOCKS)).fetchall()
+        themes.append({
+            "board": r["board"], "name": r["name"], "zt": int(r["zt"] or 0),
+            "pct": r["pct"], "main": r["main"],
+            "stocks": [{"name": x["name"], "code": x["code"], "lbc": int(x["lbc"] or 1),
+                        "main_net": x["main_net"], "reason": x["reason"],
+                        "reason_detail": x["reason_detail"]} for x in st],
+        })
+
+    if not themes:
+        return {"date": d, "mode": mode_key, "themes": [], "headline": "",
+                "summary": "今日没有可展示的涨停板块。", "total": total}
+
+    cached = None if refresh else _load_brief(d, mode_key)
+    # 缓存里存的是 {headline, summary, theme_reasons, ...}（**不含个股列表**，个股每次现查），
+    # 所以判断命中要看 theme_reasons，不能看 themes（2026-11-07 踩过 → 每次开弹窗都重调大模型）。
+    if cached and cached.get("theme_reasons"):
+        for t in themes:            # 个股列表用最新的，文字用缓存
+            txt = (cached.get("theme_reasons") or {}).get(t["name"])
+            t["reason_text"] = txt or ""
+            t["reason_src"] = "llm" if txt and cached.get("src") == "llm" else "rule"
+        cached.update({"date": d, "mode": mode_key, "themes": themes, "total": total,
+                       "from_cache": True})
+        return cached
+
+    rule = _rule_brief(themes, total)
+    llm_out = await _llm_brief(themes, total)
+    src = "llm" if llm_out else "rule"
+    reasons: dict[str, str] = {}
+    if llm_out:
+        for item in (llm_out.get("themes") or []):
+            name = str(item.get("name") or "").strip()
+            txt = str(item.get("reason") or "").strip()
+            if name and txt:
+                reasons[name] = txt
+
+    payload = {
+        "date": d, "mode": mode_key, "total": total,
+        "headline": (llm_out or {}).get("headline") or rule["headline"],
+        "summary": (llm_out or {}).get("summary") or rule["summary"],
+        "theme_reasons": reasons or rule["themes"],
+        "src": src,
+        "_via": (llm_out or {}).get("_via"),
+        "generated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    _save_brief(d, mode_key, payload, src)
+
+    for t in themes:
+        txt = payload["theme_reasons"].get(t["name"]) or rule["themes"].get(t["name"]) or ""
+        t["reason_text"] = txt
+        t["reason_src"] = src if payload["theme_reasons"].get(t["name"]) else "rule"
+    return {**payload, "themes": themes, "from_cache": False}
 
 
 def health() -> dict[str, Any]:
