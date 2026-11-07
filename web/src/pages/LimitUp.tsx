@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 /* ============================ 类型 ============================ */
 type Cell = {
   board: string; name: string; zt: number; max_lbc: number;
-  count_20d?: number; tier?: string; type?: string;
+  count_20d?: number; tier?: string; type?: string; heat?: number;
 };
 type ThemeRow = {
   board: string; name: string; zt: number; zb: number; lan: number;
@@ -19,11 +19,11 @@ type ThemeRow = {
   pct?: number | null; main?: number | null; d3?: number | null; d5?: number | null;
   ratio?: number | null;
   tier: string; count_20d: number; type: string;
-  expanding: boolean; climax: boolean; resonance: boolean;
+  expanding: boolean; climax: boolean; resonance: boolean; heat?: number;
 };
 type PoolItem = {
   code: string; name: string; reason?: string; lbc: number; zbc: number;
-  fund?: number | null; pct?: number | null; hybk?: string; fbt?: number;
+  fund?: number | null; pct?: number | null; hybk?: string; fbt?: number; sealed?: boolean;
 };
 
 const TIERS = ["0~3", "3~5", "5~10", "10~15", "15以上"];
@@ -39,11 +39,12 @@ const POOL_TABS = [
 const fmtMD = (d: string) => (d.length === 8 ? `${d.slice(4, 6)}-${d.slice(6)}` : d);
 const isST = (name: string) => /ST/i.test(name);
 
-/** 涨停数 → 红色深浅（同列内归一，越红代表当天涨停家数越多） */
-function heat(v: number, max: number) {
-  if (!v || !max) return { backgroundColor: "transparent" };
-  const a = Math.min(0.85, 0.12 + 0.73 * (v / max));
-  return { backgroundColor: `rgba(225,29,72,${a.toFixed(2)})` };
+/** 涨停数 → 蓝色深浅：颜色深浅编码「统计期间综合排名」（backend 算好的 heat 0~1），
+ *  整体压淡（透明度 0.08~0.50），避免 15×N 的网格糊成一片深蓝。 */
+function heatStyle(heat: number, selected: boolean) {
+  if (selected) return { backgroundColor: "#e11d48", color: "#ffffff" };
+  const a = 0.08 + 0.42 * Math.max(0, Math.min(1, heat || 0));
+  return { backgroundColor: `rgba(37,99,235,${a.toFixed(3)})` };
 }
 
 /* ============================ 页面 ============================ */
@@ -69,10 +70,13 @@ export function LimitUpPage() {
   const [onlyClimax, setOnlyClimax] = useState(false);
   const [onlyResonance, setOnlyResonance] = useState(false);
   const [dropST, setDropST] = useState(false);
+  /** 扩充涨停：涨幅 > 9.9% 也算涨停（含未封板） */
+  const [ext, setExt] = useState(false);
   const [poolTab, setPoolTab] = useState<string>("theme");
 
+  const mode = ext ? "ext" : "zt";
   const { data: ov, refresh: refreshOv } = usePolling(
-    () => api.limitupOverview(date || undefined, days, 10), 120_000, [date, days]);
+    () => api.limitupOverview(date || undefined, days, 15, mode), 120_000, [date, days, mode]);
   const [busy, setBusy] = useState(false);
 
   const themes: ThemeRow[] = ov?.themes ?? [];
@@ -89,8 +93,8 @@ export function LimitUpPage() {
   const themeName = themes.find((t) => t.board === theme)?.name ?? "";
 
   const { data: prism } = usePolling(
-    () => api.limitupPrism(theme || undefined, curDate || undefined, 25),
-    120_000, [theme, curDate]);
+    () => api.limitupPrism(theme || undefined, curDate || undefined, 25, mode),
+    120_000, [theme, curDate, mode]);
 
   /** 棱镜标题里当前日期的主题涨停家数（取所选日期那一格，不是序列末尾——切历史日期时两者不同） */
   const prismAtDate = (() => {
@@ -102,8 +106,8 @@ export function LimitUpPage() {
   const poolKind = poolTab === "theme" ? "zt" : poolTab;
   const { data: pool } = usePolling(
     () => api.limitupPool(curDate || undefined,
-      poolTab === "all" ? undefined : theme || undefined, poolKind),
-    120_000, [curDate, theme, poolTab]);
+      poolTab === "all" ? undefined : theme || undefined, poolKind, mode),
+    120_000, [curDate, theme, poolTab, mode]);
 
   /** 主题榜筛选（等级 / 类型 / 扩张·高潮·共振 / 去 ST） */
   const shownThemes = useMemo(() => themes.filter((t) => {
@@ -124,7 +128,7 @@ export function LimitUpPage() {
         && (tier === "all" || c.tier === tier)
         && (type === "全部类型" || c.type === type));
       const out: (Cell | null)[] = [...kept];
-      while (out.length < 10) out.push(null);
+      while (out.length < 15) out.push(null);
       return out;
     });
   }, [ov, tier, type, dropST]);
@@ -153,7 +157,10 @@ export function LimitUpPage() {
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-base font-semibold">涨停棱镜</h2>
         <span className="text-[11px] text-muted-foreground">
-          沪深涨停 {stats.total_zt ?? 0} 家 · 炸板 {stats.total_zb ?? 0} 家 · 主题 {stats.theme_count ?? 0} 个
+          {ext ? "扩充涨停" : "沪深涨停"} <b className="text-foreground">{ext
+            ? (stats.total_ext ?? 0) : (stats.total_zt ?? 0)}</b> 家
+          {ext ? `（封板 ${stats.total_zt ?? 0}）` : ""}
+          · 炸板 {stats.total_zb ?? 0} 家 · 主题 {stats.theme_count ?? 0} 个
           {stats.finalized ? " · 已定稿" : ""}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -220,6 +227,11 @@ export function LimitUpPage() {
             onChange={(e) => setOnlyResonance(e.target.checked)} />
           三共振
         </label>
+        <label className="flex items-center gap-1 font-medium text-foreground"
+          title="涨幅 > 9.9% 的个股也计为涨停（含未封板，剔除 N/C 开头新股）">
+          <input type="checkbox" checked={ext} onChange={(e) => setExt(e.target.checked)} />
+          扩充涨停
+        </label>
         <span className="ml-auto">数据源：东财涨停池 + 概念板块资金 · 涨停原因取自同花顺（失败降级行业名）</span>
       </div>
 
@@ -239,12 +251,12 @@ export function LimitUpPage() {
                 <table className="w-full border-collapse text-[11px]">
                   <thead>
                     <tr className="bg-muted/40">
-                      <th className="w-9 border-b px-1 py-1 text-center font-normal text-muted-foreground">
+                      <th className="w-9 border-b px-1 py-[5px] text-center font-normal text-muted-foreground">
                         排名
                       </th>
                       {dates.map((d) => (
                         <th key={d}
-                          className={cn("border-b px-1 py-1 text-center font-normal text-muted-foreground",
+                          className={cn("border-b px-1 py-[5px] text-center font-normal text-muted-foreground",
                             d === curDate && "bg-primary/10 text-foreground")}
                           title={d}>
                           {fmtMD(d)}
@@ -253,32 +265,31 @@ export function LimitUpPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {Array.from({ length: 10 }).map((_, r) => (
+                    {Array.from({ length: 15 }).map((_, r) => (
                       <tr key={r}>
-                        <td className="border-b px-1 py-0.5 text-center text-muted-foreground">{r + 1}</td>
+                        <td className="border-b px-1 py-[4px] text-center text-muted-foreground">{r + 1}</td>
                         {matrix.map((col, ci) => {
                           const cell = col[r] ?? null;
-                          const maxZt = Math.max(1, ...col.filter(Boolean).map((c) => c!.zt));
                           const active = cell?.board === theme;
                           return (
                             <td
                               key={ci}
                               onClick={() => cell && setTheme(cell.board)}
                               className={cn(
-                                "border-b px-1 py-0.5 text-center",
-                                cell ? "cursor-pointer hover:outline hover:outline-1 hover:outline-primary/50" : "",
-                                active && "outline outline-1 outline-primary",
+                                "border-b px-1 py-[4px] text-center",
+                                cell ? "cursor-pointer" : "",
+                                active ? "font-medium" : "text-slate-800 hover:brightness-[0.97]",
                               )}
-                              style={cell ? heat(cell.zt, maxZt) : undefined}
-                              title={cell ? `${cell.name}：${cell.zt} 家涨停（近20日 ${cell.count_20d ?? cell.zt}）` : ""}
+                              style={cell ? heatStyle(cell.heat ?? 0, !!active) : undefined}
+                              title={cell
+                                ? `${cell.name}：${cell.zt} 家涨停（近20日 ${cell.count_20d ?? cell.zt}，综合排名强度 ${Math.round((cell.heat ?? 0) * 100)}%）`
+                                : ""}
                             >
                               {cell ? (
                                 <span className="flex items-center justify-center gap-0.5">
-                                  <span className={cn("truncate", cell.zt / maxZt > 0.55 && "text-white")}>
-                                    {cell.name}
-                                  </span>
+                                  <span className="truncate">{cell.name}</span>
                                   {r === 0 && cell.count_20d ? (
-                                    <sup className="text-[9px] opacity-80">{cell.count_20d}</sup>
+                                    <sup className="text-[9px] opacity-70">{cell.count_20d}</sup>
                                   ) : null}
                                 </span>
                               ) : <span className="text-muted-foreground/40">—</span>}
@@ -291,17 +302,19 @@ export function LimitUpPage() {
                 </table>
               </div>
               {/* 主题等级图例（顶部那条红色渐变条） */}
-              <div className="flex items-center gap-3 px-3 py-1.5 text-[10px] text-muted-foreground">
-                <span>主题等级（近20日涨停数）</span>
+              <div className="flex items-center gap-3 px-3 py-2 text-[10px] text-muted-foreground">
+                <span>综合排名（统计期间涨停强度）</span>
+                <span>弱</span>
                 <div className="flex h-2 flex-1 overflow-hidden rounded">
-                  <div className="flex-1" style={{ background: "rgba(225,29,72,.15)" }} />
-                  <div className="flex-1" style={{ background: "rgba(225,29,72,.3)" }} />
-                  <div className="flex-1" style={{ background: "rgba(225,29,72,.5)" }} />
-                  <div className="flex-1" style={{ background: "rgba(225,29,72,.7)" }} />
-                  <div className="flex-1" style={{ background: "rgba(225,29,72,.9)" }} />
+                  {[0.08, 0.18, 0.28, 0.39, 0.5].map((a) => (
+                    <div key={a} className="flex-1"
+                      style={{ background: `rgba(37,99,235,${a})` }} />
+                  ))}
                 </div>
-                <span className="flex gap-3">
-                  {TIERS.map((t) => <span key={t}>{t}</span>)}
+                <span>强</span>
+                <span className="ml-2 flex items-center gap-1">
+                  <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: "#e11d48" }} />
+                  当前选中
                 </span>
               </div>
             </FramePanel>
@@ -312,7 +325,7 @@ export function LimitUpPage() {
             <FrameHeader className="flex-row items-center gap-2">
               <FrameTitle>涨停棱镜</FrameTitle>
               <span className="text-[10px] text-muted-foreground">
-                {curDate} · 沪深涨停 <b className="text-foreground">{stats.total_zt ?? 0}</b> 家 ·
+                {curDate} · {ext ? "扩充涨停" : "沪深涨停"} <b className="text-foreground">{ext ? (stats.total_ext ?? 0) : (stats.total_zt ?? 0)}</b> 家 ·
                 {themeName ? <> 主题 · {themeName} <b className="text-rose-600">
                   {prismAtDate}</b> 家</> : " 点左上表格选主题"}
               </span>
@@ -426,7 +439,12 @@ export function LimitUpPage() {
                   {rows.map((it: PoolItem, i: number) => (
                     <tr key={`${it.code}-${i}`} className="border-b last:border-0">
                       <td className="px-1 py-0.5 text-center text-muted-foreground">{i + 1}</td>
-                      <td className="px-1 py-0.5">{it.name}</td>
+                      <td className="px-1 py-0.5">
+                        {it.name}
+                        {it.sealed === false && (
+                          <span className="ml-1 rounded bg-slate-100 px-1 text-[9px] text-slate-500">未封板</span>
+                        )}
+                      </td>
                       <td className="max-w-0 truncate px-1 py-0.5 text-muted-foreground"
                         title={it.reason ?? ""}>{it.reason || "-"}</td>
                       <td className="px-1 py-0.5 text-center">

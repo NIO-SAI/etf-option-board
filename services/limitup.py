@@ -65,6 +65,8 @@ BACKFILL_DAYS = 30          # 启动回补的日历天数（含节假日，实�
 KEEP_DAYS = 150             # 库内保留窗口
 CONCEPT_RANK_LIMIT = 8      # 每只涨停股最多取排名前 N 个概念（越往后越牵强）
 PRISM_DAYS = 25
+EXT_PCT = 9.9               # 「扩充涨停」的涨幅门槛（> 9.9% 即算涨停）
+MODES = ("zt", "ext")       # zt = 东财涨停池；ext = 涨停池 ∪ 涨幅>9.9%
 
 # ---- 概念噪音黑名单 -----------------------------------------------------------
 # 这些「概念」几乎每只票都有（交易属性 / 财务特征），不做过滤的话周期表永远是它们霸榜。
@@ -176,7 +178,7 @@ def build_matrix(per_day: list[dict[str, Any]], top: int = 10) -> list[list[dict
 _SEQ = """
 CREATE TABLE IF NOT EXISTS lu_pool(
   date TEXT, code TEXT, name TEXT, lbc INTEGER, fund REAL, fbt INTEGER, lbt INTEGER,
-  zbc INTEGER, hybk TEXT, pct REAL, amount REAL, reason TEXT,
+  zbc INTEGER, hybk TEXT, pct REAL, amount REAL, reason TEXT, sealed INTEGER,
   PRIMARY KEY(date, code));
 CREATE TABLE IF NOT EXISTS lu_broken(
   date TEXT, code TEXT, name TEXT, zbc INTEGER, pct REAL, hybk TEXT,
@@ -184,20 +186,43 @@ CREATE TABLE IF NOT EXISTS lu_broken(
 CREATE TABLE IF NOT EXISTS lu_stock_concepts(
   date TEXT, code TEXT, board TEXT, name TEXT, rank INTEGER,
   PRIMARY KEY(date, code, board));
+CREATE TABLE IF NOT EXISTS lu_concepts(
+  code TEXT PRIMARY KEY, data TEXT, ts TEXT);
 CREATE TABLE IF NOT EXISTS lu_themes(
-  date TEXT, board TEXT, name TEXT, zt INTEGER, zb INTEGER, lan INTEGER,
+  mode TEXT, date TEXT, board TEXT, name TEXT, zt INTEGER, zb INTEGER, lan INTEGER,
   max_lbc INTEGER, lianban INTEGER, first_board INTEGER,
   pct REAL, main REAL, d3 REAL, d5 REAL, ratio REAL,
-  PRIMARY KEY(date, board));
+  PRIMARY KEY(mode, date, board));
 CREATE TABLE IF NOT EXISTS lu_boards(
   date TEXT, board TEXT, name TEXT, pct REAL, main REAL, d3 REAL, d5 REAL, ratio REAL,
   PRIMARY KEY(date, board));
 CREATE TABLE IF NOT EXISTS lu_meta(
-  date TEXT PRIMARY KEY, updated_at TEXT, total_zt INTEGER, total_zb INTEGER,
-  finalized INTEGER);
-CREATE INDEX IF NOT EXISTS ix_lu_themes_date ON lu_themes(date, zt DESC);
+  date TEXT PRIMARY KEY, updated_at TEXT, total_zt INTEGER, total_ext INTEGER,
+  total_zb INTEGER, finalized INTEGER);
+CREATE INDEX IF NOT EXISTS ix_lu_themes_date ON lu_themes(mode, date, zt DESC);
 CREATE INDEX IF NOT EXISTS ix_lu_pool_date ON lu_pool(date);
 """
+
+
+def _cols(c: sqlite3.Connection, table: str) -> set[str]:
+    try:
+        return {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.Error:
+        return set()
+
+
+def _migrate(c: sqlite3.Connection) -> None:
+    """老库结构升级：`lu_themes` 缺 `mode` / `lu_pool` 缺 `sealed` 说明是加「扩充涨停」
+    之前的版本，直接丢掉重建（只有十几个交易日，回补一次就回来了）。"""
+    tc = _cols(c, "lu_themes")
+    pc = _cols(c, "lu_pool")
+    if tc and "mode" not in tc:
+        for t in ("lu_pool", "lu_broken", "lu_stock_concepts", "lu_themes",
+                  "lu_boards", "lu_meta"):
+            c.execute(f"DROP TABLE IF EXISTS {t}")
+    elif pc and "sealed" not in pc:
+        for t in ("lu_pool", "lu_themes", "lu_meta"):
+            c.execute(f"DROP TABLE IF EXISTS {t}")
 
 
 def _conn() -> sqlite3.Connection:
@@ -209,6 +234,8 @@ def _conn() -> sqlite3.Connection:
 
 def init_db() -> None:
     with _conn() as c:
+        c.executescript(_SEQ)
+        _migrate(c)
         c.executescript(_SEQ)
 
 
@@ -281,6 +308,42 @@ async def _concept_boards() -> dict[str, dict[str, Any]]:
     return out
 
 
+async def _expanded_rows(date: str) -> list[dict[str, Any]]:
+    """「扩充涨停」口径：全 A 按涨幅降序，取涨幅 > 9.9% 的个股。
+
+    按 `f3` 降序翻页，一旦本页末位涨幅 ≤ 9.9% 就停（首屏通常就有 40+ 只，最多 4 页）。
+    **剔除 `N`/`C` 开头的新股**（上市首日/前 5 日没有涨跌幅限制，+120% 不是涨停）。
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for pn in range(1, 5):
+        data = await em.get_json(
+            _CLIST_URL,
+            {"pn": pn, "pz": 100, "po": 1, "np": 1, "fltt": 2, "invt": 2, "fid": "f3",
+             "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048",
+             "fields": "f12,f14,f3,f2,f62", "_": "1"},
+            ttl=30, referer="https://quote.eastmoney.com/")
+        diff = ((data or {}).get("data") or {}).get("diff") or []
+        if not diff:
+            break
+        for r in diff:
+            code = str(r.get("f12") or "")
+            name = str(r.get("f14") or "")
+            p = _f(r.get("f3"))
+            if not code or p is None or code in seen:
+                continue
+            if p <= EXT_PCT:
+                continue
+            if name[:1] in ("N", "C"):
+                continue
+            seen.add(code)
+            out.append({"code": code, "name": name, "pct": p})
+        last = _f(diff[-1].get("f3"))
+        if last is None or last <= EXT_PCT:
+            break
+    return out
+
+
 async def _stock_concepts(code: str, mkt: int, concept_names: set[str]) -> list[dict[str, Any]]:
     """单只股票的所属概念（已过滤噪音、按 BOARD_RANK 截断）。
 
@@ -289,7 +352,14 @@ async def _stock_concepts(code: str, mkt: int, concept_names: set[str]) -> list[
     **`IS_PRECISE == "1"` 才是真正的精确概念**（实测每只票 4~16 个，全部命中概念板块名单，
     而噪音项清一色是 0 或 null）——这是最关键的一道过滤，比名字黑名单可靠得多。
     万一某只票一个精确概念都没有，才退回"名字命中概念名单"的那批。
+
+    结果按代码缓存在 `lu_concepts`（7 天）：成分本身就是"当前"口径、与具体日期无关，
+    「扩充涨停」把每日待查股票数从 30 只抬到 100+ 只，没有缓存回补会很慢。
     """
+    cached = await asyncio.to_thread(_concept_cache_get, code)
+    if cached is not None:
+        return [c for c in cached if c.get("name") in concept_names][:CONCEPT_RANK_LIMIT]
+
     data = await em.get_json(
         _F10_URL,
         {"reportName": "RPT_F10_CORETHEME_BOARDTYPE",
@@ -304,7 +374,7 @@ async def _stock_concepts(code: str, mkt: int, concept_names: set[str]) -> list[
     precise: list[dict[str, Any]] = []
     for r in rows:
         name = r.get("BOARD_NAME") or ""
-        if name not in concept_names or _is_noise(name):
+        if _is_noise(name):
             continue
         item = {"name": name, "rank": int(_f(r.get("BOARD_RANK"), 99) or 99)}
         kept.append(item)
@@ -313,7 +383,40 @@ async def _stock_concepts(code: str, mkt: int, concept_names: set[str]) -> list[
 
     out = precise or kept
     out.sort(key=lambda x: x["rank"])
-    return out[:CONCEPT_RANK_LIMIT]
+    out = out[:CONCEPT_RANK_LIMIT]
+    if rows:                       # 只有真拿到响应才写缓存，空响应下次还能重试
+        await asyncio.to_thread(_concept_cache_put, code, out)
+    return [c for c in out if c["name"] in concept_names]
+
+
+def _concept_cache_get(code: str) -> list[dict[str, Any]] | None:
+    try:
+        with _conn() as c:
+            r = c.execute("SELECT data, ts FROM lu_concepts WHERE code=?", (code,)).fetchone()
+    except sqlite3.Error:
+        return None
+    if not r:
+        return None
+    try:
+        ts = dt.datetime.strptime(r["ts"], "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+    if (dt.datetime.now() - ts).days >= 7:
+        return None
+    try:
+        return json.loads(r["data"])
+    except ValueError:
+        return None
+
+
+def _concept_cache_put(code: str, items: list[dict[str, Any]]) -> None:
+    try:
+        with _conn() as c:
+            c.execute("INSERT OR REPLACE INTO lu_concepts VALUES(?,?,?)",
+                      (code, json.dumps(items, ensure_ascii=False),
+                       dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    except sqlite3.Error:
+        pass
 
 
 async def _ths_reasons(date: str) -> dict[str, str]:
@@ -395,10 +498,12 @@ def aggregate_themes(pool: list[dict[str, Any]],
 
 
 def _write_snapshot(date: str, *, pool: list[dict[str, Any]],
-                    broken: list[dict[str, Any]], themes: list[dict[str, Any]],
+                    broken: list[dict[str, Any]],
+                    themes: dict[str, list[dict[str, Any]]],
                     concepts: dict[str, list[dict[str, Any]]],
                     boards: dict[str, dict[str, Any]],
-                    total_zt: int, finalized: bool) -> None:
+                    total_zt: int, total_ext: int, finalized: bool) -> None:
+    """一次写入两种口径（`themes` 的键是 mode）。"""
     now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with _conn() as c:
         c.execute("DELETE FROM lu_pool WHERE date=?", (date,))
@@ -407,9 +512,10 @@ def _write_snapshot(date: str, *, pool: list[dict[str, Any]],
         c.execute("DELETE FROM lu_themes WHERE date=?", (date,))
         c.execute("DELETE FROM lu_boards WHERE date=?", (date,))
         c.executemany(
-            "INSERT OR REPLACE INTO lu_pool VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO lu_pool VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(date, p["code"], p["name"], p["lbc"], p["fund"], p["fbt"], p["lbt"],
-              p["zbc"], p["hybk"], p["pct"], p["amount"], p["reason"]) for p in pool])
+              p["zbc"], p["hybk"], p["pct"], p["amount"], p["reason"], p["sealed"])
+             for p in pool])
         c.executemany(
             "INSERT OR REPLACE INTO lu_broken VALUES(?,?,?,?,?,?)",
             [(date, b["code"], b["name"], b["zbc"], b["pct"], b["hybk"]) for b in broken])
@@ -418,17 +524,19 @@ def _write_snapshot(date: str, *, pool: list[dict[str, Any]],
             [(date, code, boards.get(cc["name"], {}).get("code") or cc["name"],
               cc["name"], cc["rank"])
              for code, lst in concepts.items() for cc in lst])
+        rows = []
+        for mode, lst in themes.items():
+            rows += [(mode, date, t["board"] or t["name"], t["name"], t["zt"], t["zb"],
+                      t["lan"], t["max_lbc"], t["lianban"], t["first_board"],
+                      t["pct"], t["main"], t["d3"], t["d5"], t["ratio"]) for t in lst]
         c.executemany(
-            "INSERT OR REPLACE INTO lu_themes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            [(date, t["board"] or t["name"], t["name"], t["zt"], t["zb"], t["lan"],
-              t["max_lbc"], t["lianban"], t["first_board"],
-              t["pct"], t["main"], t["d3"], t["d5"], t["ratio"]) for t in themes])
+            "INSERT OR REPLACE INTO lu_themes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
         c.executemany(
             "INSERT OR REPLACE INTO lu_boards VALUES(?,?,?,?,?,?,?,?)",
             [(date, b["code"], b["name"], b.get("pct"), b.get("main"),
               b.get("d3"), b.get("d5"), b.get("ratio")) for b in boards.values()])
-        c.execute("INSERT OR REPLACE INTO lu_meta VALUES(?,?,?,?,?)",
-                  (date, now, total_zt, len(broken), 1 if finalized else 0))
+        c.execute("INSERT OR REPLACE INTO lu_meta VALUES(?,?,?,?,?,?)",
+                  (date, now, total_zt, total_ext, len(broken), 1 if finalized else 0))
         # 裁剪老数据
         c.execute("DELETE FROM lu_pool WHERE date < date('now', ?)", (f"-{KEEP_DAYS} day",))
         c.execute("DELETE FROM lu_themes WHERE date < date('now', ?)", (f"-{KEEP_DAYS} day",))
@@ -438,7 +546,7 @@ def _write_snapshot(date: str, *, pool: list[dict[str, Any]],
 
 # ============================ 采集入口 =========================================
 async def collect(date: str, *, finalize: bool = False, with_funds: bool = True) -> dict[str, Any]:
-    """抓取并落库某一天的快照。上游全挂时返回 `{"error": ...}` 且不写库。"""
+    """抓取并落库某一天的快照（两种口径：东财涨停池 / 扩充涨停）。上游全挂时不写库。"""
     zt = await _zt_pool(date)
     rows = zt["rows"]
     if not rows:
@@ -450,12 +558,18 @@ async def collect(date: str, *, finalize: bool = False, with_funds: bool = True)
     boards = await _concept_boards()
     concept_names = set(boards)
 
-    # 概念归属：只查当天涨停/炸板的票（32 只左右 → 32 个请求，并发 8）
+    # 涨停池（sealed=1）+ 扩充涨停（涨幅 > 9.9% 但没在涨停池里 → sealed=0）
+    expanded = await _expanded_rows(date)
+    ext_only = [r for r in expanded if str(r["code"]) not in {str(x.get("c")) for x in rows}]
+
+    # 概念归属：只查当天涨停/炸板的票（并发 8）
     codes: dict[str, int] = {}
     for r in rows:
         codes[str(r.get("c"))] = int(_f(r.get("m"), 0) or 0)
     for r in zb_raw:
         codes.setdefault(str(r.get("c")), int(_f(r.get("m"), 0) or 0))
+    for r in ext_only:
+        codes.setdefault(r["code"], _mkt_of(r["code"]))
 
     reasons = await _ths_reasons(date)
 
@@ -483,7 +597,15 @@ async def collect(date: str, *, finalize: bool = False, with_funds: bool = True)
             "fund": _f(r.get("fund")), "fbt": int(_f(r.get("fbt"), 0) or 0),
             "lbt": int(_f(r.get("lbt"), 0) or 0), "zbc": int(_f(r.get("zbc"), 0) or 0),
             "hybk": r.get("hybk"), "pct": _f(r.get("zdp")), "amount": _f(r.get("amount")),
-            "reason": reasons.get(code) or r.get("hybk") or "",
+            "reason": reasons.get(code) or r.get("hybk") or "", "sealed": 1,
+        })
+    # 扩充涨停：涨幅已超 9.9% 但没封板（lbc 记 1，封板金额/时间留空，标注 sealed=0）
+    for r in ext_only:
+        pool.append({
+            "code": r["code"], "name": r["name"], "lbc": 1, "fund": None,
+            "fbt": 0, "lbt": 0, "zbc": 0, "hybk": "", "pct": r["pct"],
+            "amount": None, "reason": reasons.get(r["code"]) or "涨幅超9.9%（未封板）",
+            "sealed": 0,
         })
 
     broken = []
@@ -494,18 +616,32 @@ async def collect(date: str, *, finalize: bool = False, with_funds: bool = True)
             "hybk": r.get("hybk"),
         })
 
-    themes = aggregate_themes(pool, concepts, broken, boards)
+    sealed_pool = [p for p in pool if p["sealed"] == 1]
+    themes = {
+        "zt": aggregate_themes(sealed_pool, concepts, broken, boards),
+        "ext": aggregate_themes(pool, concepts, broken, boards),
+    }
     if not with_funds:
-        for t in themes:
-            t.update({"pct": None, "main": None, "d3": None, "d5": None, "ratio": None})
+        for lst in themes.values():
+            for t in lst:
+                t.update({"pct": None, "main": None, "d3": None, "d5": None, "ratio": None})
     await asyncio.to_thread(_write_snapshot, date, pool=pool, broken=broken,
                             themes=themes, concepts=concepts,
                             boards=boards if with_funds else {},
-                            total_zt=zt["tc"] or len(pool), finalized=finalize)
-    log.info("涨停棱镜 %s：涨停 %d / 炸板 %d / 主题 %d%s", date, len(pool),
-             len(broken), len(themes), "（定稿）" if finalize else "")
-    return {"date": date, "total": zt["tc"] or len(pool), "broken": len(broken),
-            "themes": len(themes)}
+                            total_zt=zt["tc"] or len(sealed_pool),
+                            total_ext=len(pool), finalized=finalize)
+    log.info("涨停棱镜 %s：涨停 %d / 扩充 %d / 炸板 %d / 主题 %d%s", date, len(sealed_pool),
+             len(pool), len(broken), len(themes["zt"]), "（定稿）" if finalize else "")
+    return {"date": date, "total": zt["tc"] or len(sealed_pool), "ext_total": len(pool),
+            "broken": len(broken), "themes": len(themes["zt"]),
+            "ext_themes": len(themes["ext"])}
+
+
+def _mkt_of(code: str) -> int:
+    """按代码猜市场位（1=沪，0=深/北）。"""
+    if code[:1] in ("4", "8") or code[:2] in ("92",):
+        return 0
+    return 1 if code[:1] == "6" else 0
 
 
 # ============================ 读接口 ===========================================
@@ -522,19 +658,44 @@ def _latest_date() -> str | None:
     return r["date"] if r else None
 
 
-def _streak_map(dates: list[str]) -> dict[str, int]:
+def composite_rank(series: dict[str, list[int]]) -> dict[str, float]:
+    """统计期间「综合排名」强度（0~1，1 = 最强 → 颜色最深）。纯函数，单测覆盖。
+
+    算法：`score = Σ zt_d × 0.9^(距今天数)`——涨停家数按日累加，**越近的交易日权重越高**
+    （0.9 的日衰减，10 个交易日前权重约 0.35）。
+
+    再用 `(score / max_score) ** 0.75` 归一，**而不是按名次百分位**：概念有 130+ 个、
+    尾部大量 1~2 家的噪音主题，按名次算的话前 15 名会全部挤在 0.95~1.0，
+    颜色深浅根本看不出区别（实测）。
+    """
+    scores: dict[str, float] = {}
+    for board, vals in series.items():
+        n = len(vals)
+        s = 0.0
+        for i, v in enumerate(vals):
+            w = 0.9 ** (n - 1 - i)
+            s += (v or 0) * w
+        scores[board] = s
+    if not scores:
+        return {}
+    top = max(scores.values()) or 1.0
+    return {b: round((s / top) ** 0.75, 3) for b, s in scores.items()}
+
+
+def _streak_map(dates: list[str], mode: str = "zt") -> dict[str, int]:
     """每个主题在这批日期里的涨停总数（周期表角标的「20 日涨停数」）。"""
     if not dates:
         return {}
     q = ",".join("?" * len(dates))
     with _conn() as c:
         rows = c.execute(
-            f"SELECT board, SUM(zt) AS n FROM lu_themes WHERE date IN ({q}) GROUP BY board",
-            dates).fetchall()
+            f"SELECT board, SUM(zt) AS n FROM lu_themes WHERE mode=? AND date IN ({q}) "
+            f"GROUP BY board", (mode, *dates)).fetchall()
     return {r["board"]: int(r["n"] or 0) for r in rows}
 
 
-def _theme_series(boards: list[str], dates: list[str]) -> dict[str, dict[str, list[int]]]:
+def _theme_series(boards: list[str], dates: list[str],
+                  mode: str = "zt") -> dict[str, dict[str, list[int]]]:
     """按主题取 zt/first_board/lianban/zb 的逐日序列（缺失补 0）。"""
     out: dict[str, dict[str, list[int]]] = {}
     if not boards or not dates:
@@ -544,7 +705,8 @@ def _theme_series(boards: list[str], dates: list[str]) -> dict[str, dict[str, li
     with _conn() as c:
         rows = c.execute(
             f"SELECT date, board, zt, first_board, lianban, zb FROM lu_themes "
-            f"WHERE board IN ({bq}) AND date IN ({dq})", (*boards, *dates)).fetchall()
+            f"WHERE mode=? AND board IN ({bq}) AND date IN ({dq})",
+            (mode, *boards, *dates)).fetchall()
     idx = {d: i for i, d in enumerate(dates)}
     for b in boards:
         out[b] = {k: [0] * len(dates) for k in ("zt", "first_board", "lianban", "zb")}
@@ -560,8 +722,10 @@ def _theme_series(boards: list[str], dates: list[str]) -> dict[str, dict[str, li
     return out
 
 
-def overview(date: str | None = None, *, days: int = 11, top: int = 10) -> dict[str, Any]:
+def overview(date: str | None = None, *, days: int = 11, top: int = 15,
+             mode: str = "zt") -> dict[str, Any]:
     """周期表 + 主题榜 + 图例分档（一次拿全，页面首屏一个请求）。"""
+    mode = mode if mode in MODES else "zt"
     dates = _dates(KEEP_DAYS)
     if not dates:
         return {"error": "尚未采集到涨停数据", "matrix": [], "themes": [], "dates": []}
@@ -572,21 +736,26 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 10) -> dict[
         cols.sort()
 
     # 周期表：每天的 Top N 主题
-    per_day = []
     dq = ",".join("?" * len(cols))
     with _conn() as c:
         rows = c.execute(
             f"SELECT date, board, name, zt, max_lbc FROM lu_themes "
-            f"WHERE date IN ({dq}) ORDER BY date, zt DESC", cols).fetchall()
+            f"WHERE mode=? AND date IN ({dq}) ORDER BY date, zt DESC", (mode, *cols)).fetchall()
     by_date: dict[str, list[dict[str, Any]]] = {x: [] for x in cols}
     for r in rows:
         by_date[r["date"]].append({"board": r["board"], "name": r["name"],
                                    "zt": int(r["zt"] or 0), "max_lbc": int(r["max_lbc"] or 0)})
     per_day = [{"date": x, "themes": by_date[x]} for x in cols]
 
-    # 20 日统计：主题等级角标 / 扩张 / 高潮 / 三共振
+    # 统计期间的综合排名（颜色深浅）：窗口 = 周期表实际展示的那些交易日
+    all_boards = sorted({t["board"] for t in by_date.get(d, [])} | {
+        t["board"] for col in per_day for t in col["themes"]} - {None})
+    heat = composite_rank({b: v["zt"] for b, v in
+                           _theme_series(all_boards, cols, mode).items() if b})
+
+    # 20 日统计：角标 / 扩张 / 高潮 / 三共振
     win = dates[-20:] if len(dates) >= 20 else dates
-    streak = _streak_map(win)
+    streak = _streak_map(win, mode)
     matrix = build_matrix(per_day, top)
     for col in matrix:
         for cell in col:
@@ -595,9 +764,11 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 10) -> dict[
             cell["count_20d"] = streak.get(cell["board"], cell["zt"])
             cell["tier"] = tier_of(cell["zt"])
             cell["type"] = classify_theme(cell["name"])
+            cell["heat"] = round(heat.get(cell["board"], 0.0), 3)
 
     boards_today = [t["board"] for t in by_date.get(d, []) if t["board"]]
-    series = _theme_series(list({*boards_today, *[b for b in streak if streak[b] >= 3]}), dates)
+    series = _theme_series(list({*boards_today, *[b for b in streak if streak[b] >= 3]}),
+                           dates, mode)
 
     themes = []
     for t in by_date.get(d, []):
@@ -608,6 +779,7 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 10) -> dict[
             **t,
             "tier": tier_of(t["zt"]),
             "count_20d": n20,
+            "heat": round(heat.get(t["board"], 0.0), 3),
             "expanding": is_expanding(zt_series),
             "climax": is_climax(zt_series),
             "resonance": is_resonance(s.get("first_board") or [0],
@@ -619,7 +791,8 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 10) -> dict[
     # 资金四列（只有实时采集的那天才写）
     with _conn() as c:
         fund_rows = c.execute(
-            "SELECT board, pct, main, d3, d5, ratio FROM lu_themes WHERE date=?", (d,)).fetchall()
+            "SELECT board, pct, main, d3, d5, ratio FROM lu_themes WHERE mode=? AND date=?",
+            (mode, d)).fetchall()
     funds = {r["board"]: dict(r) for r in fund_rows}
     for t in themes:
         f = funds.get(t["board"]) or {}
@@ -630,12 +803,14 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 10) -> dict[
 
     return {
         "date": d,
+        "mode": mode,
         "dates": cols,
         "matrix": matrix,
         "themes": themes,
         "tiers": TIERS,
         "stats": {
             "total_zt": int(meta["total_zt"] or 0) if meta else 0,
+            "total_ext": int(meta["total_ext"] or 0) if meta else 0,
             "total_zb": int(meta["total_zb"] or 0) if meta else 0,
             "theme_count": len(themes),
             "finalized": bool(meta["finalized"]) if meta else False,
@@ -645,8 +820,9 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 10) -> dict[
 
 
 def prism(theme: str | None = None, date: str | None = None,
-          days: int = PRISM_DAYS) -> dict[str, Any]:
+          days: int = PRISM_DAYS, mode: str = "zt") -> dict[str, Any]:
     """棱镜图：全市场涨停数（黄线）+ 该主题涨停数（红面积）。"""
+    mode = mode if mode in MODES else "zt"
     dates = _dates(days)
     if not dates:
         return {"dates": [], "total": [], "theme": [], "theme_name": None}
@@ -660,15 +836,18 @@ def prism(theme: str | None = None, date: str | None = None,
             r = c.execute("SELECT name FROM lu_themes WHERE board=? ORDER BY date DESC LIMIT 1",
                           (board,)).fetchone()
         name = r["name"] if r else board
-    totals = {r["date"]: int(r["total_zt"] or 0) for r in _meta_rows(dates)}
-    tseries = {b: v["zt"] for b, v in _theme_series([board] if board else [], dates).items()}
-    tvals = tseries.get(board, [0] * len(dates))
+    totals = {r["date"]: int((r["total_ext"] if mode == "ext" else r["total_zt"]) or 0)
+              for r in _meta_rows(dates)}
+    tseries = _theme_series([board] if board else [], dates, mode).items() if board else []
+    tmap = {b: v["zt"] for b, v in tseries}
+    tvals = tmap.get(board, [0] * len(dates))
     return {
         "dates": dates,
         "total": [totals.get(x, 0) for x in dates],
         "theme": tvals,
         "theme_board": board or None,
         "theme_name": name or None,
+        "mode": mode,
     }
 
 
@@ -677,13 +856,18 @@ def _meta_rows(dates: list[str]) -> list[sqlite3.Row]:
         return []
     q = ",".join("?" * len(dates))
     with _conn() as c:
-        return c.execute(f"SELECT date, total_zt FROM lu_meta WHERE date IN ({q})",
-                         dates).fetchall()
+        return c.execute(
+            f"SELECT date, total_zt, total_ext FROM lu_meta WHERE date IN ({q})",
+            dates).fetchall()
 
 
 def pool(date: str | None = None, *, theme: str | None = None,
-         kind: str = "all") -> dict[str, Any]:
-    """个股池。kind: all=全市场涨停 / theme=该主题涨停 / broken=该主题炸板 / lan=该主题烂板。"""
+         kind: str = "all", mode: str = "zt") -> dict[str, Any]:
+    """个股池。kind: all=全部涨停 / zt=该主题涨停 / broken=该主题炸板 / lan=该主题烂板。
+
+    mode=ext（扩充涨停）时把「涨幅 > 9.9% 但没封板」的个股也算进来（`sealed=False`）。
+    """
+    mode = mode if mode in MODES else "zt"
     d = date or _latest_date()
     if not d:
         return {"error": "尚未采集到涨停数据", "date": None, "items": []}
@@ -696,28 +880,31 @@ def pool(date: str | None = None, *, theme: str | None = None,
                 "ORDER BY zbc DESC", (d,)).fetchall()
         items = [{"code": r["code"], "name": r["name"], "reason": r["hybk"],
                   "lbc": 0, "zbc": int(r["zbc"] or 0), "fund": None,
-                  "pct": r["pct"], "kind": "broken"} for r in rows]
+                  "pct": r["pct"], "kind": "broken", "sealed": False} for r in rows]
         if kind == "lan":
             items = [x for x in items if x["zbc"] >= 3]
         if theme:
             codes = _theme_codes(d, theme)
             items = [x for x in items if x["code"] in codes]
-        return {"date": d, "kind": kind, "items": items, "theme": theme}
+        return {"date": d, "kind": kind, "items": items, "theme": theme, "mode": mode}
 
-    sql = ("SELECT p.code, p.name, p.lbc, p.fund, p.fbt, p.zbc, p.hybk, p.pct, p.reason "
-           "FROM lu_pool p WHERE p.date=?")
+    sql = ("SELECT p.code, p.name, p.lbc, p.fund, p.fbt, p.zbc, p.hybk, p.pct, "
+           "p.reason, p.sealed FROM lu_pool p WHERE p.date=?")
     args: list[Any] = [d]
+    if mode == "zt":
+        sql += " AND p.sealed=1"
     if theme:
-        sql += (" AND p.code IN (SELECT code FROM lu_stock_concepts WHERE date=? AND board=?)")
+        sql += " AND p.code IN (SELECT code FROM lu_stock_concepts WHERE date=? AND board=?)"
         args += [d, theme]
-    sql += " ORDER BY p.lbc DESC, p.fund DESC"
+    sql += " ORDER BY p.sealed DESC, p.lbc DESC, p.fund DESC, p.pct DESC"
     with _conn() as c:
         rows = c.execute(sql, args).fetchall()
     items = [{"code": r["code"], "name": r["name"], "reason": r["reason"],
               "lbc": int(r["lbc"] or 1), "zbc": int(r["zbc"] or 0), "fund": r["fund"],
               "fbt": int(r["fbt"] or 0), "pct": r["pct"], "hybk": r["hybk"],
-              "kind": "zt"} for r in rows]
-    return {"date": d, "kind": "theme" if theme else "all", "items": items, "theme": theme}
+              "sealed": bool(r["sealed"]), "kind": "zt"} for r in rows]
+    return {"date": d, "kind": "theme" if theme else "all", "items": items,
+            "theme": theme, "mode": mode}
 
 
 def _theme_codes(date: str, board: str) -> set[str]:

@@ -22,10 +22,11 @@ router = APIRouter(prefix="/api/limitup")
 @router.get("/overview")
 async def overview(date: str | None = Query(None, description="YYYYMMDD，默认库内最新交易日"),
                    days: int = Query(11, ge=3, le=60, description="周期表展示的交易日数"),
-                   top: int = Query(10, ge=3, le=20, description="每天取前 N 个主题")):
-    """周期表矩阵 + 当日主题榜（含等级/扩张/高潮/三共振/资金四列）。"""
+                   top: int = Query(15, ge=3, le=30, description="每天取前 N 个主题"),
+                   mode: str = Query("zt", description="zt=东财涨停池 / ext=扩充涨停（涨幅>9.9%）")):
+    """周期表矩阵 + 当日主题榜（含等级/扩张/高潮/三共振/资金四列/综合排名热度）。"""
     try:
-        return await asyncio.to_thread(lu.overview, date, days=days, top=top)
+        return await asyncio.to_thread(lu.overview, date, days=days, top=top, mode=mode)
     except Exception as exc:  # noqa: BLE001
         log.warning("涨停棱镜 overview 失败: %s", exc)
         return {"error": str(exc), "matrix": [], "themes": [], "dates": [], "tiers": lu.TIERS}
@@ -34,10 +35,11 @@ async def overview(date: str | None = Query(None, description="YYYYMMDD，默认
 @router.get("/prism")
 async def prism(theme: str | None = Query(None, description="主题板块代码（BKxxxx）"),
                 date: str | None = Query(None),
-                days: int = Query(25, ge=10, le=90)):
+                days: int = Query(25, ge=10, le=90),
+                mode: str = Query("zt", description="zt=东财涨停池 / ext=扩充涨停")):
     """棱镜图：全市场涨停数（黄线）+ 该主题涨停数（红面积）。"""
     try:
-        return await asyncio.to_thread(lu.prism, theme, date, days)
+        return await asyncio.to_thread(lu.prism, theme, date, days, mode)
     except Exception as exc:  # noqa: BLE001
         log.warning("涨停棱镜 prism 失败: %s", exc)
         return {"error": str(exc), "dates": [], "total": [], "theme": []}
@@ -46,10 +48,11 @@ async def prism(theme: str | None = Query(None, description="主题板块代码�
 @router.get("/pool")
 async def pool(date: str | None = Query(None),
                theme: str | None = Query(None, description="按主题过滤（板块代码）"),
-               kind: str = Query("all", description="all=全市场涨停 / zt=主题涨停 / broken=炸板 / lan=烂板")):
+               kind: str = Query("all", description="all=全市场涨停 / zt=主题涨停 / broken=炸板 / lan=烂板"),
+               mode: str = Query("zt", description="zt=东财涨停池 / ext=扩充涨停")):
     """个股池：涨停（含原因/连板/封单额）、炸板、烂板。"""
     try:
-        return await asyncio.to_thread(lu.pool, date, theme=theme, kind=kind)
+        return await asyncio.to_thread(lu.pool, date, theme=theme, kind=kind, mode=mode)
     except Exception as exc:  # noqa: BLE001
         log.warning("涨停棱镜 pool 失败: %s", exc)
         return {"error": str(exc), "items": []}

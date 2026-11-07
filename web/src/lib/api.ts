@@ -128,16 +128,16 @@ export const api = {
   wangwangHealth: () => get("/wangwang/health"),
 
   // 涨停棱镜（自包含：data/limitup.db，涨停池 + 主题聚合 + 棱镜图）
-  limitupOverview: (date?: string, days = 11, top = 10) =>
-    get(`/limitup/overview?days=${days}&top=${top}${date ? `&date=${date}` : ""}`),
-  limitupPrism: (theme?: string, date?: string, days = 25) => {
+  limitupOverview: (date?: string, days = 11, top = 15, mode = "zt") =>
+    get(`/limitup/overview?days=${days}&top=${top}&mode=${mode}${date ? `&date=${date}` : ""}`),
+  limitupPrism: (theme?: string, date?: string, days = 25, mode = "zt") => {
     const qs = [theme ? `theme=${encodeURIComponent(theme)}` : "",
-      date ? `date=${date}` : "", `days=${days}`].filter(Boolean).join("&");
+      date ? `date=${date}` : "", `days=${days}`, `mode=${mode}`].filter(Boolean).join("&");
     return get(`/limitup/prism?${qs}`);
   },
-  limitupPool: (date?: string, theme?: string, kind = "all") => {
+  limitupPool: (date?: string, theme?: string, kind = "all", mode = "zt") => {
     const qs = [date ? `date=${date}` : "", theme ? `theme=${encodeURIComponent(theme)}` : "",
-      `kind=${kind}`].filter(Boolean).join("&");
+      `kind=${kind}`, `mode=${mode}`].filter(Boolean).join("&");
     return get(`/limitup/pool?${qs}`);
   },
   limitupHealth: () => get("/limitup/health"),

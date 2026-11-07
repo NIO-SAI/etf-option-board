@@ -105,6 +105,31 @@ def test_aggregate_themes_counts():
     assert out[0]["name"] == "光伏概念"
 
 
+def test_composite_rank_prefers_recent_and_normalizes():
+    # 同期总量相同，但 A 集中在最近一天 → 综合排名更高
+    heat = lu.composite_rank({
+        "A": [0, 0, 0, 10],
+        "B": [10, 0, 0, 0],
+        "C": [5, 5, 5, 5],
+    })
+    assert heat["A"] > heat["B"]
+    # 最强的一个恒为 1.0，且全部落在 0~1
+    assert max(heat.values()) == 1.0
+    assert all(0.0 <= v <= 1.0 for v in heat.values())
+    # 空输入不炸
+    assert lu.composite_rank({}) == {}
+
+
+def test_composite_rank_keeps_colour_spread():
+    """130+ 个概念时，前几名不能全挤在 0.95 以上（否则颜色看不出区别）。"""
+    series = {f"t{i}": [max(0, 20 - i)] for i in range(60)}
+    heat = lu.composite_rank(series)
+    top = sorted(heat.values(), reverse=True)
+    assert top[0] == 1.0
+    assert top[4] < 0.9          # 第 5 名明显淡于第 1 名
+    assert top[-1] < 0.1
+
+
 def test_aggregate_themes_keeps_zt_only_theme():
     """只有涨停没有炸板的主题也要出现在榜里（zb/lan 为 0）。"""
     out = lu.aggregate_themes(
