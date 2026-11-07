@@ -49,7 +49,7 @@ function heatStyle(heat: number, selected: boolean) {
 
 /* ============================ 页面 ============================ */
 /**
- * 涨停棱镜：沪深 A 股涨停板扫描 + 主题分类。
+ * 涨停复盘（页面名）：沪深 A 股涨停板扫描 + 主题分类。
  *
  * 四个面板（复刻经传「涨停棱镜」）：
  * ① 涨停周期表：近 N 个交易日 × 每日 Top10 主题，点单元格选主题；
@@ -171,7 +171,7 @@ export function LimitUpPage() {
     <div className="flex flex-col gap-3 px-4 pb-6 pt-3">
       {/* 顶栏 */}
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-base font-semibold">涨停棱镜</h2>
+        <h2 className="text-base font-semibold">涨停复盘</h2>
         <span className="text-[11px] text-muted-foreground">
           {ext ? "扩充涨停" : "沪深涨停"} <b className="text-foreground">{ext
             ? (stats.total_ext ?? 0) : (stats.total_zt ?? 0)}</b> 家
