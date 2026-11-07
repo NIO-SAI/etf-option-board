@@ -114,7 +114,7 @@ def test_backlog_does_not_starve_other_transports(monkeypatch):
         await v6.acquire()
         await v6.acquire()          # IPv6 通道积压
 
-        async def fake_curl(url, params=None, referer=None):
+        async def fake_curl(url, params=None, referer=None, headers=None):
             return {"hot": True}
 
         monkeypatch.setattr(em, "_curl_json", fake_curl)
