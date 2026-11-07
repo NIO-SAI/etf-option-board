@@ -41,6 +41,7 @@ import datetime as dt
 import json
 import logging
 import os
+import re
 import sqlite3
 from typing import Any, Iterable
 
@@ -56,6 +57,7 @@ _ZB_URL = "https://push2ex.eastmoney.com/getTopicZBPool"
 _CLIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 _F10_URL = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
 _THS_URL = "https://data.10jqka.com.cn/dataapi/limit_up/limit_up_pool"
+_THS_POOL_URL = _THS_URL   # 同花顺涨停池（东财窗口外的历史兜底）
 
 _EM_UT = "7eea3edcaed734bea9cbfc24409ed989"
 _THS_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -78,6 +80,32 @@ _NOISE_EXACT = {
 }
 _NOISE_SUBSTR = ("预增", "预减", "预亏", "扭亏", "中报", "三季报", "年报", "季报",
                  "高送转", "填权", "摘帽", "举牌", "昨日", "打板", "表现", "连板", "重仓")
+
+
+_EXCLUDE_FILE = os.path.join(_ROOT, "data", "limitup_exclude.json")
+DEFAULT_EXCLUDE = ["央国企改革"]
+
+
+def excluded_names() -> set[str]:
+    """主题排除名单（`data/limitup_exclude.json`，默认排除「央国企改革」）。
+
+    **读时过滤**：改名单立刻生效、不用重采；文件不存在时自动按默认值写一个出来。
+    名单是"概念名"而不是板块代码，改起来直观（编辑 json 加一行即可）。
+    """
+    try:
+        with open(_EXCLUDE_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return {str(x).strip() for x in data if str(x).strip()}
+    except FileNotFoundError:
+        try:
+            with open(_EXCLUDE_FILE, "w", encoding="utf-8") as f:
+                json.dump(DEFAULT_EXCLUDE, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+    except (OSError, ValueError):
+        pass
+    return set(DEFAULT_EXCLUDE)
 
 
 def _is_noise(name: str) -> bool:
@@ -178,7 +206,7 @@ def build_matrix(per_day: list[dict[str, Any]], top: int = 10) -> list[list[dict
 _SEQ = """
 CREATE TABLE IF NOT EXISTS lu_pool(
   date TEXT, code TEXT, name TEXT, lbc INTEGER, fund REAL, fbt INTEGER, lbt INTEGER,
-  zbc INTEGER, hybk TEXT, pct REAL, amount REAL, reason TEXT, sealed INTEGER,
+  zbc INTEGER, hybk TEXT, pct REAL, amount REAL, reason TEXT, sealed INTEGER, src TEXT,
   PRIMARY KEY(date, code));
 CREATE TABLE IF NOT EXISTS lu_broken(
   date TEXT, code TEXT, name TEXT, zbc INTEGER, pct REAL, hybk TEXT,
@@ -220,7 +248,7 @@ def _migrate(c: sqlite3.Connection) -> None:
         for t in ("lu_pool", "lu_broken", "lu_stock_concepts", "lu_themes",
                   "lu_boards", "lu_meta"):
             c.execute(f"DROP TABLE IF EXISTS {t}")
-    elif pc and "sealed" not in pc:
+    elif pc and ("sealed" not in pc or "src" not in pc):
         for t in ("lu_pool", "lu_themes", "lu_meta"):
             c.execute(f"DROP TABLE IF EXISTS {t}")
 
@@ -306,6 +334,56 @@ async def _concept_boards() -> dict[str, dict[str, Any]]:
         if not diff or len(out) >= total:
             break
     return out
+
+
+async def _ths_pool(date: str) -> list[dict[str, Any]]:
+    """同花顺涨停池 —— 东财回溯窗口（约 20 个自然日）之外只能用它。
+
+    返回与东财同构的字段：`lbc`（连板数，从 `high_days`「3天3板」解析）、
+    `fund`（封单额 `order_amount`，单位元，与东财 `fund` 同口径）、
+    `reason`（`reason_type`，如「光伏银粉+低温光伏浆料+电子皮肤」）。
+    **涨停原因这里最全**，东财没有这个字段。
+    """
+    out: list[dict[str, Any]] = []
+    total = None
+    for page in range(1, 6):
+        data = await em.get_json(
+            _THS_POOL_URL,
+            {"page": page, "limit": 200,
+             "field": "199112,10,9001,330329,133970,9002,330325",
+             "filter": "HS,GEM2STAR", "order_field": "199112", "order_type": 0,
+             "date": date},
+            ttl=120, referer="https://data.10jqka.com.cn/", tries=2,
+            headers={"User-Agent": _THS_UA})
+        body = (data or {}).get("data") or {}
+        info = body.get("info") or []
+        if not info:
+            break
+        for r in info:
+            code = str(r.get("code") or "")
+            if not code:
+                continue
+            out.append({
+                "code": code, "name": r.get("name") or code,
+                "lbc": _lbc_of(r.get("high_days")),
+                "fund": _f(r.get("order_amount")),
+                "fbt": int(_f(r.get("first_limit_up_time"), 0) or 0),
+                "lbt": int(_f(r.get("last_limit_up_time"), 0) or 0),
+                "zbc": int(_f(r.get("open_num"), 0) or 0),
+                "hybk": "", "pct": _f(r.get("change_rate")), "amount": None,
+                "reason": r.get("reason_type") or "", "sealed": 1,
+                "src": "ths", "mkt": _mkt_of(code),
+            })
+        total = int(((body.get("page") or {}).get("total") or 0))
+        if len(out) >= total:
+            break
+    return out
+
+
+def _lbc_of(high_days: Any) -> int:
+    """同花顺 `high_days`：「首板」→ 1，「3天3板」→ 3，「5天4板」→ 4。"""
+    m = re.search(r"(\d+)\s*板", str(high_days or ""))
+    return int(m.group(1)) if m else 1
 
 
 async def _expanded_rows(date: str) -> list[dict[str, Any]]:
@@ -502,8 +580,15 @@ def _write_snapshot(date: str, *, pool: list[dict[str, Any]],
                     themes: dict[str, list[dict[str, Any]]],
                     concepts: dict[str, list[dict[str, Any]]],
                     boards: dict[str, dict[str, Any]],
-                    total_zt: int, total_ext: int, finalized: bool) -> None:
-    """一次写入两种口径（`themes` 的键是 mode）。"""
+                    total_zt: int, total_ext: int, finalized: bool,
+                    write_boards: bool = True) -> None:
+    """一次写入两种口径（`themes` 的键是 mode）。
+
+    `boards` 必须**永远传全量概念名单**：它既用于 `lu_boards` 资金快照（`write_boards`
+    控制写不写），也用于把概念名映射成板块代码（`lu_stock_concepts.board`）。
+    历史日期不写资金列时若把 `boards` 传空，概念行的 board 会退化成中文名，
+    导致「按主题筛个股池」永远筛不到（2026-11-07 踩过）。
+    """
     now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with _conn() as c:
         c.execute("DELETE FROM lu_pool WHERE date=?", (date,))
@@ -512,9 +597,10 @@ def _write_snapshot(date: str, *, pool: list[dict[str, Any]],
         c.execute("DELETE FROM lu_themes WHERE date=?", (date,))
         c.execute("DELETE FROM lu_boards WHERE date=?", (date,))
         c.executemany(
-            "INSERT OR REPLACE INTO lu_pool VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO lu_pool VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(date, p["code"], p["name"], p["lbc"], p["fund"], p["fbt"], p["lbt"],
-              p["zbc"], p["hybk"], p["pct"], p["amount"], p["reason"], p["sealed"])
+              p["zbc"], p["hybk"], p["pct"], p["amount"], p["reason"], p["sealed"],
+              p.get("src") or "em")
              for p in pool])
         c.executemany(
             "INSERT OR REPLACE INTO lu_broken VALUES(?,?,?,?,?,?)",
@@ -531,10 +617,11 @@ def _write_snapshot(date: str, *, pool: list[dict[str, Any]],
                       t["pct"], t["main"], t["d3"], t["d5"], t["ratio"]) for t in lst]
         c.executemany(
             "INSERT OR REPLACE INTO lu_themes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
-        c.executemany(
-            "INSERT OR REPLACE INTO lu_boards VALUES(?,?,?,?,?,?,?,?)",
-            [(date, b["code"], b["name"], b.get("pct"), b.get("main"),
-              b.get("d3"), b.get("d5"), b.get("ratio")) for b in boards.values()])
+        if write_boards and boards:
+            c.executemany(
+                "INSERT OR REPLACE INTO lu_boards VALUES(?,?,?,?,?,?,?,?)",
+                [(date, b["code"], b["name"], b.get("pct"), b.get("main"),
+                  b.get("d3"), b.get("d5"), b.get("ratio")) for b in boards.values()])
         c.execute("INSERT OR REPLACE INTO lu_meta VALUES(?,?,?,?,?,?)",
                   (date, now, total_zt, total_ext, len(broken), 1 if finalized else 0))
         # 裁剪老数据
@@ -546,32 +633,55 @@ def _write_snapshot(date: str, *, pool: list[dict[str, Any]],
 
 # ============================ 采集入口 =========================================
 async def collect(date: str, *, finalize: bool = False, with_funds: bool = True) -> dict[str, Any]:
-    """抓取并落库某一天的快照（两种口径：东财涨停池 / 扩充涨停）。上游全挂时不写库。"""
+    """抓取并落库某一天的快照（两种口径：东财涨停池 / 扩充涨停）。
+
+    涨停池优先东财（字段最全）；东财对 20 个自然日前一律返回空，这时**自动退回同花顺**，
+    并把 `lu_pool.src` 标成 `ths`。同花顺没有历史炸板池（接口 404），所以老日期的
+    炸板/烂板为空、三共振判定不成立——这是上游能拿到的极限，不是 bug。
+    """
     zt = await _zt_pool(date)
-    rows = zt["rows"]
-    if not rows:
+    src = "em"
+    base: list[dict[str, Any]] = []
+    for r in zt["rows"]:
+        base.append({
+            "code": str(r.get("c")), "name": r.get("n"),
+            "lbc": int(_f(r.get("lbc"), 1) or 1), "fund": _f(r.get("fund")),
+            "fbt": int(_f(r.get("fbt"), 0) or 0), "lbt": int(_f(r.get("lbt"), 0) or 0),
+            "zbc": int(_f(r.get("zbc"), 0) or 0), "hybk": r.get("hybk"),
+            "pct": _f(r.get("zdp")), "amount": _f(r.get("amount")),
+            "reason": "", "sealed": 1, "src": "em",
+            "mkt": int(_f(r.get("m"), 0) or 0),
+        })
+    if not base:
+        base = await _ths_pool(date)
+        if base:
+            src = "ths"
+    if not base:
         return {"error": "涨停池为空（非交易日或上游不可用）", "date": date, "total": 0}
 
-    zb_raw = await _zb_pool(date)
+    zb_raw = await _zb_pool(date) if src == "em" else []
     # 概念名单必须每次都拉（用于选股归属过滤 + 板块代码）；with_funds 只决定「资金四列」是否落库，
     # 因为 clist 给的是"当下"的资金，标到历史日期上是错的。
     boards = await _concept_boards()
     concept_names = set(boards)
 
-    # 涨停池（sealed=1）+ 扩充涨停（涨幅 > 9.9% 但没在涨停池里 → sealed=0）
-    expanded = await _expanded_rows(date)
-    ext_only = [r for r in expanded if str(r["code"]) not in {str(x.get("c")) for x in rows}]
+    # 扩充涨停只在「实时采集」时才拉：clist 给的是当下的涨幅，套到历史日期上一定是错的。
+    expanded = await _expanded_rows(date) if (src == "em" and with_funds) else []
+    sealed_codes = {b["code"] for b in base}
+    ext_only = [r for r in expanded if r["code"] not in sealed_codes]
 
     # 概念归属：只查当天涨停/炸板的票（并发 8）
     codes: dict[str, int] = {}
-    for r in rows:
-        codes[str(r.get("c"))] = int(_f(r.get("m"), 0) or 0)
+    for b in base:
+        codes[b["code"]] = int(b["mkt"])
     for r in zb_raw:
         codes.setdefault(str(r.get("c")), int(_f(r.get("m"), 0) or 0))
     for r in ext_only:
         codes.setdefault(r["code"], _mkt_of(r["code"]))
 
-    reasons = await _ths_reasons(date)
+    reasons = await _ths_reasons(date) if src == "em" else {}
+    if src == "ths":                      # 同花顺的行自带 reason_type，不必再查
+        reasons = {}
 
     sem = asyncio.Semaphore(8)
 
@@ -589,23 +699,22 @@ async def collect(date: str, *, finalize: bool = False, with_funds: bool = True)
             concepts[p[0]] = p[1]
 
     pool = []
-    for r in rows:
-        code = str(r.get("c"))
-        lbc = int(_f(r.get("lbc"), 1) or 1)
+    for b in base:
         pool.append({
-            "code": code, "name": r.get("n"), "lbc": lbc,
-            "fund": _f(r.get("fund")), "fbt": int(_f(r.get("fbt"), 0) or 0),
-            "lbt": int(_f(r.get("lbt"), 0) or 0), "zbc": int(_f(r.get("zbc"), 0) or 0),
-            "hybk": r.get("hybk"), "pct": _f(r.get("zdp")), "amount": _f(r.get("amount")),
-            "reason": reasons.get(code) or r.get("hybk") or "", "sealed": 1,
+            "code": b["code"], "name": b["name"], "lbc": b["lbc"], "fund": b["fund"],
+            "fbt": b["fbt"], "lbt": b["lbt"], "zbc": b["zbc"], "hybk": b["hybk"],
+            "pct": b["pct"], "amount": b["amount"],
+            "reason": b.get("reason") or reasons.get(b["code"]) or b["hybk"] or "",
+            "sealed": 1, "src": b["src"],
         })
-    # 扩充涨停：涨幅已超 9.9% 但没封板（lbc 记 1，封板金额/时间留空，标注 sealed=0）
+    # 扩充涨停：涨幅已超 9.9% 但没封板（封板金额/时间留空，标 sealed=0）
     for r in ext_only:
         pool.append({
             "code": r["code"], "name": r["name"], "lbc": 1, "fund": None,
             "fbt": 0, "lbt": 0, "zbc": 0, "hybk": "", "pct": r["pct"],
-            "amount": None, "reason": reasons.get(r["code"]) or "涨幅超9.9%（未封板）",
-            "sealed": 0,
+            "amount": None,
+            "reason": reasons.get(r["code"]) or "涨幅超9.9%（未封板）",
+            "sealed": 0, "src": "em",
         })
 
     broken = []
@@ -626,15 +735,16 @@ async def collect(date: str, *, finalize: bool = False, with_funds: bool = True)
             for t in lst:
                 t.update({"pct": None, "main": None, "d3": None, "d5": None, "ratio": None})
     await asyncio.to_thread(_write_snapshot, date, pool=pool, broken=broken,
-                            themes=themes, concepts=concepts,
-                            boards=boards if with_funds else {},
+                            themes=themes, concepts=concepts, boards=boards,
                             total_zt=zt["tc"] or len(sealed_pool),
-                            total_ext=len(pool), finalized=finalize)
-    log.info("涨停棱镜 %s：涨停 %d / 扩充 %d / 炸板 %d / 主题 %d%s", date, len(sealed_pool),
-             len(pool), len(broken), len(themes["zt"]), "（定稿）" if finalize else "")
-    return {"date": date, "total": zt["tc"] or len(sealed_pool), "ext_total": len(pool),
-            "broken": len(broken), "themes": len(themes["zt"]),
-            "ext_themes": len(themes["ext"])}
+                            total_ext=len(pool), finalized=finalize,
+                            write_boards=with_funds)
+    log.info("涨停棱镜 %s[%s]：涨停 %d / 扩充 %d / 炸板 %d / 主题 %d%s", date, src,
+             len(sealed_pool), len(pool), len(broken), len(themes["zt"]),
+             "（定稿）" if finalize else "")
+    return {"date": date, "src": src, "total": zt["tc"] or len(sealed_pool),
+            "ext_total": len(pool), "broken": len(broken),
+            "themes": len(themes["zt"]), "ext_themes": len(themes["ext"])}
 
 
 def _mkt_of(code: str) -> int:
@@ -745,6 +855,12 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 15,
     for r in rows:
         by_date[r["date"]].append({"board": r["board"], "name": r["name"],
                                    "zt": int(r["zt"] or 0), "max_lbc": int(r["max_lbc"] or 0)})
+    # 主题排除名单（默认排除「央国企改革」）：在算热度和建矩阵之前就剔掉，
+    # 这样剩余主题的深浅仍然按"当前可见集合"归一，颜色不会被一个被排除的巨无霸压扁。
+    excl = excluded_names()
+    if excl:
+        for x in cols:
+            by_date[x] = [t for t in by_date[x] if t["name"] not in excl]
     per_day = [{"date": x, "themes": by_date[x]} for x in cols]
 
     # 统计期间的综合排名（颜色深浅）：窗口 = 周期表实际展示的那些交易日
@@ -808,6 +924,65 @@ def overview(date: str | None = None, *, days: int = 11, top: int = 15,
         "matrix": matrix,
         "themes": themes,
         "tiers": TIERS,
+        "excluded": sorted(excl),
+        "stats": {
+            "total_zt": int(meta["total_zt"] or 0) if meta else 0,
+            "total_ext": int(meta["total_ext"] or 0) if meta else 0,
+            "total_zb": int(meta["total_zb"] or 0) if meta else 0,
+            "theme_count": len(themes),
+            "finalized": bool(meta["finalized"]) if meta else False,
+            "updated_at": meta["updated_at"] if meta else None,
+        },
+    }
+
+
+def themes_of(date: str | None = None, mode: str = "zt") -> dict[str, Any]:
+    """某一天的主题榜（供"点周期表单元格 → 右侧切到那一天"用）。
+
+    周期表的窗口锚定在页面选的日期上、不跟着点走，所以右侧要单独取这一天的主题榜。
+    """
+    mode = mode if mode in MODES else "zt"
+    dates = _dates(KEEP_DAYS)
+    d = date or (dates[-1] if dates else None)
+    if not d:
+        return {"error": "尚未采集到涨停数据", "date": None, "themes": []}
+
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT board, name, zt, zb, max_lbc, lianban, first_board, pct, main, d3, d5, ratio "
+            "FROM lu_themes WHERE mode=? AND date=?", (mode, d)).fetchall()
+    excl = excluded_names()
+    rows = [r for r in rows if r["name"] not in excl]
+    rows.sort(key=lambda r: (-int(r["zt"] or 0), -int(r["max_lbc"] or 0), r["name"] or ""))
+
+    win = dates[-20:] if len(dates) >= 20 else dates
+    streak = _streak_map(win, mode)
+    boards = [r["board"] for r in rows]
+    series = _theme_series(boards, dates, mode)
+
+    themes = []
+    for r in rows:
+        sr = series.get(r["board"]) or {}
+        zt_series = sr.get("zt") or [0]
+        themes.append({
+            "board": r["board"], "name": r["name"], "zt": int(r["zt"] or 0),
+            "max_lbc": int(r["max_lbc"] or 0),
+            "tier": tier_of(int(r["zt"] or 0)),
+            "count_20d": streak.get(r["board"], int(r["zt"] or 0)),
+            "expanding": is_expanding(zt_series),
+            "climax": is_climax(zt_series),
+            "resonance": is_resonance(sr.get("first_board") or [0],
+                                      sr.get("lianban") or [0],
+                                      sr.get("zb") or [0]),
+            "type": classify_theme(r["name"] or ""),
+            "pct": r["pct"], "main": r["main"], "d3": r["d3"], "d5": r["d5"],
+            "ratio": r["ratio"],
+        })
+
+    with _conn() as c:
+        meta = c.execute("SELECT * FROM lu_meta WHERE date=?", (d,)).fetchone()
+    return {
+        "date": d, "mode": mode, "themes": themes, "excluded": sorted(excl),
         "stats": {
             "total_zt": int(meta["total_zt"] or 0) if meta else 0,
             "total_ext": int(meta["total_ext"] or 0) if meta else 0,
@@ -942,29 +1117,40 @@ def _trade_date(now: dt.datetime | None = None) -> str | None:
 async def _backfill(days: int = BACKFILL_DAYS) -> None:
     """启动时补齐最近 `days` 个交易日。已有数据的日期跳过。"""
     have = set(_dates(KEEP_DAYS))
+    need = max(0, days - len(have))     # 「库内不足 days 个交易日就补够」，不是每次加 days 个
+    if need <= 0:
+        return
     empties = 0
     now = dt.datetime.now()
     todo: list[str] = []
     probe = now
-    while len(todo) < days and probe > now - dt.timedelta(days=days * 2 + 15):
+    while len(todo) < need + 10 and probe > now - dt.timedelta(days=days * 3 + 30):
         if probe.weekday() < 5:
             d = probe.strftime("%Y%m%d")
             if d not in have:
                 todo.append(d)
         probe -= dt.timedelta(days=1)
+    got = 0
     for d in todo:
+        if got >= need:
+            break
         try:
             r = await collect(d, with_funds=False)
             if r.get("error"):
-                # 东财涨停池的回溯窗口实测只有约 20 个自然日，再往前一律空。
-                # 连续 3 个空日期就停，别在每次重启时白跑十几轮。
+                # 空日期可能是节假日，也可能是同花顺限流 —— 隔一会儿重试一次再判死。
+                await asyncio.sleep(1.2)
+                r = await collect(d, with_funds=False)
+            if r.get("error"):
                 empties += 1
                 log.info("回补 %s 跳过：%s", d, r["error"])
-                if empties >= 3:
-                    log.info("涨停棱镜回补提前结束（上游历史窗口已到）")
+                # 国庆这类连休有 5 个工作日是空的，阈值必须大于它，否则会把好数据也截掉。
+                if empties >= 8:
+                    log.info("涨停棱镜回补提前结束（连续空日期过多，上游到底了）")
                     break
             else:
                 empties = 0
+                got += 1
+            await asyncio.sleep(0.4)      # 对同花顺温柔一点，别触发风控
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001

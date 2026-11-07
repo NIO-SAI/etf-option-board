@@ -73,15 +73,30 @@ export function LimitUpPage() {
   /** 扩充涨停：涨幅 > 9.9% 也算涨停（含未封板） */
   const [ext, setExt] = useState(false);
   const [poolTab, setPoolTab] = useState<string>("theme");
+  /** 点周期表单元格选中的「那一天」：右侧主题榜/个股池跟着它走。
+   *  与顶部日期选择器（date，只决定周期表的窗口）分开，点中间某列不会让整张表跳走。 */
+  const [cellDate, setCellDate] = useState("");
 
   const mode = ext ? "ext" : "zt";
   const { data: ov, refresh: refreshOv } = usePolling(
     () => api.limitupOverview(date || undefined, days, 15, mode), 120_000, [date, days, mode]);
   const [busy, setBusy] = useState(false);
 
-  const themes: ThemeRow[] = ov?.themes ?? [];
   const dates: string[] = ov?.dates ?? [];
+  /** 周期表窗口的末日（顶部日期选择器决定） */
   const curDate: string = ov?.date ?? "";
+  /** 右侧面板实际看的日期：点过单元格就是单元格那天，否则跟窗口末日 */
+  const focusDate = cellDate || curDate;
+  const needAlt = !!cellDate && cellDate !== curDate;
+
+  const { data: altThemes } = usePolling(
+    () => (needAlt ? api.limitupThemes(cellDate, mode) : Promise.resolve(null)),
+    120_000, [cellDate, curDate, mode]);
+
+  const themes: ThemeRow[] = needAlt ? (altThemes?.themes ?? []) : (ov?.themes ?? []);
+  /** 主题排除名单（`data/limitup_exclude.json`，默认排除央国企改革） */
+  const excludedNames: string[] = (ov?.excluded ?? altThemes?.excluded ?? []) as string[];
+  const focusStats = needAlt ? (altThemes?.stats ?? {}) : (ov?.stats ?? {});
 
   // 选中的主题：默认当日第一名
   useEffect(() => {
@@ -93,21 +108,21 @@ export function LimitUpPage() {
   const themeName = themes.find((t) => t.board === theme)?.name ?? "";
 
   const { data: prism } = usePolling(
-    () => api.limitupPrism(theme || undefined, curDate || undefined, 25, mode),
-    120_000, [theme, curDate, mode]);
+    () => api.limitupPrism(theme || undefined, focusDate || undefined, 25, mode),
+    120_000, [theme, focusDate, mode]);
 
   /** 棱镜标题里当前日期的主题涨停家数（取所选日期那一格，不是序列末尾——切历史日期时两者不同） */
   const prismAtDate = (() => {
     const ds: string[] = prism?.dates ?? [];
-    const i = ds.indexOf(curDate);
+    const i = ds.indexOf(focusDate);
     return i >= 0 ? (prism?.theme?.[i] ?? 0) : (prism?.theme?.[ds.length - 1] ?? 0);
   })();
 
   const poolKind = poolTab === "theme" ? "zt" : poolTab;
   const { data: pool } = usePolling(
-    () => api.limitupPool(curDate || undefined,
+    () => api.limitupPool(focusDate || undefined,
       poolTab === "all" ? undefined : theme || undefined, poolKind, mode),
-    120_000, [curDate, theme, poolTab, mode]);
+    120_000, [focusDate, theme, poolTab, mode]);
 
   /** 主题榜筛选（等级 / 类型 / 扩张·高潮·共振 / 去 ST） */
   const shownThemes = useMemo(() => themes.filter((t) => {
@@ -148,7 +163,8 @@ export function LimitUpPage() {
     }
   };
 
-  const stats = ov?.stats ?? {};
+  // 顶部统计跟着「右侧正在看的日期」走，避免点历史单元格后数字和主题榜对不上
+  const stats = focusStats;
   const rows = pool?.items ?? [];
 
   return (
@@ -172,6 +188,8 @@ export function LimitUpPage() {
             <option value={6}>近 6 日</option>
             <option value={11}>近 11 日</option>
             <option value={16}>近 16 日</option>
+            <option value={20}>近 20 日</option>
+            <option value={30}>近 30 日</option>
           </select>
           <select
             value={tier}
@@ -191,7 +209,7 @@ export function LimitUpPage() {
           </select>
           <select
             value={curDate}
-            onChange={(e) => setDate(e.target.value)}
+            onChange={(e) => { setDate(e.target.value); setCellDate(""); }}
             className="h-7 rounded border bg-background px-2 text-xs"
           >
             {(dates.length ? [...dates].reverse() : [curDate]).filter(Boolean).map((d) => (
@@ -232,6 +250,11 @@ export function LimitUpPage() {
           <input type="checkbox" checked={ext} onChange={(e) => setExt(e.target.checked)} />
           扩充涨停
         </label>
+        {excludedNames.length > 0 && (
+          <span title="改 data/limitup_exclude.json 可增删，改完刷新页面即生效（读时过滤）">
+            已排除：{excludedNames.join("、")}
+          </span>
+        )}
         <span className="ml-auto">数据源：东财涨停池 + 概念板块资金 · 涨停原因取自同花顺（失败降级行业名）</span>
       </div>
 
@@ -274,7 +297,7 @@ export function LimitUpPage() {
                           return (
                             <td
                               key={ci}
-                              onClick={() => cell && setTheme(cell.board)}
+                              onClick={() => { if (!cell) return; setTheme(cell.board); setCellDate(dates[ci]); }}
                               className={cn(
                                 "border-b px-1 py-[4px] text-center",
                                 cell ? "cursor-pointer" : "",
@@ -348,7 +371,8 @@ export function LimitUpPage() {
             <FrameHeader className="flex-row items-center gap-2">
               <FrameTitle>主题榜</FrameTitle>
               <span className="text-[10px] text-muted-foreground">
-                {shownThemes.length} 个主题{shownThemes.length > 40 ? "（显示前 40）" : ""} · 点行切换棱镜与个股池
+                <b className="text-foreground">{focusDate || "-"}</b> · {shownThemes.length} 个主题
+                {shownThemes.length > 40 ? "（显示前 40）" : ""} · 点单元格切换日期，点行切换主题
               </span>
             </FrameHeader>
             <FramePanel className="max-h-[420px] overflow-auto p-0">

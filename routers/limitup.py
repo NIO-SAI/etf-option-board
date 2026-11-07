@@ -32,6 +32,17 @@ async def overview(date: str | None = Query(None, description="YYYYMMDD，默认
         return {"error": str(exc), "matrix": [], "themes": [], "dates": [], "tiers": lu.TIERS}
 
 
+@router.get("/themes")
+async def themes(date: str | None = Query(None, description="YYYYMMDD，默认库内最新交易日"),
+                 mode: str = Query("zt", description="zt=东财涨停池 / ext=扩充涨停")):
+    """某一天的主题榜（点周期表单元格时，右侧切到那一天用）。"""
+    try:
+        return await asyncio.to_thread(lu.themes_of, date, mode)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("涨停棱镜 themes 失败: %s", exc)
+        return {"error": str(exc), "themes": []}
+
+
 @router.get("/prism")
 async def prism(theme: str | None = Query(None, description="主题板块代码（BKxxxx）"),
                 date: str | None = Query(None),
