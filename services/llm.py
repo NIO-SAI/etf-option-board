@@ -128,6 +128,33 @@ def _compact(bundle: dict) -> dict:
     }
 
 
+def browser_context(bundle: dict) -> dict:
+    """只生成浏览器调用所需的提示词与规则，不读取密钥、不调用模型。"""
+    # 股指详情使用 advice 而不是 ETF 的 strategy；将已有结论翻译成同一约束，
+    # 避免接入浏览器模型后把「观望」或无期权的 IC 当成可开仓标的。
+    if bundle.get("kind") == "index" and not bundle.get("strategy"):
+        advice = bundle.get("advice") or {}
+        action = decision.STRATEGY_WAIT
+        if advice.get("action") == "买入" and advice.get("side") in ("call", "put"):
+            action = decision.STRATEGY_SINGLE_CALL if advice["side"] == "call" else decision.STRATEGY_SINGLE_PUT
+        bundle = {**bundle, "strategy": {"strategy": action, "reason": advice.get("reason")}}
+    user = ("以下是当前市场快照（JSON）。请给出今日日内期权交易决策，"
+            "严格按系统要求输出 JSON：\n" + json.dumps(_compact(bundle), ensure_ascii=False))
+    cap = (bundle.get("position") or {}).get("max_contracts")
+    return {
+        "system": _SYSTEM,
+        "user": user,
+        "guardrails": {
+            "action": decision.expected_action(bundle.get("strategy")),
+            "max_contracts": cap if type(cap) is int and cap >= 0 else None,
+            "action_labels": dict(decision.ACTION_LABELS),
+        },
+        "bundle_bias": bundle.get("bias"),
+        "signals": bundle.get("signals"),
+        "ts": bundle.get("ts"),
+    }
+
+
 def _http_error_text(r: httpx.Response) -> str:
     if r.status_code == 429:
         # 免费模型额度用尽：把恢复时间直白告诉用户，而不是一串原始 JSON
@@ -181,9 +208,7 @@ async def _cli_decide(prompt: str, timeout: int) -> str:
 
 
 async def decide(bundle: dict, timeout: int | None = None) -> dict:
-    payload = _compact(bundle)
-    user = ("以下是当前市场快照（JSON）。请给出今日日内期权交易决策，"
-            "严格按系统要求输出 JSON：\n" + json.dumps(payload, ensure_ascii=False))
+    user = browser_context(bundle)["user"]
     content = ""
     err = ""
     via = "api"

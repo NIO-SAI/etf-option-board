@@ -73,6 +73,14 @@ export default function App() {
     setDrawer(true); // 收起状态下点按钮 = 临时浮层，内容区不重排
   };
 
+  // 设置弹窗的分页（origin 新增：模型后端配置）
+  const [settingsTab, setSettingsTab] = useState<"trading" | "llm">("trading");
+  useEffect(() => {
+    const open = () => { setSettingsTab("llm"); setSettingsOpen(true); };
+    window.addEventListener("etf:open-llm-settings", open);
+    return () => window.removeEventListener("etf:open-llm-settings", open);
+  }, []);
+
   // 顶栏全局信息：所有页面都要看（外围市场 / 国家队评分 / 服务健康）
   const { data: health } = usePolling(() => api.health(), 60_000);
   const { data: external } = usePolling(() => api.external(), 30_000);
@@ -137,9 +145,10 @@ export default function App() {
           navOpen={inlineNav}
           onToggleNav={toggleNav}
           onRefresh={requestRefresh}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={() => { setSettingsTab("trading"); setSettingsOpen(true); }}
         />
-        <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        <SettingsDialog open={settingsOpen} initialTab={settingsTab}
+          onClose={() => setSettingsOpen(false)} />
 
         {/* 资金分时：四个子页的页内标签（路由仍是 #/board/*） */}
         {isBoardPage(page) ? <BoardSubNav page={page} /> : null}

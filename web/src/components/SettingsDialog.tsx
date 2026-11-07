@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, Tabs } from "@/components/ui/misc";
 import { api } from "@/lib/api";
+import { LlmSettings } from "@/components/LlmSettings";
 
 /** 单笔风险%三档，与风险偏好档联动：1%→保守 / 2%→标准 / 3%→激进。 */
 const RISK_TABS = [
@@ -33,7 +34,11 @@ const fmt = (v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 2 
  * 档位规模决定估算敞口的大小。存于 data/settings.json，命中 .gitignore 的 data/*.json
  * 规则，不会随 auto-backup 进入 git 历史。
  */
-export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function SettingsDialog({ open, onClose, initialTab = "trading" }: {
+  open: boolean; onClose: () => void; initialTab?: "trading" | "llm";
+}) {
+  const [tab, setTab] = useState(initialTab);
+  useEffect(() => { if (open) setTab(initialTab); }, [open, initialTab]);
   const [capital, setCapital] = useState("");
   const [risk, setRisk] = useState("1");
   const [tier, setTier] = useState("flat");
@@ -99,6 +104,11 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
 
   return (
     <Dialog open={open} onClose={onClose} title="设置" className="w-[min(92vw,460px)]">
+      <div className="mb-4">
+        <Tabs tabs={[{ key: "trading", label: "交易设置" }, { key: "llm", label: "大模型" }]}
+          value={tab} onChange={(v) => setTab(v as "trading" | "llm")} />
+      </div>
+      {tab === "llm" ? <LlmSettings /> : (
       <div className="space-y-4 text-xs">
         <div className="space-y-1.5">
           <div className="font-medium">总资金（元）</div>
@@ -160,6 +170,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           )}
         </div>
       </div>
+      )}
     </Dialog>
   );
 }

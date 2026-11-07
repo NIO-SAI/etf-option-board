@@ -80,7 +80,7 @@ export function TopBar({
         <Button
           variant="ghost"
           size="icon"
-          title="设置：总资金与单笔风险%"
+          title="设置：交易参数与大模型"
           aria-label="设置"
           onClick={onOpenSettings}
         >
