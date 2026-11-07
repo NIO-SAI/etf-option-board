@@ -143,14 +143,22 @@ export const api = {
   wangwangHealth: () => get("/wangwang/health"),
 
   // 涨停棱镜（自包含：data/limitup.db，涨停池 + 主题聚合 + 棱镜图）
-  limitupOverview: (date?: string, days = 11, top = 15, mode = "zt") =>
-    get(`/limitup/overview?days=${days}&top=${top}&mode=${mode}${date ? `&date=${date}` : ""}`),
-  limitupThemes: (date?: string, mode = "zt") =>
-    get(`/limitup/themes?mode=${mode}${date ? `&date=${date}` : ""}`),
-  limitupPrism: (theme?: string, date?: string, days = 25, mode = "zt") => {
+  limitupOverview: (date?: string, days = 11, top = 15, mode = "zt", sort = "hot", level = "all") =>
+    get(`/limitup/overview?days=${days}&top=${top}&mode=${mode}&sort=${sort}&level=${level}`
+      + (date ? `&date=${date}` : "")),
+  limitupThemes: (date?: string, mode = "zt", sort = "hot", level = "all") =>
+    get(`/limitup/themes?mode=${mode}&sort=${sort}&level=${level}${date ? `&date=${date}` : ""}`),
+  limitupPrism: (theme?: string, date?: string, days = 25, mode = "zt", sort = "hot") => {
     const qs = [theme ? `theme=${encodeURIComponent(theme)}` : "",
-      date ? `date=${date}` : "", `days=${days}`, `mode=${mode}`].filter(Boolean).join("&");
+      date ? `date=${date}` : "", `days=${days}`, `mode=${mode}`, `sort=${sort}`]
+      .filter(Boolean).join("&");
     return get(`/limitup/prism?${qs}`);
+  },
+  /** 「主题猎手-涨停分析」弹窗：解读 + 板块炒作原因 + 个股详细涨停原因 */
+  limitupBrief: (date?: string, mode = "zt", sort = "hot", level = "all", refresh = false) => {
+    const qs = [`mode=${mode}`, `sort=${sort}`, `level=${level}`,
+      date ? `date=${date}` : "", refresh ? "refresh=1" : ""].filter(Boolean).join("&");
+    return get(`/limitup/brief?${qs}`);
   },
   limitupPool: (date?: string, theme?: string, kind = "all", mode = "zt") => {
     const qs = [date ? `date=${date}` : "", theme ? `theme=${encodeURIComponent(theme)}` : "",

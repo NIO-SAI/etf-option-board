@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { Frame, FrameHeader, FramePanel, FrameTitle } from "@/components/reui/frame";
 import { PrismChart } from "@/components/charts/PrismChart";
+import { BriefDialog } from "@/pages/limitup/BriefDialog";
 import { api } from "@/lib/api";
 import { usePolling } from "@/lib/usePolling";
 import { flowMoney, pct, signedFlow } from "@/lib/format";
@@ -31,7 +32,7 @@ const TYPES = ["全部类型", "产业链", "事件性", "风格性"];
 
 const POOL_TABS = [
   { key: "theme", label: "板块涨停" },
-  { key: "all", label: "炒作涨停" },
+  { key: "hot", label: "炒作涨停" },
   { key: "broken", label: "板块炸板" },
   { key: "lan", label: "板块烂板" },
 ] as const;
@@ -64,7 +65,11 @@ export function LimitUpPage() {
   const [date, setDate] = useState("");
   const [theme, setTheme] = useState("");
   const [days, setDays] = useState(11);
-  const [tier, setTier] = useState("all");
+  /** 主题等级：all / primary（一级主题）/ secondary（二级主题），按板块成分股数分档 */
+  const [level, setLevel] = useState("all");
+  /** 排序口径：hot=按炒作涨停 / board=按板块涨停 / pct=按涨幅 */
+  const [sortBy, setSortBy] = useState("hot");
+  const [briefOpen, setBriefOpen] = useState(false);
   const [type, setType] = useState("全部类型");
   const [onlyExpand, setOnlyExpand] = useState(false);
   const [onlyClimax, setOnlyClimax] = useState(false);
@@ -79,7 +84,8 @@ export function LimitUpPage() {
 
   const mode = ext ? "ext" : "zt";
   const { data: ov, refresh: refreshOv } = usePolling(
-    () => api.limitupOverview(date || undefined, days, 15, mode), 120_000, [date, days, mode]);
+    () => api.limitupOverview(date || undefined, days, 15, mode, sortBy, level),
+    120_000, [date, days, mode, sortBy, level]);
   const [busy, setBusy] = useState(false);
 
   const dates: string[] = ov?.dates ?? [];
@@ -90,8 +96,8 @@ export function LimitUpPage() {
   const needAlt = !!cellDate && cellDate !== curDate;
 
   const { data: altThemes } = usePolling(
-    () => (needAlt ? api.limitupThemes(cellDate, mode) : Promise.resolve(null)),
-    120_000, [cellDate, curDate, mode]);
+    () => (needAlt ? api.limitupThemes(cellDate, mode, sortBy, level) : Promise.resolve(null)),
+    120_000, [cellDate, curDate, mode, sortBy, level]);
 
   const themes: ThemeRow[] = needAlt ? (altThemes?.themes ?? []) : (ov?.themes ?? []);
   /** 主题排除名单（`data/limitup_exclude.json`，默认排除央国企改革） */
@@ -108,8 +114,8 @@ export function LimitUpPage() {
   const themeName = themes.find((t) => t.board === theme)?.name ?? "";
 
   const { data: prism } = usePolling(
-    () => api.limitupPrism(theme || undefined, focusDate || undefined, 25, mode),
-    120_000, [theme, focusDate, mode]);
+    () => api.limitupPrism(theme || undefined, focusDate || undefined, 25, mode, sortBy),
+    120_000, [theme, focusDate, mode, sortBy]);
 
   /** 棱镜标题里当前日期的主题涨停家数（取所选日期那一格，不是序列末尾——切历史日期时两者不同） */
   const prismAtDate = (() => {
@@ -118,35 +124,33 @@ export function LimitUpPage() {
     return i >= 0 ? (prism?.theme?.[i] ?? 0) : (prism?.theme?.[ds.length - 1] ?? 0);
   })();
 
+  // 四个标签页都只列「当前选中板块」的个股（板块涨停 / 炒作涨停 / 板块炸板 / 板块烂板）
   const poolKind = poolTab === "theme" ? "zt" : poolTab;
   const { data: pool } = usePolling(
-    () => api.limitupPool(focusDate || undefined,
-      poolTab === "all" ? undefined : theme || undefined, poolKind, mode),
+    () => api.limitupPool(focusDate || undefined, theme || undefined, poolKind, mode),
     120_000, [focusDate, theme, poolTab, mode]);
 
   /** 主题榜筛选（等级 / 类型 / 扩张·高潮·共振 / 去 ST） */
   const shownThemes = useMemo(() => themes.filter((t) => {
     if (dropST && isST(t.name)) return false;
-    if (tier !== "all" && t.tier !== tier) return false;
     if (type !== "全部类型" && t.type !== type) return false;
     if (onlyExpand && !t.expanding) return false;
     if (onlyClimax && !t.climax) return false;
     if (onlyResonance && !t.resonance) return false;
     return true;
-  }), [themes, tier, type, onlyExpand, onlyClimax, onlyResonance, dropST]);
+  }), [themes, type, onlyExpand, onlyClimax, onlyResonance, dropST]);
 
   /** 周期表：同样过滤后，每列重新按名次排列（缺位补空） */
   const matrix = useMemo(() => {
     const raw: (Cell | null)[][] = ov?.matrix ?? [];
     return raw.map((col) => {
       const kept = col.filter((c): c is Cell => !!c && !(dropST && isST(c.name))
-        && (tier === "all" || c.tier === tier)
         && (type === "全部类型" || c.type === type));
       const out: (Cell | null)[] = [...kept];
       while (out.length < 15) out.push(null);
       return out;
     });
-  }, [ov, tier, type, dropST]);
+  }, [ov, type, dropST]);
 
   const onRefresh = async () => {
     if (busy) return;
@@ -192,13 +196,24 @@ export function LimitUpPage() {
             <option value={30}>近 30 日</option>
           </select>
           <select
-            value={tier}
-            onChange={(e) => setTier(e.target.value)}
+            value={level}
+            onChange={(e) => setLevel(e.target.value)}
             className="h-7 rounded border bg-background px-2 text-xs"
-            title="主题等级 = 该主题近 20 日涨停总数"
+            title="一级主题 = 成分股 ≥150 只的大方向；二级主题 = 细分概念"
           >
-            <option value="all">全部主题等级</option>
-            {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
+            <option value="all">全部主题</option>
+            <option value="primary">一级主题</option>
+            <option value="secondary">二级主题</option>
+          </select>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="h-7 rounded border bg-background px-2 text-xs"
+            title="按炒作涨停=一票只算主概念；按板块涨停=一票计入所有所属概念；按涨幅=按板块当日涨幅"
+          >
+            <option value="hot">按炒作涨停</option>
+            <option value="board">按板块涨停</option>
+            <option value="pct">按涨幅</option>
           </select>
           <select
             value={type}
@@ -216,6 +231,13 @@ export function LimitUpPage() {
               <option key={d} value={d}>{d}</option>
             ))}
           </select>
+          <button
+            onClick={() => setBriefOpen(true)}
+            className="flex h-7 items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2 text-xs text-rose-700 hover:bg-rose-100"
+            title="主题猎手-涨停分析：板块炒作原因 + 个股详细涨停原因"
+          >
+            <Sparkles size={12} /> 涨停分析
+          </button>
           <button
             onClick={onRefresh}
             disabled={busy}
@@ -257,6 +279,15 @@ export function LimitUpPage() {
         )}
         <span className="ml-auto">数据源：东财涨停池 + 概念板块资金 · 涨停原因取自同花顺（失败降级行业名）</span>
       </div>
+
+      <BriefDialog
+        open={briefOpen}
+        onClose={() => setBriefOpen(false)}
+        date={focusDate || undefined}
+        mode={mode}
+        sort={sortBy}
+        level={level}
+      />
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         {/* ==================== 左列 ==================== */}
@@ -430,7 +461,10 @@ export function LimitUpPage() {
           {/* ④ 个股池 */}
           <Frame>
             <FrameHeader className="flex-row items-center gap-2">
-              <FrameTitle>个股池</FrameTitle>
+              <FrameTitle>
+                个股池
+                {themeName && <span className="ml-1 font-normal text-muted-foreground">· {themeName}</span>}
+              </FrameTitle>
               <div className="ml-auto flex gap-1">
                 {POOL_TABS.map((t) => (
                   <button
@@ -451,7 +485,7 @@ export function LimitUpPage() {
                 <thead className="sticky top-0 z-10 bg-muted/60 backdrop-blur">
                   <tr className="text-muted-foreground">
                     <th className="w-7 px-1 py-1 text-center font-normal">#</th>
-                    <th className="w-20 px-1 py-1 text-left font-normal">名称</th>
+                    <th className="w-[104px] whitespace-nowrap px-1 py-1 text-left font-normal">名称</th>
                     <th className="px-1 py-1 text-left font-normal">涨停原因</th>
                     <th className="w-14 px-1 py-1 text-center font-normal">
                       {poolTab === "broken" || poolTab === "lan" ? "炸板次数" : "连板数"}
@@ -463,7 +497,7 @@ export function LimitUpPage() {
                   {rows.map((it: PoolItem, i: number) => (
                     <tr key={`${it.code}-${i}`} className="border-b last:border-0">
                       <td className="px-1 py-0.5 text-center text-muted-foreground">{i + 1}</td>
-                      <td className="px-1 py-0.5">
+                      <td className="whitespace-nowrap px-1 py-0.5">
                         {it.name}
                         {it.sealed === false && (
                           <span className="ml-1 rounded bg-slate-100 px-1 text-[9px] text-slate-500">未封板</span>

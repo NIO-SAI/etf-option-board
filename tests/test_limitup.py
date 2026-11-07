@@ -141,3 +141,45 @@ def test_aggregate_themes_keeps_zt_only_theme():
     assert out[0]["name"] == "冷门概念"
     assert out[0]["zt"] == 1 and out[0]["zb"] == 0 and out[0]["lan"] == 0
     assert out[0]["board"] is None      # 名单里没有的板块，代码缺失也能落库
+
+
+def test_top_concepts_keeps_one_per_stock():
+    """炒作口径：每只票只留 BOARD_RANK 最靠前的主概念。"""
+    concepts = {
+        "000001": [{"name": "甲概念", "rank": 5}, {"name": "乙概念", "rank": 2}],
+        "000002": [{"name": "甲概念", "rank": 3}],
+        "000003": [],
+    }
+    out = lu.top_concepts(concepts)
+    assert out["000001"] == [{"name": "乙概念", "rank": 2}]
+    assert out["000002"] == [{"name": "甲概念", "rank": 3}]
+    assert "000003" not in out          # 没有任何概念的票不参与
+
+
+def test_board_level_threshold():
+    """一级/二级主题：成分股数 ≥ LEVEL_PRIMARY_MIN 算一级，未知（缺元数据）不丢。"""
+    levels = {"BK1": "primary", "BK2": "secondary"}
+    assert lu._keep_level("BK1", "primary", levels)
+    assert not lu._keep_level("BK1", "secondary", levels)
+    assert lu._keep_level("BK2", "secondary", levels)
+    # 没有元数据的板块两个等级都保留，别因为缺数据就丢主题
+    assert lu._keep_level("BK9", "primary", levels)
+    assert lu._keep_level("BK9", "secondary", levels)
+    assert lu._keep_level("BK1", "all", levels)
+
+
+def test_mode_key():
+    assert lu._mode_key("zt", "hot") == "zt_hot"
+    assert lu._mode_key("ext", "hot") == "ext_hot"
+    assert lu._mode_key("zt", "board") == "zt"
+    assert lu._mode_key("ext", "pct") == "ext"
+    assert lu._mode_key("bad", "board") == "zt"
+
+
+def test_rule_brief_uses_real_numbers():
+    themes = [{"name": "光伏概念", "zt": 9, "stocks": [
+        {"reason": "光伏边框+液冷铝材"}, {"reason": "光伏边框+储能"}]}]
+    out = lu._rule_brief(themes, 33)
+    assert "33" in out["summary"]
+    assert out["headline"].startswith("光伏概念")
+    assert "光伏边框" in out["themes"]["光伏概念"]
