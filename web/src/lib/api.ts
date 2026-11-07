@@ -155,9 +155,11 @@ export const api = {
     return get(`/limitup/prism?${qs}`);
   },
   /** 「主题猎手-涨停分析」弹窗：解读 + 板块炒作原因 + 个股详细涨停原因 */
-  limitupBrief: (date?: string, mode = "zt", sort = "hot", level = "all", refresh = false) => {
+  limitupBrief: (date?: string, mode = "zt", sort = "hot", level = "all",
+                 refresh = false, theme?: string) => {
     const qs = [`mode=${mode}`, `sort=${sort}`, `level=${level}`,
-      date ? `date=${date}` : "", refresh ? "refresh=1" : ""].filter(Boolean).join("&");
+      date ? `date=${date}` : "", refresh ? "refresh=1" : "",
+      theme ? `theme=${encodeURIComponent(theme)}` : ""].filter(Boolean).join("&");
     return get(`/limitup/brief?${qs}`);
   },
   limitupPool: (date?: string, theme?: string, kind = "all", mode = "zt") => {

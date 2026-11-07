@@ -80,10 +80,11 @@ async def brief(date: str | None = Query(None, description="YYYYMMDD，默认库
                 mode: str = Query("zt", description="zt / ext"),
                 sort: str = Query("hot", description="hot / board / pct"),
                 level: str = Query("all", description="all / primary / secondary"),
-                refresh: int = Query(0, description="1 = 忽略缓存，重新让大模型写解读")):
+                refresh: int = Query(0, description="1 = 忽略缓存，重新让大模型写解读"),
+                theme: str | None = Query(None, description="板块代码：只分析这一个板块")):
     """「主题猎手-涨停分析」弹窗：一句话解读 + 各板块炒作原因 + 个股详细涨停原因。"""
     try:
-        return await lu.brief(date, mode, sort, level, bool(refresh))
+        return await lu.brief(date, mode, sort, level, bool(refresh), theme)
     except Exception as exc:  # noqa: BLE001
         log.warning("涨停复盘 brief 失败: %s", exc)
         return {"error": str(exc), "themes": []}

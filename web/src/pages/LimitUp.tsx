@@ -232,13 +232,6 @@ export function LimitUpPage() {
             ))}
           </select>
           <button
-            onClick={() => setBriefOpen(true)}
-            className="flex h-7 items-center gap-1 rounded border border-rose-200 bg-rose-50 px-2 text-xs text-rose-700 hover:bg-rose-100"
-            title="主题猎手-涨停分析：板块炒作原因 + 个股详细涨停原因"
-          >
-            <Sparkles size={12} /> 涨停分析
-          </button>
-          <button
             onClick={onRefresh}
             disabled={busy}
             className="flex h-7 items-center gap-1 rounded border bg-background px-2 text-xs hover:bg-accent disabled:opacity-50"
@@ -287,6 +280,8 @@ export function LimitUpPage() {
         mode={mode}
         sort={sortBy}
         level={level}
+        theme={theme || undefined}
+        themeName={themeName}
       />
 
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
@@ -465,6 +460,13 @@ export function LimitUpPage() {
                 个股池
                 {themeName && <span className="ml-1 font-normal text-muted-foreground">· {themeName}</span>}
               </FrameTitle>
+              <button
+                onClick={() => setBriefOpen(true)}
+                className="ml-1 flex shrink-0 items-center gap-1 rounded border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[11px] text-rose-700 hover:bg-rose-100"
+                title="主题猎手-涨停分析：只分析当前板块的炒作原因与个股涨停原因"
+              >
+                <Sparkles size={11} /> 涨停分析
+              </button>
               <div className="ml-auto flex gap-1">
                 {POOL_TABS.map((t) => (
                   <button
